@@ -148,3 +148,18 @@ The target is to achieve:
 * smaller workspaces;
 * less performance degradation as corpus size increases.
 
+---
+
+## Related Work
+Beyond Semantic Similarity: Rethinking Retrieval for Agentic Search via Direct Corpus Interaction
+https://arxiv.org/abs/2605.05242
+GrepSeek: Training Search Agents for Direct Corpus Interaction
+https://arxiv.org/abs/2605.29307
+DR-DCI: Scaling Direct Corpus Interaction via Dynamic Workspace Expansion
+https://arxiv.org/abs/2606.14885
+Rethinking Agentic Search with Pi-Serini: Is Lexical Retrieval Sufficient?
+https://arxiv.org/abs/2605.10848
+s3: You Don't Need That Much Data to Train a Search Agent via RL
+https://arxiv.org/abs/2505.14146
+Towards Retrieving Interaction Spaces for Agentic Search
+https://arxiv.org/abs/2606.06880
