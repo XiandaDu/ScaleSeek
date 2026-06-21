@@ -67,15 +67,16 @@ def _normalize_row(row: dict, prefix: str, idx: int) -> Optional[dict]:
 # Legacy directory names used by other projects on this server
 _LOCAL_DIR_ALIASES: dict[str, str] = {
     "2wikimultihopqa": "2wiki",
-    "triviaqa": "trivialqa",
+    "triviaqa":        "trivialqa",
 }
 
 _LOCAL_NAME_OVERRIDES: dict[tuple[str, str], str] = {
     # (dataset_name, split) -> filename stem (relative to the dataset dir)
-    ("hotpotqa",        "dev"):  "hotpot_dev",
+    ("hotpotqa",        "dev"):   "hotpot_dev",
     ("hotpotqa",        "train"): "hotpot_train",
-    ("2wikimultihopqa", "dev"):  "2wiki_dev",
-    ("popqa",           "test"): "popqa_longtail",
+    ("2wikimultihopqa", "dev"):   "2wiki_dev",
+    ("popqa",           "test"):  "popqa_longtail",
+    ("triviaqa",        "test"):  "trivialqa_test",
 }
 
 
@@ -179,9 +180,13 @@ def load_dataset(
         return load_bright(limit=limit, offset=offset)
     if name == "browsecomp":
         rows = load_local("browsecomp", split="test", limit=limit, offset=offset)
-        if rows:
-            return rows
-        return load_browsecomp_hf(limit=limit, offset=offset)
+        if not rows:
+            raise FileNotFoundError(
+                "BrowseComp not found. Download manually from "
+                "https://github.com/openai/simple-evals and place at "
+                f"{_datasets_dir()}/browsecomp/test.jsonl"
+            )
+        return rows
 
     if name not in FLASHRAG_DATASETS:
         raise ValueError(f"Unknown dataset: {name!r}. Supported: {ALL_DATASETS}")
@@ -219,7 +224,8 @@ def load_bright(tasks: Optional[list[str]] = None,
     return rows
 
 
-def load_browsecomp_hf(limit: Optional[int] = None, offset: int = 0) -> list[dict]:
+def _load_browsecomp_hf_UNUSED(limit: Optional[int] = None, offset: int = 0) -> list[dict]:
+    # openai/browsecomp is not public on HF; kept for future reference only
     from datasets import load_dataset as hf_load
     cache = _hf_cache()
     try:

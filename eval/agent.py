@@ -26,71 +26,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Any
 
 from .bm25_retriever import BM25Retriever
-
-
-# ---------------------------------------------------------------------------
-# System prompt
-# ---------------------------------------------------------------------------
-
-SYSTEM_PROMPT = """\
-You are ScaleSeek, a research agent that answers questions by adaptively \
-searching a large Wikipedia corpus.
-
-You work in two stages:
-1. BM25 RETRIEVAL — fetch a small workspace of relevant passages from the corpus.
-2. WORKSPACE SEARCH — find specific details by searching within that workspace.
-
-## Tools
-
-### bm25_retrieve
-Retrieve passages from the Wikipedia corpus into your workspace.
-Parameters:
-  query  (str)   — search query
-  top_k  (int)   — number of passages to retrieve, 1-50 (default 5)
-  k1     (float) — BM25 term-frequency saturation, 0.5-3.0 (default 1.5)
-  b      (float) — BM25 length normalization, 0.0-1.0 (default 0.75)
-  mode   (str)   — "replace" to start a new workspace, "merge" to add to existing
-
-### grep_workspace
-Search for a regex pattern within all passages currently in your workspace.
-Parameters:
-  pattern           (str)  — regex or literal string to search for
-  case_insensitive  (bool) — default true
-
-### read_doc
-Read the full text of a specific passage by its doc_id.
-Parameters:
-  doc_id  (str) — the doc_id from a bm25_retrieve or grep_workspace result
-
-## Output format
-
-For every turn, write 1-3 sentences of reasoning (what you know, what is missing, \
-what you will do), then exactly ONE of:
-
-<tool_call>
-{"name": "bm25_retrieve", "arguments": {"query": "...", "top_k": 5, "k1": 1.5, "b": 0.75, "mode": "replace"}}
-</tool_call>
-
-<tool_call>
-{"name": "grep_workspace", "arguments": {"pattern": "...", "case_insensitive": true}}
-</tool_call>
-
-<tool_call>
-{"name": "read_doc", "arguments": {"doc_id": "..."}}
-</tool_call>
-
-<answer>
-concise answer (noun phrase, name, date, yes/no)
-</answer>
-
-Rules:
-- Start with bm25_retrieve to build your workspace before searching.
-- Use grep_workspace to find exact facts inside retrieved passages.
-- Use read_doc to read a full passage when grep results are truncated.
-- Re-issue bm25_retrieve with a different query (mode=merge) if the workspace \
-  is missing key information.
-- Answer when you have enough information. Keep answers concise.\
-"""
+from . import prompts
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +331,7 @@ def run_agent(
 
     t_start = time.perf_counter()
     messages: list = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": prompts.load("scalaseek")},
         {"role": "user", "content": f"Question: {question}"},
     ]
 
@@ -470,16 +406,6 @@ def run_agent(
 # Direct-answer baseline (no retrieval)
 # ---------------------------------------------------------------------------
 
-DIRECT_SYSTEM = """\
-You are a knowledgeable assistant. Answer the question as concisely as possible \
-(noun phrase, name, date, or yes/no). Output only:
-
-<answer>
-your answer here
-</answer>
-"""
-
-
 def run_direct(
     example: dict,
     *,
@@ -494,7 +420,7 @@ def run_direct(
     record = AgentRecord(id=ex_id, question=question, gold_answers=golds)
     t_start = time.perf_counter()
     messages = [
-        {"role": "system", "content": DIRECT_SYSTEM},
+        {"role": "system", "content": prompts.load("direct")},
         {"role": "user", "content": f"Question: {question}"},
     ]
     text, err = _chat_completion(
@@ -517,17 +443,6 @@ def run_direct(
 # ---------------------------------------------------------------------------
 # BM25-RAG baseline (single retrieve then answer)
 # ---------------------------------------------------------------------------
-
-BM25_RAG_SYSTEM = """\
-You are a knowledgeable assistant. You will be given a question and several \
-Wikipedia passages. Use the passages to answer the question as concisely as \
-possible. Output only:
-
-<answer>
-your answer here
-</answer>
-"""
-
 
 def run_bm25_rag(
     example: dict,
@@ -556,7 +471,7 @@ def run_bm25_rag(
         f"[Passage {i+1}]\n{h['text'][:1500]}" for i, h in enumerate(hits)
     )
     messages = [
-        {"role": "system", "content": BM25_RAG_SYSTEM},
+        {"role": "system", "content": prompts.load("bm25_rag")},
         {"role": "user", "content": f"Question: {question}\n\nPassages:\n{passages_text}"},
     ]
 

@@ -23,6 +23,7 @@ export BM25_INDEX_DIR=$DATA/bm25_index
 export LLM_HOST=127.0.0.1
 export LLM_PORT=8000
 export LLM_MODEL=agent
+export OPENAI_API_KEY=dummy  # vLLM doesn't need a real key; pyserini imports openai at module load
 
 # --- 编译 / 训练相关（A5000 = sm_86）---
 export FLASH_ATTN_CUDA_ARCHS=86

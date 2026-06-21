@@ -1,58 +1,53 @@
-"""BM25 retriever over the wiki-18 corpus.
+"""BM25 retriever over the wiki-18 corpus via Pyserini/Lucene.
 
-Wraps a bm25s index built by scripts/build_bm25_index.py.
-The index lives at $BM25_INDEX_DIR and is loaded lazily on first use.
+The index is built once by scripts/build_bm25_index.py and lives at
+$BM25_INDEX_DIR/index. Load is lazy (on first retrieve() call).
+
+Key advantage over bm25s: LuceneSearcher.set_bm25(k1, b) applies per-query,
+so the agent can control k1/b dynamically without rebuilding the index.
 
 Usage:
     from eval.bm25_retriever import BM25Retriever
-    ret = BM25Retriever()                          # loads from $BM25_INDEX_DIR
-    hits = ret.retrieve("Albert Einstein Nobel Prize", top_k=5)
-    # hits: [{"doc_id": "...", "score": float, "text": str}, ...]
+    ret = BM25Retriever()
+    hits = ret.retrieve("Albert Einstein Nobel Prize", top_k=5, k1=1.5, b=0.75)
+    # -> [{"doc_id": "...", "score": float, "text": str}, ...]
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Optional
 
 
 class BM25Retriever:
-    """Lazy-loading BM25 retriever backed by bm25s."""
+    """Lazy-loading BM25 retriever backed by Pyserini LuceneSearcher."""
 
     def __init__(self, index_dir: Optional[str] = None):
-        self._index_dir = Path(index_dir or os.environ.get("BM25_INDEX_DIR", ""))
-        self._retriever = None
-        self._corpus: list[str] = []
-        self._doc_ids: list[str] = []
+        env_dir = os.environ.get("BM25_INDEX_DIR", "")
+        self._index_dir = Path(index_dir or env_dir)
+        self._searcher = None
 
     def _load(self) -> None:
-        if self._retriever is not None:
+        if self._searcher is not None:
             return
         try:
-            import bm25s
+            from pyserini.search.lucene import LuceneSearcher
         except ImportError:
             raise ImportError(
-                "Install bm25s:  pip install bm25s\n"
+                "Install Pyserini:\n"
+                "  conda install -c conda-forge openjdk=21\n"
+                "  pip install pyserini\n"
                 "Then build the index: python scripts/build_bm25_index.py"
             )
-
-        index_path = self._index_dir / "index"
-        id_map_path = self._index_dir / "doc_ids.txt"
-
-        if not index_path.exists():
+        lucene_index = self._index_dir / "index"
+        if not lucene_index.exists():
             raise FileNotFoundError(
-                f"BM25 index not found at {index_path}.\n"
-                "Build it first: python scripts/build_bm25_index.py"
+                f"Lucene index not found at {lucene_index}.\n"
+                "Build it: python scripts/build_bm25_index.py"
             )
-
-        self._retriever = bm25s.BM25.load(str(index_path), load_corpus=True)
-        self._corpus = list(self._retriever.corpus)
-
-        if id_map_path.exists():
-            with open(id_map_path, encoding="utf-8") as f:
-                self._doc_ids = [l.strip() for l in f if l.strip()]
-        else:
-            self._doc_ids = [str(i) for i in range(len(self._corpus))]
+        self._searcher = LuceneSearcher(str(lucene_index))
+        print(f"[BM25Retriever] loaded index: {lucene_index} ({self._searcher.num_docs:,} docs)")
 
     def retrieve(
         self,
@@ -61,41 +56,33 @@ class BM25Retriever:
         k1: float = 1.5,
         b: float = 0.75,
     ) -> list[dict]:
-        """Return top_k passages matching query.
+        """Return top_k passages for query.
 
-        Args:
-            query: natural-language query string
-            top_k: number of passages to return (1-100)
-            k1: BM25 term-frequency saturation (higher = more weight on freq)
-            b: BM25 length normalization (1.0 = full norm, 0.0 = none)
+        k1 and b are applied per-call (Pyserini supports this natively).
 
         Returns:
-            List of {"doc_id": str, "score": float, "text": str}
+            [{"doc_id": str, "score": float, "text": str}, ...]
         """
         self._load()
-
-        # bm25s exposes k1/b via idf/tf params at index-build time, not
-        # at query time. For the prompt-based pipeline we use the default
-        # k1/b from build time and treat k1/b args as advisory (logged but
-        # not applied). The RL agent will learn to predict them; in the
-        # prompt pipeline they're plausibly ignored.
-        top_k = max(1, min(top_k, len(self._corpus)))
-        import bm25s
-
-        tokenized = bm25s.tokenize([query], stopwords="en")
-        results, scores = self._retriever.retrieve(tokenized, k=top_k)
+        top_k = max(1, min(top_k, 1000))
+        self._searcher.set_bm25(k1, b)
+        raw_hits = self._searcher.search(query, k=top_k)
 
         hits = []
-        for doc, score in zip(results[0], scores[0]):
-            idx = self._corpus.index(doc) if isinstance(doc, str) else doc
+        for h in raw_hits:
+            try:
+                raw = self._searcher.doc(h.docid).raw()
+                contents = json.loads(raw).get("contents", "")
+            except Exception:
+                contents = ""
             hits.append({
-                "doc_id": self._doc_ids[idx] if idx < len(self._doc_ids) else str(idx),
-                "score": float(score),
-                "text": self._corpus[idx] if isinstance(doc, str) else doc,
+                "doc_id": h.docid,
+                "score": float(h.score),
+                "text": contents,
             })
         return hits
 
     @property
-    def size(self) -> int:
+    def num_docs(self) -> int:
         self._load()
-        return len(self._corpus)
+        return self._searcher.num_docs

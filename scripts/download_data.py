@@ -126,13 +126,16 @@ def download_flashrag(name: str, datasets_dir: Path, cache_dir: Optional[str]) -
 # ---------------------------------------------------------------------------
 # BRIGHT download
 # ---------------------------------------------------------------------------
+# HF API: config="examples" or "documents", split=task_name
+# examples fields: id, query, reasoning, gold_ids, gold_ids_long, gold_answer
+# documents fields: id, content
 
 def download_bright(datasets_dir: Path, cache_dir: Optional[str]) -> None:
-    """Download BRIGHT retrieval benchmark.
+    """Download BRIGHT retrieval benchmark (xlangai/BRIGHT).
 
-    BRIGHT provides (query, relevant_doc_ids) pairs. We save:
-      - queries as {id, question} JSONL per task
-      - documents as {id, contents} JSONL per task (same format as wiki corpus)
+    Saves per-task files:
+      bright/<task>_queries.jsonl   — {id, question, golden_doc_ids, gold_answer}
+      bright/<task>_documents.jsonl — {id, contents}  (task-specific corpus)
     """
     try:
         from datasets import load_dataset as hf_load
@@ -145,39 +148,41 @@ def download_bright(datasets_dir: Path, cache_dir: Optional[str]) -> None:
 
     for task in BRIGHT_TASKS:
         query_path = bright_dir / f"{task}_queries.jsonl"
-        if query_path.exists():
-            n = sum(1 for _ in open(query_path))
-            print(f"  [bright/{task}] already exists ({n} queries)")
+        doc_path = bright_dir / f"{task}_documents.jsonl"
+
+        if query_path.exists() and doc_path.exists():
+            nq = sum(1 for _ in open(query_path))
+            nd = sum(1 for _ in open(doc_path))
+            print(f"  [bright/{task}] already exists ({nq} queries, {nd} docs)")
             continue
 
         print(f"  [bright/{task}] downloading ...")
         try:
-            # examples split has queries with relevance labels
-            ds = hf_load(BRIGHT_REPO, task, split="examples", cache_dir=cache_dir)
-            rows = []
-            for row in ds:
-                qid = str(row.get("id", ""))
-                q = (row.get("query") or "").strip()
-                if not q:
-                    continue
-                relevant = row.get("gold_ids") or row.get("relevant") or []
-                rows.append({
-                    "id": f"bright_{task}_{qid}",
-                    "question": q,
-                    "golden_doc_ids": list(relevant),
-                })
-            _save_jsonl(rows, query_path)
+            if not query_path.exists():
+                # config="examples", split=task_name
+                ds = hf_load(BRIGHT_REPO, "examples", split=task, cache_dir=cache_dir)
+                rows = []
+                for row in ds:
+                    qid = str(row.get("id", ""))
+                    q = (row.get("query") or "").strip()
+                    if not q:
+                        continue
+                    rows.append({
+                        "id": f"bright_{task}_{qid}",
+                        "question": q,
+                        "golden_doc_ids": list(row.get("gold_ids") or []),
+                        "gold_answer": row.get("gold_answer") or "",
+                    })
+                _save_jsonl(rows, query_path)
 
-            # documents
-            doc_path = bright_dir / f"{task}_documents.jsonl"
             if not doc_path.exists():
-                docs_ds = hf_load(BRIGHT_REPO, task, split="documents", cache_dir=cache_dir)
-                doc_rows = []
-                for doc in docs_ds:
-                    did = str(doc.get("id", ""))
-                    content = (doc.get("content") or doc.get("text") or "").strip()
-                    if content:
-                        doc_rows.append({"id": did, "contents": content})
+                # config="documents", split=task_name
+                docs_ds = hf_load(BRIGHT_REPO, "documents", split=task, cache_dir=cache_dir)
+                doc_rows = [
+                    {"id": str(doc["id"]), "contents": (doc.get("content") or "").strip()}
+                    for doc in docs_ds
+                    if (doc.get("content") or "").strip()
+                ]
                 _save_jsonl(doc_rows, doc_path)
 
         except Exception as e:
@@ -187,39 +192,24 @@ def download_bright(datasets_dir: Path, cache_dir: Optional[str]) -> None:
 # ---------------------------------------------------------------------------
 # BrowseComp download
 # ---------------------------------------------------------------------------
+# openai/browsecomp is not public on HuggingFace Hub.
+# Download manually from the OpenAI BrowseComp GitHub release and convert:
+#   https://github.com/openai/simple-evals  (see browsecomp task)
+# Then run: python scripts/download_data.py --convert-browsecomp <path>
 
 def download_browsecomp(datasets_dir: Path, cache_dir: Optional[str]) -> None:
-    try:
-        from datasets import load_dataset as hf_load
-    except ImportError:
-        print("  [browsecomp] skip — datasets not installed")
-        return
-
     out_path = datasets_dir / "browsecomp" / "test.jsonl"
     if out_path.exists():
         n = sum(1 for _ in open(out_path))
         print(f"  [browsecomp] already exists ({n} rows)")
         return
-
-    print(f"  [browsecomp] downloading from {BROWSECOMP_REPO} ...")
-    try:
-        ds = hf_load(BROWSECOMP_REPO, split="test", cache_dir=cache_dir)
-        rows = []
-        for i, row in enumerate(ds):
-            q = (row.get("problem") or row.get("question") or "").strip()
-            if not q:
-                continue
-            ans = row.get("answer") or row.get("solution") or ""
-            golds = [ans.strip()] if isinstance(ans, str) and ans.strip() else []
-            rows.append({
-                "id": f"browsecomp_{i}",
-                "question": q,
-                "golden_answers": golds,
-            })
-        _save_jsonl(rows, out_path)
-    except Exception as e:
-        print(f"  [browsecomp] failed: {e}")
-        print("  [browsecomp] try manually: https://huggingface.co/datasets/openai/browsecomp")
+    print(
+        "  [browsecomp] not available on HuggingFace Hub.\n"
+        "  Download manually:\n"
+        "    1. Get browse_comp.jsonl from https://github.com/openai/simple-evals\n"
+        f"   2. Copy to {out_path}\n"
+        "       Expected format per line: {\"problem\": \"...\", \"answer\": \"...\"}"
+    )
 
 
 # ---------------------------------------------------------------------------
