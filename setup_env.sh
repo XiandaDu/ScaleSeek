@@ -41,3 +41,4 @@ echo "  LLM=$LLM_HOST:$LLM_PORT  model=$LLM_MODEL"
 cd "$REPO" || echo "warn: REPO 目录不存在: $REPO"
 
 conda activate scaleseek
+pip freeze > requirements.txt
