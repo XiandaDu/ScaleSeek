@@ -87,9 +87,32 @@ def run_eval(args: argparse.Namespace) -> None:
     client = _make_client(host, port)
     print(f"LLM: {host}:{port}  model={model}")
 
+    # --- Search-R1 client (separate vLLM server on --search-r1-port) ---
+    sr1_client = None
+    if args.agent == "search_r1":
+        sr1_host = args.search_r1_host or os.environ.get("SEARCH_R1_HOST", host)
+        sr1_port = int(args.search_r1_port or os.environ.get("SEARCH_R1_PORT", 8001))
+        sr1_model = args.search_r1_model or os.environ.get("SEARCH_R1_MODEL", "search_r1")
+        sr1_client = _make_client(sr1_host, sr1_port)
+        print(f"Search-R1: {sr1_host}:{sr1_port}  model={sr1_model}")
+
+    # --- AgentIR precomputed cache ---
+    agentir_cache: dict[str, list[dict]] = {}
+    if args.agent == "agentir_rag" and args.agentir_cache:
+        import json as _json
+        print(f"Loading AgentIR cache: {args.agentir_cache} ...")
+        with open(args.agentir_cache) as _f:
+            for _line in _f:
+                _row = _json.loads(_line)
+                agentir_cache[_row["id"]] = _row["passages"]
+        print(f"  {len(agentir_cache)} cached entries.")
+
     # --- BM25 retriever (lazy, only loaded if needed) ---
     retriever = None
-    if args.agent in ("scalaseek", "bm25_rag"):
+    need_bm25 = args.agent in ("scalaseek", "bm25_rag", "search_r1") or (
+        args.agent == "agentir_rag" and not agentir_cache
+    )
+    if need_bm25:
         from .bm25_retriever import BM25Retriever
         retriever = BM25Retriever()
         print(f"BM25 index: {retriever._index_dir}")
@@ -134,6 +157,32 @@ def run_eval(args: argparse.Namespace) -> None:
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
             )
+        elif args.agent == "search_r1":
+            from .search_r1_agent import run_search_r1
+            record = run_search_r1(
+                ex,
+                client=sr1_client,
+                model=sr1_model,
+                retriever=retriever,
+                max_turns=args.max_turns,
+                max_tokens=args.max_tokens,
+                bm25_top_k=args.bm25_top_k,
+                temperature=args.temperature,
+            )
+        elif args.agent == "agentir_rag":
+            from .agentir_retriever import run_agentir_rag
+            record = run_agentir_rag(
+                ex,
+                client=client,
+                model=model,
+                retriever=retriever,
+                bm25_top_n=args.agentir_top_n,
+                top_k=args.bm25_top_k,
+                agentir_device=args.agentir_device,
+                precomputed_passages=agentir_cache.get(ex["id"]),
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+            )
         else:
             sys.exit(f"Unknown agent: {args.agent!r}")
 
@@ -174,7 +223,7 @@ def run_eval(args: argparse.Namespace) -> None:
     reasons = Counter(r["finish_reason"] for r in results)
     print("Finish reasons:", dict(reasons))
 
-    if args.agent in ("scalaseek", "bm25_rag"):
+    if args.agent in ("scalaseek", "bm25_rag", "search_r1", "agentir_rag"):
         avg_ws = sum(r["final_workspace_size"] for r in results) / len(results)
         avg_bm25 = sum(r.get("n_bm25_calls", 0) for r in results) / len(results)
         print(f"Avg workspace size : {avg_ws:.1f}")
@@ -202,12 +251,28 @@ def main():
 
     # Agent
     parser.add_argument("--agent", default="scalaseek",
-                        choices=["scalaseek", "bm25_rag", "direct"],
+                        choices=["scalaseek", "bm25_rag", "direct", "search_r1", "agentir_rag"],
                         help="Agent type")
     parser.add_argument("--max-turns", type=int, default=8,
-                        help="Max agent turns (scalaseek only)")
+                        help="Max agent turns (scalaseek / search_r1)")
     parser.add_argument("--bm25-top-k", type=int, default=5,
-                        help="BM25 top-k for bm25_rag baseline")
+                        help="BM25 top-k for bm25_rag / final passages for agentir_rag")
+
+    # Search-R1 (separate vLLM server)
+    parser.add_argument("--search-r1-host", default=None,
+                        help="Search-R1 vLLM host (default: same as --host)")
+    parser.add_argument("--search-r1-port", default=None,
+                        help="Search-R1 vLLM port (default: $SEARCH_R1_PORT or 8001)")
+    parser.add_argument("--search-r1-model", default=None,
+                        help="Search-R1 model name (default: $SEARCH_R1_MODEL or 'search_r1')")
+
+    # AgentIR-4B
+    parser.add_argument("--agentir-top-n", type=int, default=50,
+                        help="BM25 candidates for AgentIR-4B reranking (agentir_rag only)")
+    parser.add_argument("--agentir-device", default="cpu",
+                        help="Device for AgentIR-4B embedding model (default: cpu)")
+    parser.add_argument("--agentir-cache", default=None,
+                        help="Precomputed passages JSONL from scripts/precompute_agentir.py")
 
     # LLM
     parser.add_argument("--host", default=None, help="vLLM host (default: $LLM_HOST)")
