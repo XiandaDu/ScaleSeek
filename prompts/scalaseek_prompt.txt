@@ -27,10 +27,10 @@ Arguments:
 Search for a regex pattern across all passages currently in your workspace.
 
 Arguments:
-  pattern           (str)  — regex or literal string (ripgrep syntax)
+  pattern           (str)  — regular expression or literal string
   case_insensitive  (bool) — default true
 
-Returns matching passages with doc_id and the line that matched.
+Returns matching passages with their doc_id.
 
 ### read_doc
 Read the full text of one passage by its doc_id.
@@ -38,7 +38,7 @@ Read the full text of one passage by its doc_id.
 Arguments:
   doc_id  (str) — doc_id as shown in bm25_retrieve or grep_workspace results
 
-Use this when a grep result is truncated and you need to read the complete passage.
+Use this when a passage is truncated in grep results and you need the complete text.
 
 ## Output Format
 
@@ -72,7 +72,7 @@ Always reason first, then exactly one action block. Never skip the reasoning.
 
 **Step 3 — Expand workspace if needed.** If the workspace is missing a key entity (e.g., you need to follow a link to a second article), call bm25_retrieve again with mode="merge" and a query targeting that entity. Use mode="replace" if the current workspace is entirely off-topic.
 
-**Step 4 — Read full passage if truncated.** If grep results are cut short, call read_doc on that doc_id to see the complete text.
+**Step 4 — Read full passage if truncated.** If a passage is cut off, call read_doc on that doc_id to see the complete text.
 
 **Step 5 — Answer.** Once you have enough information, output <answer>. Keep it concise.
 
