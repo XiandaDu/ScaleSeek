@@ -1,0 +1,324 @@
+# GRPO training config for ScaleSeek.
+#
+# Environment variables:
+#   SCALASEEK_ROOT        absolute path to this repo
+#   SCALASEEK_MODEL_PATH  SFT checkpoint or base model (HF format)
+#   SCALASEEK_TRAIN_FILES path to RL train JSONL
+#   SCALASEEK_VAL_FILES   path to RL dev JSONL
+#   SCALASEEK_OUTPUT_DIR  checkpoint output directory
+#   BM25_INDEX_DIR        path to Lucene index (with /index subdir)
+#                         defaults to $DATA/bm25_index from setup_env.sh
+#
+# Launch: bash scripts/run_rl.sh
+# Or manually:
+#   python -m verl.trainer.main_ppo \
+#       --config-path $SCALASEEK_ROOT/train/config \
+#       --config-name grpo_trainer \
+#       "hydra.searchpath=[file://$SCALASEEK_ROOT/../grepseek/verl/verl/trainer/config]"
+
+hydra:
+  searchpath:
+    - file://${oc.env:GREPSEEK_VERL_DIR}/verl/trainer/config
+
+defaults:
+  - actor@actor_rollout_ref.actor: dp_actor
+  - data@data: legacy_data
+  - ref@actor_rollout_ref.ref: dp_ref
+  - rollout@actor_rollout_ref.rollout: rollout
+  - model@actor_rollout_ref.model: hf_model
+  - reward@reward: reward
+  - algorithm@algorithm.rollout_correction: rollout_correction
+  - _self_
+
+# ─────────────────────────────────────────────
+# Trainer
+# ─────────────────────────────────────────────
+trainer:
+  project_name: scaleseek_grpo
+  timestamp: ""
+  experiment_name: scaleseek_grpo_${actor_rollout_ref.rollout.n}rollouts_bs${data.train_batch_size}${trainer.timestamp}
+  total_epochs: 1
+  total_training_steps: 200      # TBD: tune once SFT warm-start is ready
+  resume_mode: auto
+  resume_from_path: null
+  del_local_ckpt_after_load: false
+  val_before_train: true
+  val_only: false
+  test_freq: 40
+  save_freq: 40
+  log_val_generations: 8
+  rollout_data_dir: ${trainer.default_local_dir}/train_rollouts
+  validation_data_dir: ${trainer.default_local_dir}/val_rollouts
+  balance_batch: true
+  default_local_dir: ${oc.env:SCALASEEK_OUTPUT_DIR,${oc.env:SCALASEEK_ROOT}/checkpoints/rl/${trainer.experiment_name}}
+  default_hdfs_dir: null
+  critic_warmup: 0
+  esi_redundant_time: 0
+  device: cuda
+  n_gpus_per_node: 4            # overridden by run_rl.sh (NPROC); 4×A5000 on octal30
+  nnodes: 1
+  seed: 42
+  logger:
+    - console
+
+wandb:
+  enable: false
+  project: ${trainer.project_name}
+  entity: ${oc.env:WANDB_ENTITY,null}
+  run_name: null
+
+# ─────────────────────────────────────────────
+# Data
+# ─────────────────────────────────────────────
+data:
+  custom_cls:
+    path: ${oc.env:SCALASEEK_ROOT}/train/dataset.py
+    name: ScaleSeekDataset
+
+  train_files: ${oc.env:SCALASEEK_TRAIN_FILES}
+  val_files: ${oc.env:SCALASEEK_VAL_FILES}
+
+  # TBD: dataset_name used for HF fallback when local files are absent.
+  # After prepare_rl_data.py runs, train_files / val_files will always exist.
+  dataset_name: hotpotqa
+  answerable_only: true
+
+  debug_mode_train: false
+  debug_num_samples: 32
+  debug_mode_val: false
+
+  # 128 questions × 5 rollouts = 640 trajectories/step.
+  # Sized for 4×A5000-24GB (lower than GrepSeek's A100 config).
+  # TBD: tune once SFT checkpoint is ready.
+  train_batch_size: 128
+  max_prompt_length: 1024       # system prompt + question
+  max_response_length: 12288    # 1024 + 12288 = 13312 total context
+
+  return_raw_chat: true
+  prompt_key: prompt
+  return_raw_input_ids: false
+  return_full_prompt: false
+  dataloader_num_workers: 1
+  train_drop_last: true
+
+# ─────────────────────────────────────────────
+# Actor / Rollout / Reference
+# ─────────────────────────────────────────────
+actor_rollout_ref:
+  hybrid_engine: true
+
+  model:
+    # TBD: replace with SFT checkpoint path once cold-start data is built.
+    path: ${oc.env:SCALASEEK_MODEL_PATH,Qwen/Qwen3-8B}
+    trust_remote_code: true
+    enable_gradient_checkpointing: true
+
+  rollout:
+    name: vllm
+    mode: async
+    load_format: safetensors
+    enforce_eager: true
+    gpu_memory_utilization: 0.55   # FSDP offload frees most GPU mem for vLLM
+
+    n: 5                           # GRPO: 5 rollouts per question
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+
+    max_model_len: 13312
+    prompt_length: 1024
+    response_length: 12288
+
+    max_num_seqs: 16
+    max_num_batched_tokens: 16384
+    log_prob_micro_batch_size_per_gpu: 1
+    log_prob_use_dynamic_bsz: false
+    log_prob_max_token_len_per_gpu: 13312
+
+    multi_turn:
+      enable: true
+      # Max turns: 1 BM25 + up to 4 DCI turns + 1 answer turn.
+      # TBD: tune once we see prompt-baseline trajectory lengths.
+      max_user_turns: 5
+      max_assistant_turns: 6
+      max_parallel_calls: 1
+      format: hermes              # <tool_call>...</tool_call> XML format (matches eval)
+      tool_config_path: null      # ScaleSeekAgentLoop handles dispatch internally
+      interaction_config_path: null
+      max_tool_response_length: 50000   # tokenizer-level truncation happens in env.execute
+      tool_response_truncate_side: right
+
+    agent:
+      agent_loop_manager_class: null
+      num_workers: 1
+      default_agent_loop: scaleseek_agent
+      agent_loop_config_path: ${oc.env:SCALASEEK_ROOT}/train/config/agent_loops.yaml
+
+  actor:
+    strategy: fsdp
+    freeze_vision_tower: true
+    checkpoint:
+      save_contents: ['model', 'optimizer', 'extra']
+      load_contents: ['model', 'optimizer', 'extra']
+    ppo_mini_batch_size: 16
+    ppo_micro_batch_size_per_gpu: 1
+    ppo_max_token_len_per_gpu: 13312
+    use_dynamic_bsz: true
+    use_kl_loss: false
+    kl_loss_coef: 0.0
+    fsdp_config:
+      full_determinism: true
+      seed: 42
+      wrap_policy:
+        transformer_layer_cls_to_wrap:
+          - Qwen3DecoderLayer
+      param_offload: true
+      grad_offload: true
+      optimizer_offload: true
+      fsdp_size: 4
+      dtype: bfloat16
+      model_dtype: bfloat16
+      ulysses_sequence_parallel_size: 2
+    optim:
+      optimizer: AdamW
+      optimizer_impl: torch.optim
+      lr: 5.0e-6
+      weight_decay: 0.0
+      betas:
+        - 0.9
+        - 0.999
+      clip_grad: 1.0
+      lr_scheduler_type: constant
+      lr_warmup_steps_ratio: 0.05
+      lr_warmup_steps: -1
+
+  ref:
+    strategy: fsdp
+    log_prob_micro_batch_size_per_gpu: 2
+    log_prob_max_token_len_per_gpu: 13312
+    fsdp_config:
+      full_determinism: true
+      seed: 42
+      wrap_policy:
+        min_num_params: 0
+      param_offload: true
+      grad_offload: false
+      optimizer_offload: false
+      dtype: bfloat16
+      model_dtype: bfloat16
+      ulysses_sequence_parallel_size: 2
+
+# ─────────────────────────────────────────────
+# Critic — disabled (GRPO)
+# ─────────────────────────────────────────────
+critic:
+  enable: false
+  model:
+    enable: false
+  strategy: fsdp
+
+# ─────────────────────────────────────────────
+# Reward model — disabled; custom function below
+# ─────────────────────────────────────────────
+reward_model:
+  num_workers: null
+  enable: false
+  enable_resource_pool: false
+  use_reward_loop: true
+  n_gpus_per_node: 0
+  nnodes: 0
+  strategy: none
+  reward_manager: naive
+  reward_loop_source: register
+  reward_loop_module_path: null
+  reward_loop_class_name: null
+  launch_reward_fn_async: false
+  model:
+    path: null
+    input_tokenizer: null
+    external_lib: null
+    trust_remote_code: false
+    override_config: {}
+  rollout:
+    name: null
+
+reward_manager:
+  _target_: verl.trainer.config.config.RewardManagerConfig
+  source: register
+  name: ${oc.select:reward_model.reward_manager,naive}
+  module:
+    _target_: verl.trainer.config.config.ModuleConfig
+    path: null
+    name: custom_reward_manager
+
+# ─────────────────────────────────────────────
+# Custom reward: EM − length penalty (TBD workspace term)
+# ─────────────────────────────────────────────
+custom_reward_function:
+  path: ${oc.env:SCALASEEK_ROOT}/train/reward.py
+  name: scaleseek_reward
+  reward_kwargs:
+    # TBD: switch to f1 or a mix once SFT format is locked.
+    reward_metric: em
+    # Length penalty: disabled for initial RL run (same as GrepSeek paper).
+    # TBD: enable and tune once model learns to use tools.
+    enable_length_decay: false
+    decay_type: linear
+    a: 0.1
+    L_max: ${data.max_response_length}
+    failed_rollout_reward: 0.0
+    # Workspace penalty: disabled until we understand prompt-baseline behavior.
+    enable_workspace_penalty: false
+    max_workspace_size: 20
+    max_bm25_calls: 3
+
+# ─────────────────────────────────────────────
+# Algorithm: GRPO
+# ─────────────────────────────────────────────
+algorithm:
+  gamma: 1.0
+  lam: 1.0
+  adv_estimator: grpo
+  norm_adv_by_std_in_grpo: true
+  ppo_epochs: 1
+  clip_ratio: 0.2
+  value_clip: false
+  use_kl_in_reward: false
+  kl_penalty: kl
+  kl_ctrl:
+    type: fixed
+    kl_coef: 0.0
+
+sandbox_fusion:
+  url: null
+  max_concurrent: null
+  memory_limit_mb: null
+
+transfer_queue:
+  enable: false
+  backend:
+    storage_backend: SimpleStorage
+    SimpleStorage:
+      total_storage_size: 100000
+      num_data_storage_units: 8
+
+# ─────────────────────────────────────────────
+# Ray
+# ─────────────────────────────────────────────
+ray_kwargs:
+  ray_init:
+    ignore_reinit_error: true
+    num_cpus: 16
+    num_gpus: 4
+    include_dashboard: false
+  ray_remote:
+    num_cpus: 1
+  timeline_json_file: null
+
+global_profiler:
+  _target_: verl.utils.profiler.ProfilerConfig
+  tool: null
+  steps: null
+  profile_continuous_steps: false
+  save_path: null
+  global_tool_config: {}

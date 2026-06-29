@@ -331,7 +331,7 @@ def run_agent(
 
     t_start = time.perf_counter()
     messages: list = [
-        {"role": "system", "content": prompts.load("scalaseek")},
+        {"role": "system", "content": prompts.load("scalaseek_prompt")},
         {"role": "user", "content": f"Question: {question}"},
     ]
 
