@@ -1,7 +1,7 @@
 """VERL-compatible dataset for ScaleSeek RL training.
 
 Mirrors GrepSeek's GrepSeekDataset but uses ScaleSeek's system prompt
-(prompts/scalaseek.txt) and the three-tool schema from train/environment.py.
+(prompts/scaleseek.txt) and the three-tool schema from train/environment.py.
 
 Each item exposes:
     raw_prompt:   [system, user] chat messages for verl's rollout
@@ -29,9 +29,9 @@ logger = logging.getLogger(__name__)
 
 
 def _build_system_prompt() -> str:
-    """Load prompts/scalaseek.txt — the same prompt used for eval."""
+    """Load prompts/scaleseek.txt — the same prompt used for eval."""
     from eval.prompts import load
-    return load("scalaseek")
+    return load("scaleseek")
 
 
 class ScaleSeekDataset:

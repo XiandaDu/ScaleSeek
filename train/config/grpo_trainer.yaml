@@ -1,20 +1,20 @@
 # GRPO training config for ScaleSeek.
 #
 # Environment variables:
-#   SCALASEEK_ROOT        absolute path to this repo
-#   SCALASEEK_MODEL_PATH  SFT checkpoint or base model (HF format)
-#   SCALASEEK_TRAIN_FILES path to RL train JSONL
-#   SCALASEEK_VAL_FILES   path to RL dev JSONL
-#   SCALASEEK_OUTPUT_DIR  checkpoint output directory
+#   SCALESEEK_ROOT        absolute path to this repo
+#   SCALESEEK_MODEL_PATH  SFT checkpoint or base model (HF format)
+#   SCALESEEK_TRAIN_FILES path to RL train JSONL
+#   SCALESEEK_VAL_FILES   path to RL dev JSONL
+#   SCALESEEK_OUTPUT_DIR  checkpoint output directory
 #   BM25_INDEX_DIR        path to Lucene index (with /index subdir)
 #                         defaults to $DATA/bm25_index from setup_env.sh
 #
 # Launch: bash scripts/run_rl.sh
 # Or manually:
 #   python -m verl.trainer.main_ppo \
-#       --config-path $SCALASEEK_ROOT/train/config \
+#       --config-path $SCALESEEK_ROOT/train/config \
 #       --config-name grpo_trainer \
-#       "hydra.searchpath=[file://$SCALASEEK_ROOT/../grepseek/verl/verl/trainer/config]"
+#       "hydra.searchpath=[file://$SCALESEEK_ROOT/../grepseek/verl/verl/trainer/config]"
 
 hydra:
   searchpath:
@@ -50,7 +50,7 @@ trainer:
   rollout_data_dir: ${trainer.default_local_dir}/train_rollouts
   validation_data_dir: ${trainer.default_local_dir}/val_rollouts
   balance_batch: true
-  default_local_dir: ${oc.env:SCALASEEK_OUTPUT_DIR,${oc.env:SCALASEEK_ROOT}/checkpoints/rl/${trainer.experiment_name}}
+  default_local_dir: ${oc.env:SCALESEEK_OUTPUT_DIR,${oc.env:SCALESEEK_ROOT}/checkpoints/rl/${trainer.experiment_name}}
   default_hdfs_dir: null
   critic_warmup: 0
   esi_redundant_time: 0
@@ -72,11 +72,11 @@ wandb:
 # ─────────────────────────────────────────────
 data:
   custom_cls:
-    path: ${oc.env:SCALASEEK_ROOT}/train/dataset.py
+    path: ${oc.env:SCALESEEK_ROOT}/train/dataset.py
     name: ScaleSeekDataset
 
-  train_files: ${oc.env:SCALASEEK_TRAIN_FILES}
-  val_files: ${oc.env:SCALASEEK_VAL_FILES}
+  train_files: ${oc.env:SCALESEEK_TRAIN_FILES}
+  val_files: ${oc.env:SCALESEEK_VAL_FILES}
 
   # TBD: dataset_name used for HF fallback when local files are absent.
   # After prepare_rl_data.py runs, train_files / val_files will always exist.
@@ -109,7 +109,7 @@ actor_rollout_ref:
 
   model:
     # TBD: replace with SFT checkpoint path once cold-start data is built.
-    path: ${oc.env:SCALASEEK_MODEL_PATH,Qwen/Qwen3-8B}
+    path: ${oc.env:SCALESEEK_MODEL_PATH,Qwen/Qwen3-8B}
     trust_remote_code: true
     enable_gradient_checkpointing: true
 
@@ -152,7 +152,7 @@ actor_rollout_ref:
       agent_loop_manager_class: null
       num_workers: 1
       default_agent_loop: scaleseek_agent
-      agent_loop_config_path: ${oc.env:SCALASEEK_ROOT}/train/config/agent_loops.yaml
+      agent_loop_config_path: ${oc.env:SCALESEEK_ROOT}/train/config/agent_loops.yaml
 
   actor:
     strategy: fsdp
@@ -255,7 +255,7 @@ reward_manager:
 # Custom reward: EM − length penalty (TBD workspace term)
 # ─────────────────────────────────────────────
 custom_reward_function:
-  path: ${oc.env:SCALASEEK_ROOT}/train/reward.py
+  path: ${oc.env:SCALESEEK_ROOT}/train/reward.py
   name: scaleseek_reward
   reward_kwargs:
     # TBD: switch to f1 or a mix once SFT format is locked.

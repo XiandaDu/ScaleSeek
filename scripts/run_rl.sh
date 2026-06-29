@@ -11,16 +11,16 @@
 #   BM25_INDEX_DIR  directory containing /index (built by build_bm25_index.py)
 #
 # Optional:
-#   SCALASEEK_MODEL_PATH  SFT checkpoint path [default: base Qwen3-8B]
-#   SCALASEEK_TRAIN_FILES [default: $DATA/rl_data/train.jsonl]
-#   SCALASEEK_VAL_FILES   [default: $DATA/rl_data/dev.jsonl]
-#   SCALASEEK_OUTPUT_DIR  [default: $REPO/checkpoints/rl/<timestamp>]
+#   SCALESEEK_MODEL_PATH  SFT checkpoint path [default: base Qwen3-8B]
+#   SCALESEEK_TRAIN_FILES [default: $DATA/rl_data/train.jsonl]
+#   SCALESEEK_VAL_FILES   [default: $DATA/rl_data/dev.jsonl]
+#   SCALESEEK_OUTPUT_DIR  [default: $REPO/checkpoints/rl/<timestamp>]
 #   NPROC                 number of GPUs [default: all visible]
 #   WANDB_API_KEY + WANDB_ENTITY  (both needed to enable W&B logging)
 #
 # Example:
 #   source setup_env.sh
-#   export SCALASEEK_MODEL_PATH=$CKPT/sft/global_step_200/huggingface
+#   export SCALESEEK_MODEL_PATH=$CKPT/sft/global_step_200/huggingface
 #   bash scripts/run_rl.sh
 #
 # Extra CLI args are forwarded to main_ppo, e.g.:
@@ -30,23 +30,23 @@ set -euo pipefail
 
 # --- repo root check ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCALASEEK_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-export SCALASEEK_ROOT
+SCALESEEK_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+export SCALESEEK_ROOT
 
-if [[ ! -f "${SCALASEEK_ROOT}/setup_env.sh" ]]; then
-    echo "error: run from the ScaleSeek repo root or set SCALASEEK_ROOT" >&2
+if [[ ! -f "${SCALESEEK_ROOT}/setup_env.sh" ]]; then
+    echo "error: run from the ScaleSeek repo root or set SCALESEEK_ROOT" >&2
     exit 1
 fi
 
 # --- verl path (use GrepSeek's vendored verl) ---
-GREPSEEK_ROOT="${GREPSEEK_ROOT:-$(dirname "${SCALASEEK_ROOT}")/grepseek}"
+GREPSEEK_ROOT="${GREPSEEK_ROOT:-$(dirname "${SCALESEEK_ROOT}")/grepseek}"
 export GREPSEEK_VERL_DIR="${GREPSEEK_ROOT}/verl"
 if [[ ! -d "${GREPSEEK_VERL_DIR}/verl/trainer" ]]; then
     echo "error: verl not found at ${GREPSEEK_VERL_DIR}" >&2
     echo "       Set GREPSEEK_ROOT to the grepseek repo directory." >&2
     exit 1
 fi
-export PYTHONPATH="${SCALASEEK_ROOT}:${GREPSEEK_VERL_DIR}:${PYTHONPATH:-}"
+export PYTHONPATH="${SCALESEEK_ROOT}:${GREPSEEK_VERL_DIR}:${PYTHONPATH:-}"
 
 # --- BM25 index ---
 : "${BM25_INDEX_DIR:?Please source setup_env.sh or set BM25_INDEX_DIR}"
@@ -58,26 +58,26 @@ fi
 export BM25_INDEX_DIR
 
 # --- RL data files ---
-DATA_DIR="${DATA:-$(dirname "${SCALASEEK_ROOT}")/data}"
-SCALASEEK_TRAIN_FILES="${SCALASEEK_TRAIN_FILES:-${DATA_DIR}/rl_data/train.jsonl}"
-SCALASEEK_VAL_FILES="${SCALASEEK_VAL_FILES:-${DATA_DIR}/rl_data/dev.jsonl}"
-if [[ ! -f "${SCALASEEK_TRAIN_FILES}" ]]; then
-    echo "error: train file not found: ${SCALASEEK_TRAIN_FILES}" >&2
+DATA_DIR="${DATA:-$(dirname "${SCALESEEK_ROOT}")/data}"
+SCALESEEK_TRAIN_FILES="${SCALESEEK_TRAIN_FILES:-${DATA_DIR}/rl_data/train.jsonl}"
+SCALESEEK_VAL_FILES="${SCALESEEK_VAL_FILES:-${DATA_DIR}/rl_data/dev.jsonl}"
+if [[ ! -f "${SCALESEEK_TRAIN_FILES}" ]]; then
+    echo "error: train file not found: ${SCALESEEK_TRAIN_FILES}" >&2
     echo "       Run: python scripts/prepare_rl_data.py --out_dir ${DATA_DIR}/rl_data" >&2
     exit 1
 fi
-export SCALASEEK_TRAIN_FILES SCALASEEK_VAL_FILES
+export SCALESEEK_TRAIN_FILES SCALESEEK_VAL_FILES
 
 # --- model / output / GPUs ---
-export SCALASEEK_MODEL_PATH="${SCALASEEK_MODEL_PATH:-Qwen/Qwen3-8B}"
-[[ "${SCALASEEK_MODEL_PATH}" == "Qwen/Qwen3-8B" ]] && \
-    echo "note: SCALASEEK_MODEL_PATH unset — initializing RL from BASE model (no SFT warm-start)"
+export SCALESEEK_MODEL_PATH="${SCALESEEK_MODEL_PATH:-Qwen/Qwen3-8B}"
+[[ "${SCALESEEK_MODEL_PATH}" == "Qwen/Qwen3-8B" ]] && \
+    echo "note: SCALESEEK_MODEL_PATH unset — initializing RL from BASE model (no SFT warm-start)"
 
 NPROC="${NPROC:-$(nvidia-smi -L 2>/dev/null | wc -l)}"; NPROC="${NPROC:-4}"
 ULYSSES_SP="${ULYSSES_SP:-2}"   # must divide NPROC
 
-export SCALASEEK_OUTPUT_DIR="${SCALASEEK_OUTPUT_DIR:-${SCALASEEK_ROOT}/checkpoints/rl/$(date +%Y%m%d-%H%M%S)}"
-mkdir -p "${SCALASEEK_OUTPUT_DIR}"
+export SCALESEEK_OUTPUT_DIR="${SCALESEEK_OUTPUT_DIR:-${SCALESEEK_ROOT}/checkpoints/rl/$(date +%Y%m%d-%H%M%S)}"
+mkdir -p "${SCALESEEK_OUTPUT_DIR}"
 
 # --- caches ---
 export HF_HOME="${HF_HOME:-${DATA_DIR}/hf_cache}"
@@ -100,7 +100,7 @@ fi
 # --- sanity checks ---
 python -c "
 import sys
-sys.path.insert(0, '${SCALASEEK_ROOT}')
+sys.path.insert(0, '${SCALESEEK_ROOT}')
 from train.agent_loop import ScaleSeekAgentLoop
 print('ScaleSeekAgentLoop registered.')
 from train.reward import scaleseek_reward
@@ -111,17 +111,17 @@ print('BM25Retriever importable.')
 
 echo "============================================================"
 echo "ScaleSeek GRPO training"
-echo "model:       ${SCALASEEK_MODEL_PATH}"
-echo "train:       ${SCALASEEK_TRAIN_FILES}"
-echo "val:         ${SCALASEEK_VAL_FILES}"
+echo "model:       ${SCALESEEK_MODEL_PATH}"
+echo "train:       ${SCALESEEK_TRAIN_FILES}"
+echo "val:         ${SCALESEEK_VAL_FILES}"
 echo "BM25 index:  ${BM25_INDEX_DIR}/index"
-echo "output:      ${SCALASEEK_OUTPUT_DIR}"
+echo "output:      ${SCALESEEK_OUTPUT_DIR}"
 echo "GPUs:        ${NPROC}  (ulysses_sp=${ULYSSES_SP})"
 echo "logger:      ${LOGGER}"
 echo "============================================================"
 
 python -m verl.trainer.main_ppo \
-    --config-path "${SCALASEEK_ROOT}/train/config" \
+    --config-path "${SCALESEEK_ROOT}/train/config" \
     --config-name grpo_trainer \
     "hydra.searchpath=[file://${GREPSEEK_VERL_DIR}/verl/trainer/config]" \
     trainer.n_gpus_per_node="${NPROC}" \
@@ -133,4 +133,4 @@ python -m verl.trainer.main_ppo \
     wandb.enable="${WANDB_ENABLE}" \
     "$@"
 
-echo "done. checkpoints → ${SCALASEEK_OUTPUT_DIR}"
+echo "done. checkpoints → ${SCALESEEK_OUTPUT_DIR}"

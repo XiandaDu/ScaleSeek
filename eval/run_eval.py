@@ -5,8 +5,8 @@ Usage:
     source setup_env.sh
 
     # ScaleSeek adaptive agent (BM25 + workspace DCI)
-    python -m eval.run_eval --dataset hotpotqa --agent scalaseek --n 500 \\
-        --output results/hotpotqa_scalaseek.jsonl
+    python -m eval.run_eval --dataset hotpotqa --agent scaleseek --n 500 \\
+        --output results/hotpotqa_scaleseek.jsonl
 
     # BM25-RAG baseline
     python -m eval.run_eval --dataset nq --agent bm25_rag --n 1000 \\
@@ -37,7 +37,7 @@ Usage:
         --search-r1-port 8001 --output results/hotpotqa_search_r1.jsonl
 
 Agents:
-    scalaseek   — adaptive BM25 + workspace DCI (ScaleSeek prompt agent)
+    scaleseek   — adaptive BM25 + workspace DCI (ScaleSeek prompt agent)
     bm25_rag    — single BM25 retrieve then answer
     direct      — LLM only, no retrieval
     dci         — prompt-based DCI: grep on full corpus (Beyond Semantic Similarity)
@@ -63,7 +63,7 @@ from .datasets import load_dataset, ALL_DATASETS
 from .metrics import score_example, aggregate
 
 _ALL_AGENTS = [
-    "scalaseek", "bm25_rag", "direct",
+    "scaleseek", "bm25_rag", "direct",
     "dci", "agentir_rag", "search_r1", "grepseek",
 ]
 
@@ -156,7 +156,7 @@ def run_eval(args: argparse.Namespace) -> None:
 
     # --- BM25 retriever (lazy, only loaded when needed) ---
     retriever = None
-    need_bm25 = args.agent in ("scalaseek", "bm25_rag", "search_r1")
+    need_bm25 = args.agent in ("scaleseek", "bm25_rag", "search_r1")
     if need_bm25:
         from .bm25_retriever import BM25Retriever
         retriever = BM25Retriever()
@@ -171,7 +171,7 @@ def run_eval(args: argparse.Namespace) -> None:
     print(f"\nRunning agent={args.agent!r} on {len(examples)} examples ...\n")
 
     for i, ex in enumerate(examples):
-        if args.agent == "scalaseek":
+        if args.agent == "scaleseek":
             from .agent import run_agent
             record = run_agent(
                 ex, client=client, model=model, retriever=retriever,
@@ -277,7 +277,7 @@ def main():
                         help="Skip first N examples")
 
     # Agent
-    parser.add_argument("--agent", default="scalaseek", choices=_ALL_AGENTS)
+    parser.add_argument("--agent", default="scaleseek", choices=_ALL_AGENTS)
     parser.add_argument("--max-turns", type=int, default=8)
     parser.add_argument("--bm25-top-k", type=int, default=5,
                         help="Top-k for bm25_rag and agentir_rag")

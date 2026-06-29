@@ -90,7 +90,7 @@ if _VERL_AVAILABLE:
         def __init__(self, *args, **kwargs):
             # Pass no tools to super — we handle dispatch ourselves.
             super().__init__(*args, **kwargs)
-            # Tool spec is embedded in the system prompt (prompts/scalaseek.txt).
+            # Tool spec is embedded in the system prompt (prompts/scaleseek.txt).
             # We do NOT register verl tools; dispatch is via _handle_processing_tools_state.
             # The retriever is loaded lazily on first rollout via get_retriever().
             from .environment import get_retriever as _warm_retriever
@@ -99,7 +99,7 @@ if _VERL_AVAILABLE:
 
         # ------------------------------------------------------------------
         # Prevent verl from injecting a second tool spec into the chat template.
-        # The system prompt (scalaseek.txt) already contains the full tool spec.
+        # The system prompt (scaleseek.txt) already contains the full tool spec.
         # ------------------------------------------------------------------
 
         async def _handle_pending_state(

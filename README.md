@@ -27,7 +27,7 @@ The agent learns to control every BM25 decision (query, parameters, workspace mo
 ```
 prompts/
     system_prompt.txt       ← clean system prompt used in RL training and final inference
-    scalaseek_prompt.txt    ← eval-only version: adds Search Strategy + Parameter Guidance
+    scaleseek_prompt.txt    ← eval-only version: adds Search Strategy + Parameter Guidance
     bm25_rag.txt            ← single-retrieve-then-answer baseline
     direct.txt              ← no-retrieval baseline
     sft_prompts.py          ← Tutor/Planner prompt suite for cold-start SFT data generation
@@ -67,7 +67,7 @@ scripts/
 
 **`prompts/system_prompt.txt`** is the canonical system prompt. It describes the three tools and the output format. This is what the RL-trained agent sees at inference time. It contains no strategy hints — the model is expected to learn retrieval strategy from training.
 
-**`prompts/scalaseek_prompt.txt`** is a superset used only for the prompt-based eval agent (Stage 1, before RL training). It adds a five-step Search Strategy section and BM25 Parameter Guidance to compensate for the fact that the base model has no training signal for workspace management.
+**`prompts/scaleseek_prompt.txt`** is a superset used only for the prompt-based eval agent (Stage 1, before RL training). It adds a five-step Search Strategy section and BM25 Parameter Guidance to compensate for the fact that the base model has no training signal for workspace management.
 
 The split exists because hints that improve a zero-shot model hurt a trained one (the trained model should discover its own policy, not be constrained by a fixed strategy written into the prompt).
 
@@ -151,9 +151,9 @@ The Tutor/Planner structure and quality-judge design are directly adapted from G
 | `agentir_rag` | [AgentIR](https://huggingface.co/Tevatron/AgentIR-4B) | AgentIR-4B (embedding) + Qwen3-4B reader | full-corpus FAISS dense retrieval |
 | `search_r1` | [Search-R1](https://github.com/PeterGriffinJin/Search-R1) | Qwen2.5-3B (GRPO) | adaptive BM25 via `<search>` tags |
 | `grepseek` | [GrepSeek](https://arxiv.org/abs/2605.29307) | GrepSeek checkpoint (trained) | grep on full corpus, training-based |
-| `scalaseek` | this work | Qwen3-4B (prompt / RL) | adaptive BM25 + bounded workspace DCI |
+| `scaleseek` | this work | Qwen3-4B (prompt / RL) | adaptive BM25 + bounded workspace DCI |
 
-**Design axis:** `direct` → `bm25_rag` → `dci`/`grepseek` → `scalaseek` progresses from no retrieval, through fixed retrieval, through full-corpus DCI, to bounded-workspace DCI with learned parameters. `agentir_rag` is the dense-retrieval counterpart to `bm25_rag`. `search_r1` is the trained adaptive-retrieval counterpart without workspace management.
+**Design axis:** `direct` → `bm25_rag` → `dci`/`grepseek` → `scaleseek` progresses from no retrieval, through fixed retrieval, through full-corpus DCI, to bounded-workspace DCI with learned parameters. `agentir_rag` is the dense-retrieval counterpart to `bm25_rag`. `search_r1` is the trained adaptive-retrieval counterpart without workspace management.
 
 ## Eval
 
@@ -161,8 +161,8 @@ The Tutor/Planner structure and quality-judge design are directly adapted from G
 source setup_env.sh
 
 # ScaleSeek prompt agent
-python -m eval.run_eval --dataset hotpotqa --agent scalaseek \
-    --output results/hotpotqa_scalaseek.jsonl
+python -m eval.run_eval --dataset hotpotqa --agent scaleseek \
+    --output results/hotpotqa_scaleseek.jsonl
 
 # BM25-RAG baseline
 python -m eval.run_eval --dataset hotpotqa --agent bm25_rag \
