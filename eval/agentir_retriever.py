@@ -1,131 +1,164 @@
-"""AgentIR-4B reranker: BM25 top-N → AgentIR-4B rerank → top-k → LLM answer.
+"""AgentIR-4B dense retriever: FAISS full-corpus index → LLM answer.
 
-AgentIR-4B (Tevatron/AgentIR-4B) is a dense embedding model (not a generative
-LLM). It encodes (instruction + query) and documents to compute similarity.
+AgentIR-4B (Tevatron/AgentIR-4B) is a dense embedding model. Retrieval is ANN
+search over a FAISS index built offline from all 21M corpus passages.
 
-We use it as a reranker on top of BM25 — this avoids building a full 21M-doc
-dense index (which would take hours) and lets us run it alongside vLLM without
-GPU conflicts by loading on CPU.
+Build the FAISS index once (takes ~12–24h on GPU):
+    python scripts/build_agentir_index.py \\
+        --corpus /data/rech/mofengra/data/wiki_18_corpus/wiki_corpus.jsonl \\
+        --out $AGENTIR_INDEX_DIR
 
-Pipeline per query:
-    1. BM25 retrieve top-N candidates (default 50)
-    2. AgentIR-4B encode query + all N docs → rerank by dot-product
-    3. Keep top-k passages (default 5)
-    4. Pass to generative LLM (Qwen3-4B on port 8000) with bm25_rag prompt
+Then set $AGENTIR_INDEX_DIR and run eval:
+    python -m eval.run_eval --agent agentir_rag --agentir-index-dir $AGENTIR_INDEX_DIR
+
+This replaces the previous BM25→rerank pipeline. AgentIR is used for
+primary retrieval (no BM25), which is correct per the paper.
 
 Ref: https://huggingface.co/Tevatron/AgentIR-4B
 """
 from __future__ import annotations
 
+import json
+import os
 import time
-from typing import Any
+from pathlib import Path
+from typing import Any, Optional
 
 import torch
 
-from .bm25_retriever import BM25Retriever
-from .agent import AgentRecord, _chat_completion
+from .agent import AgentRecord, _chat_completion, parse_assistant
 from . import prompts
 
 _AGENTIR_MODEL_ID = "Tevatron/AgentIR-4B"
-
-# Instruction prefix used during query encoding (from model card)
 _QUERY_PREFIX = (
     "Instruct: Given a user's reasoning followed by a web search query, "
     "retrieve relevant passages that answer the query while incorporating "
     "the user's reasoning\nQuery: "
 )
 
-_MODEL = None
-_TOKENIZER = None
+# Module-level singletons (loaded once per process)
+_EMBED_MODEL = None
+_EMBED_TOKENIZER = None
+_FAISS_INDEX = None
+_DOC_IDS: Optional[list[str]] = None
+_DOC_TEXTS: Optional[list[str]] = None
+_LOADED_INDEX_DIR: Optional[Path] = None
 
 
-def _load_agentir(device: str = "cpu"):
-    global _MODEL, _TOKENIZER
-    if _MODEL is None:
+def _load_embed_model(device: str = "cpu"):
+    global _EMBED_MODEL, _EMBED_TOKENIZER
+    if _EMBED_MODEL is None:
         from transformers import AutoModel, AutoTokenizer
         print(f"[AgentIR] loading {_AGENTIR_MODEL_ID} on {device} ...")
-        _TOKENIZER = AutoTokenizer.from_pretrained(_AGENTIR_MODEL_ID)
-        _MODEL = AutoModel.from_pretrained(
+        _EMBED_TOKENIZER = AutoTokenizer.from_pretrained(_AGENTIR_MODEL_ID)
+        _EMBED_MODEL = AutoModel.from_pretrained(
             _AGENTIR_MODEL_ID,
-            torch_dtype=torch.float32 if device == "cpu" else torch.float16,
+            torch_dtype=torch.float16 if device != "cpu" else torch.float32,
         ).to(device)
-        _MODEL.eval()
-        print("[AgentIR] loaded.")
-    return _MODEL, _TOKENIZER
+        _EMBED_MODEL.eval()
+        print("[AgentIR] embed model loaded.")
+    return _EMBED_MODEL, _EMBED_TOKENIZER
 
 
-def _embed(texts: list[str], *, is_query: bool, device: str = "cpu",
-           batch_size: int = 16) -> torch.Tensor:
-    model, tokenizer = _load_agentir(device)
-    all_reps = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i: i + batch_size]
-        if is_query:
-            batch = [_QUERY_PREFIX + t for t in batch]
-        enc = tokenizer(
-            batch,
-            padding=True,
-            truncation=True,
-            max_length=512,
-            return_tensors="pt",
+def _load_index(index_dir: Path) -> None:
+    global _FAISS_INDEX, _DOC_IDS, _DOC_TEXTS, _LOADED_INDEX_DIR
+    if _LOADED_INDEX_DIR == index_dir:
+        return
+    try:
+        import faiss
+    except ImportError:
+        raise ImportError(
+            "Install faiss:  conda install -c pytorch faiss-gpu  (or faiss-cpu)"
         )
-        enc = {k: v.to(device) for k, v in enc.items()}
-        with torch.no_grad():
-            hidden = model(**enc, return_dict=True).last_hidden_state
-            reps = hidden[:, -1]  # last token pooling (Tevatron convention)
-            reps = torch.nn.functional.normalize(reps, p=2, dim=-1)
-        all_reps.append(reps.cpu())
-    return torch.cat(all_reps, dim=0)
+    idx_path = index_dir / "index.faiss"
+    ids_path = index_dir / "doc_ids.txt"
+    texts_path = index_dir / "doc_texts.jsonl"
+    if not idx_path.exists():
+        raise FileNotFoundError(
+            f"FAISS index not found at {idx_path}.\n"
+            "Build it: python scripts/build_agentir_index.py "
+            "--corpus /path/to/wiki_corpus.jsonl --out <dir>"
+        )
+    print(f"[AgentIR] loading FAISS index from {idx_path} ...")
+    _FAISS_INDEX = faiss.read_index(str(idx_path))
+    _DOC_IDS = ids_path.read_text().splitlines() if ids_path.exists() else []
+    _DOC_TEXTS = None
+    if texts_path.exists():
+        _DOC_TEXTS = []
+        with open(texts_path) as f:
+            for line in f:
+                try:
+                    _DOC_TEXTS.append(json.loads(line).get("text", ""))
+                except Exception:
+                    _DOC_TEXTS.append("")
+    _LOADED_INDEX_DIR = index_dir
+    print(f"[AgentIR] index ready: {_FAISS_INDEX.ntotal:,} vectors, "
+          f"{len(_DOC_IDS):,} doc_ids, texts={'yes' if _DOC_TEXTS else 'no'}")
 
 
-def rerank(query: str, hits: list[dict], top_k: int,
-           device: str = "cpu") -> list[dict]:
-    """Rerank BM25 hits with AgentIR-4B and return top_k."""
-    if not hits:
-        return hits
-    doc_texts = [h.get("text", "")[:1024] for h in hits]
-    q_vec = _embed([query], is_query=True, device=device)[0]
-    d_vecs = _embed(doc_texts, is_query=False, device=device)
-    scores = (d_vecs @ q_vec).tolist()
-    ranked = sorted(zip(scores, hits), key=lambda x: x[0], reverse=True)
-    return [h for _, h in ranked[:top_k]]
+def _embed_query(query: str, device: str) -> "torch.Tensor":
+    model, tokenizer = _load_embed_model(device)
+    text = _QUERY_PREFIX + query
+    enc = tokenizer([text], padding=True, truncation=True,
+                    max_length=512, return_tensors="pt")
+    enc = {k: v.to(device) for k, v in enc.items()}
+    with torch.no_grad():
+        hidden = model(**enc, return_dict=True).last_hidden_state
+        rep = hidden[:, -1]
+        rep = torch.nn.functional.normalize(rep, p=2, dim=-1)
+    return rep.cpu().float()
+
+
+def retrieve(
+    query: str,
+    top_k: int,
+    *,
+    index_dir: Path,
+    device: str = "cpu",
+) -> list[dict]:
+    """Dense retrieval: encode query → FAISS ANN search → top_k passages."""
+    import numpy as np
+    _load_index(index_dir)
+    q_vec = _embed_query(query, device=device).numpy()
+    scores, indices = _FAISS_INDEX.search(q_vec, top_k)
+    results = []
+    for score, idx in zip(scores[0].tolist(), indices[0].tolist()):
+        if idx < 0:
+            continue
+        doc_id = _DOC_IDS[idx] if idx < len(_DOC_IDS) else str(idx)
+        text = ""
+        if _DOC_TEXTS is not None and idx < len(_DOC_TEXTS):
+            text = _DOC_TEXTS[idx]
+        results.append({"doc_id": doc_id, "score": float(score), "text": text})
+    return results
 
 
 def run_agentir_rag(
     example: dict,
     *,
-    client: Any,            # openai client → Qwen3-4B vLLM (port 8000)
+    client: Any,
     model: str,
-    retriever: BM25Retriever,
-    bm25_top_n: int = 50,  # BM25 candidates fed to AgentIR reranker
-    top_k: int = 5,         # passages kept after reranking
+    index_dir: Path,
+    top_k: int = 5,
     agentir_device: str = "cpu",
-    precomputed_passages: Optional[list[dict]] = None,  # from cache, skips reranking
     max_tokens: int = 256,
     temperature: float = 0.0,
 ) -> AgentRecord:
-    """BM25 top-N → AgentIR-4B rerank → top-k → LLM answer."""
+    """AgentIR-4B dense retrieval → LLM reader."""
     ex_id = str(example.get("id", ""))
     question = example.get("question", "")
     golds = list(example.get("golden_answers", []))
     record = AgentRecord(id=ex_id, question=question, gold_answers=golds)
     t_start = time.perf_counter()
 
-    # 1+2. Use precomputed passages if available, otherwise run BM25 + rerank
     t_tool = time.perf_counter()
-    if precomputed_passages is not None:
-        hits = precomputed_passages
-    else:
-        hits = retriever.retrieve(question, top_k=bm25_top_n)
-        record.n_bm25_calls = 1
-        hits = rerank(question, hits, top_k=top_k, device=agentir_device)
+    hits = retrieve(question, top_k, index_dir=index_dir, device=agentir_device)
     record.tool_time_s = time.perf_counter() - t_tool
     record.n_tool_calls = 1
     record.final_workspace_size = len(hits)
 
-    # 3. LLM answer with reranked passages
     passages_text = "\n\n".join(
-        f"[Passage {i + 1}]\n{h['text'][:1500]}" for i, h in enumerate(hits)
+        f"[Passage {i+1}]\n{h['text'][:1500]}" for i, h in enumerate(hits)
     )
     messages = [
         {"role": "system", "content": prompts.load("bm25_rag")},
@@ -145,7 +178,6 @@ def run_agentir_rag(
         record.error = err
         return record
 
-    from .agent import parse_assistant
     parsed = parse_assistant(text or "")
     record.prediction = parsed.answer
     record.finish_reason = "answer" if parsed.answer else "parse_error"
