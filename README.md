@@ -30,6 +30,7 @@ prompts/
     scalaseek_prompt.txt    ← eval-only version: adds Search Strategy + Parameter Guidance
     bm25_rag.txt            ← single-retrieve-then-answer baseline
     direct.txt              ← no-retrieval baseline
+    sft_prompts.py          ← Tutor/Planner prompt suite for cold-start SFT data generation
 
 eval/
     agent.py                ← ScaleSeek prompt agent loop + baselines
@@ -40,10 +41,7 @@ eval/
     search_r1_agent.py      ← Search-R1 baseline (Qwen2.5-3B, separate vLLM port)
     agentir_retriever.py    ← AgentIR-4B reranker baseline (BM25 top-50 → rerank → top-5)
 
-sft/
-    data_generation/
-        utils/
-            prompts.py      ← Tutor/Planner prompt suite for cold-start SFT data generation
+sft/                            ← (future) SFT pipeline code
 
 train/
     environment.py          ← per-rollout ScaleSeekEnv (workspace + BM25 singleton)
