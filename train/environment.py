@@ -12,9 +12,9 @@ workspace in agent_data.extra_fields["workspace"] so it persists across turns.
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Any, Optional
 
-from eval.agent import Workspace, execute_tool
+from eval.agent import Workspace, execute_tool, DEFAULT_MAX_RESPONSE_TOKENS
 from eval.bm25_retriever import BM25Retriever
 
 # ---------------------------------------------------------------------------
@@ -139,14 +139,29 @@ def get_retriever() -> BM25Retriever:
 # ---------------------------------------------------------------------------
 
 class ScaleSeekEnv:
-    """One instance per rollout. Owns a fresh Workspace and a ref to the shared retriever."""
+    """One instance per rollout. Owns a fresh Workspace and a ref to the shared retriever.
 
-    def __init__(self) -> None:
+    `tokenizer` (the model tokenizer, supplied by ScaleSeekAgentLoop) and
+    `max_response_tokens` bound each tool response by token count, identically to
+    the eval-time prompt agent — keeping train/inference tool outputs aligned.
+    """
+
+    def __init__(
+        self,
+        *,
+        tokenizer: Any = None,
+        max_response_tokens: Optional[int] = DEFAULT_MAX_RESPONSE_TOKENS,
+    ) -> None:
         self.workspace = Workspace()
+        self.tokenizer = tokenizer
+        self.max_response_tokens = max_response_tokens
 
     def execute(self, tool_name: str, arguments: dict) -> dict:
         """Dispatch bm25_retrieve / grep_workspace / read_doc to eval/agent.execute_tool."""
-        return execute_tool(tool_name, arguments, self.workspace, get_retriever())
+        return execute_tool(
+            tool_name, arguments, self.workspace, get_retriever(),
+            tokenizer=self.tokenizer, max_response_tokens=self.max_response_tokens,
+        )
 
     @property
     def workspace_size(self) -> int:

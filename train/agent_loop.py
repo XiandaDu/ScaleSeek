@@ -21,10 +21,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from typing import Any
 
-from .environment import ScaleSeekEnv, TOOL_SCHEMAS
+from .environment import ScaleSeekEnv, TOOL_SCHEMAS, DEFAULT_MAX_RESPONSE_TOKENS
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,12 @@ if _VERL_AVAILABLE:
             from .environment import get_retriever as _warm_retriever
             # Warm up retriever in __init__ so first rollout doesn't pay the load cost.
             _warm_retriever()
+            # Per-response token budget for tool outputs (whole passages dropped to
+            # fit). Counted with self.tokenizer, matching the eval prompt agent so
+            # train/inference tool outputs are byte-aligned. Override via env var.
+            self._max_tool_response_tokens = int(
+                os.environ.get("SCALESEEK_MAX_TOOL_RESPONSE_TOKENS", DEFAULT_MAX_RESPONSE_TOKENS)
+            )
 
         # ------------------------------------------------------------------
         # Prevent verl from injecting a second tool spec into the chat template.
@@ -122,7 +129,13 @@ if _VERL_AVAILABLE:
             self, agent_data: AgentData
         ) -> AgentState:
             """Execute tool calls against per-rollout ScaleSeekEnv."""
-            env: ScaleSeekEnv = agent_data.extra_fields.setdefault("env", ScaleSeekEnv())
+            env: ScaleSeekEnv = agent_data.extra_fields.setdefault(
+                "env",
+                ScaleSeekEnv(
+                    tokenizer=self.tokenizer,
+                    max_response_tokens=self._max_tool_response_tokens,
+                ),
+            )
 
             # Get the decoded text of the last assistant turn.
             response_text = self.tokenizer.decode(

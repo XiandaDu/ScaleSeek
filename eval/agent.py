@@ -36,14 +36,59 @@ from . import prompts
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 _ANSWER_RE = re.compile(r"<answer>\s*(.*?)\s*</answer>", re.DOTALL)
 
-MAX_TEXT_CHARS = 2000   # per passage in tool response
+# Default token budget for a single tool response (the rendered bm25_retrieve /
+# grep_workspace passage list, or one read_doc). Passages are atomic ~100-word DPR
+# chunks (mean ~170 tokens, max ~1.1k), so we do NOT truncate individual passages.
+# Instead we bound the *whole* response by token count and drop trailing
+# (lower-ranked) passages — they stay in the workspace, reachable via
+# grep_workspace / read_doc. This mirrors GrepSeek's tokenizer-based stdout cap so
+# eval and RL training truncate tool outputs identically.
+DEFAULT_MAX_RESPONSE_TOKENS = 2048
 
 
-def _fmt_doc(doc: dict, max_chars: int = MAX_TEXT_CHARS) -> str:
-    text = doc.get("text", "")
-    if len(text) > max_chars:
-        text = text[:max_chars] + " [...]"
-    return f'[doc_id={doc["doc_id"]} score={doc["score"]:.2f}]\n{text}'
+def _fmt_doc(doc: dict) -> str:
+    """Render one passage whole — no per-passage truncation (see _budget_docs)."""
+    return f'[doc_id={doc["doc_id"]} score={doc["score"]:.2f}]\n{doc.get("text", "")}'
+
+
+def _count_tokens(text: str, tokenizer: Any) -> int:
+    """Token count via the model tokenizer; falls back to a ~4 char/token estimate."""
+    if tokenizer is None:
+        return max(1, len(text) // 4)
+    return len(tokenizer.encode(text, add_special_tokens=False))
+
+
+def _truncate_to_tokens(text: str, *, tokenizer: Any, max_tokens: Optional[int]) -> str:
+    """Truncate a single string to a token budget (used by read_doc)."""
+    if not max_tokens:
+        return text
+    if tokenizer is None:
+        return text if len(text) <= max_tokens * 4 else text[: max_tokens * 4] + " [...]"
+    ids = tokenizer.encode(text, add_special_tokens=False)
+    if len(ids) <= max_tokens:
+        return text
+    return tokenizer.decode(ids[:max_tokens]) + " [...]"
+
+
+def _budget_docs(
+    docs: list[dict], *, tokenizer: Any, max_tokens: Optional[int]
+) -> tuple[list[str], int]:
+    """Render passages whole, in rank order, until the token budget is reached.
+
+    Returns (rendered_strings, n_total). Always includes at least the first passage
+    so the response is never empty; passages that don't fit are dropped (they remain
+    in the workspace and are reachable via grep_workspace / read_doc).
+    """
+    rendered: list[str] = []
+    used = 0
+    for d in docs:
+        s = _fmt_doc(d)
+        n = _count_tokens(s, tokenizer)
+        if max_tokens and rendered and used + n > max_tokens:
+            break
+        rendered.append(s)
+        used += n
+    return rendered, len(docs)
 
 
 @dataclass
@@ -91,8 +136,17 @@ def execute_tool(
     arguments: dict,
     workspace: Workspace,
     retriever: BM25Retriever,
+    *,
+    tokenizer: Any = None,
+    max_response_tokens: Optional[int] = DEFAULT_MAX_RESPONSE_TOKENS,
 ) -> dict:
-    """Run a tool and return a structured result dict."""
+    """Run a tool and return a structured result dict.
+
+    Tool responses are bounded to `max_response_tokens` tokens (counted with
+    `tokenizer`, or a ~4 char/token estimate when it is None) by dropping trailing
+    passages — never by cutting a passage mid-text. Pass max_response_tokens=None
+    to disable the budget.
+    """
     if name == "bm25_retrieve":
         query = str(arguments.get("query", "")).strip()
         if not query:
@@ -109,15 +163,24 @@ def execute_tool(
         else:
             workspace.replace(hits)
 
-        return {
+        rendered, n_total = _budget_docs(hits, tokenizer=tokenizer, max_tokens=max_response_tokens)
+        result = {
             "tool": "bm25_retrieve",
             "query": query,
             "top_k": top_k,
             "mode": mode,
             "new_hits": len(hits),
+            "shown": len(rendered),
             "workspace_size": workspace.size,
-            "results": [_fmt_doc(h) for h in hits],
+            "results": rendered,
         }
+        if len(rendered) < n_total:
+            result["note"] = (
+                f"{n_total - len(rendered)} of {n_total} retrieved passages omitted to fit "
+                "the response budget; they are in the workspace — narrow with grep_workspace "
+                "or open one with read_doc."
+            )
+        return result
 
     elif name == "grep_workspace":
         if workspace.size == 0:
@@ -127,13 +190,21 @@ def execute_tool(
             return {"error": "grep_workspace requires a non-empty pattern"}
         ci = bool(arguments.get("case_insensitive", True))
         matches = workspace.grep(pattern, case_insensitive=ci)
-        return {
+        rendered, n_total = _budget_docs(matches, tokenizer=tokenizer, max_tokens=max_response_tokens)
+        result = {
             "tool": "grep_workspace",
             "pattern": pattern,
             "workspace_size": workspace.size,
             "matched": len(matches),
-            "results": [_fmt_doc(m) for m in matches],
+            "shown": len(rendered),
+            "results": rendered,
         }
+        if len(rendered) < n_total:
+            result["note"] = (
+                f"{n_total - len(rendered)} of {n_total} matches omitted to fit the response "
+                "budget; refine the pattern or open a specific doc_id with read_doc."
+            )
+        return result
 
     elif name == "read_doc":
         doc_id = str(arguments.get("doc_id", "")).strip()
@@ -144,7 +215,9 @@ def execute_tool(
                 "error": f"doc_id {doc_id!r} not in workspace",
                 "available_ids_sample": ids,
             }
-        full_text = doc["text"][:8000]
+        full_text = _truncate_to_tokens(
+            doc["text"], tokenizer=tokenizer, max_tokens=max_response_tokens
+        )
         return {"tool": "read_doc", "doc_id": doc_id, "text": full_text}
 
     else:
@@ -313,6 +386,8 @@ def run_agent(
     max_tokens: Optional[int] = 2048,
     temperature: float = 0.0,
     top_p: float = 1.0,
+    tokenizer: Any = None,
+    max_tool_response_tokens: Optional[int] = DEFAULT_MAX_RESPONSE_TOKENS,
 ) -> AgentRecord:
     """Run ScaleSeek prompt agent on one example.
 
@@ -382,7 +457,10 @@ def run_agent(
         consecutive_parse_errors = 0
 
         t_tool = time.perf_counter()
-        result = execute_tool(parsed.tool_name, parsed.tool_args, workspace, retriever)
+        result = execute_tool(
+            parsed.tool_name, parsed.tool_args, workspace, retriever,
+            tokenizer=tokenizer, max_response_tokens=max_tool_response_tokens,
+        )
         record.tool_time_s += time.perf_counter() - t_tool
 
         record.n_tool_calls += 1

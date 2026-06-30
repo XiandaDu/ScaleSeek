@@ -162,6 +162,22 @@ def run_eval(args: argparse.Namespace) -> None:
         retriever = BM25Retriever()
         print(f"BM25 index: {retriever._index_dir}")
 
+    # --- Tokenizer for exact tool-response token budgeting (scaleseek only) ---
+    tokenizer = None
+    if args.agent == "scaleseek":
+        tok_name = args.tokenizer or os.environ.get("LLM_TOKENIZER")
+        if tok_name:
+            try:
+                from transformers import AutoTokenizer
+                tokenizer = AutoTokenizer.from_pretrained(tok_name)
+                print(f"Tokenizer: {tok_name} (exact tool-response token budgeting)")
+            except Exception as e:  # noqa: BLE001
+                print(f"warning: could not load tokenizer {tok_name!r} ({e}); "
+                      "falling back to ~4 char/token estimate")
+        else:
+            print("Tokenizer: none — using ~4 char/token estimate for the tool-response "
+                  "budget (set --tokenizer or LLM_TOKENIZER for exact counts)")
+
     # --- Run ---
     output_path = Path(args.output) if args.output else None
     results: list[dict] = []
@@ -177,6 +193,8 @@ def run_eval(args: argparse.Namespace) -> None:
                 ex, client=client, model=model, retriever=retriever,
                 max_turns=args.max_turns, max_tokens=args.max_tokens,
                 temperature=args.temperature,
+                tokenizer=tokenizer,
+                max_tool_response_tokens=args.max_tool_response_tokens,
             )
         elif args.agent == "bm25_rag":
             from .agent import run_bm25_rag
@@ -281,6 +299,13 @@ def main():
     parser.add_argument("--max-turns", type=int, default=8)
     parser.add_argument("--bm25-top-k", type=int, default=5,
                         help="Top-k for bm25_rag and agentir_rag")
+    parser.add_argument("--tokenizer", default=None,
+                        help="HF tokenizer name/path for exact tool-response token "
+                             "budgeting (scaleseek agent). Default: $LLM_TOKENIZER, "
+                             "else a ~4 char/token estimate.")
+    parser.add_argument("--max-tool-response-tokens", type=int, default=2048,
+                        help="Token budget per tool response for the scaleseek agent "
+                             "(whole passages dropped to fit). Default 2048.")
 
     # Corpus (for dci and grepseek)
     parser.add_argument("--corpus-path", default=None,

@@ -145,7 +145,10 @@ actor_rollout_ref:
       format: hermes              # <tool_call>...</tool_call> XML format (matches eval)
       tool_config_path: null      # ScaleSeekAgentLoop handles dispatch internally
       interaction_config_path: null
-      max_tool_response_length: 50000   # tokenizer-level truncation happens in env.execute
+      # Backstop only. Primary truncation is a per-response token budget applied in
+      # ScaleSeekEnv.execute (default 2048, set SCALESEEK_MAX_TOOL_RESPONSE_TOKENS to
+      # override), which drops whole passages instead of cutting mid-JSON here.
+      max_tool_response_length: 50000
       tool_response_truncate_side: right
 
     agent:
