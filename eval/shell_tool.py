@@ -87,14 +87,34 @@ class ToolResult:
         }, ensure_ascii=False)
 
 
+def _truncate_stdout(stdout: str, *, tokenizer, max_tokens, max_chars) -> str:
+    """Token-based truncation when a tokenizer+max_tokens are given (GrepSeek's
+    official 2048-token cap uses the model's own tokenizer); else char-based."""
+    if tokenizer is not None and max_tokens:
+        ids = tokenizer.encode(stdout, add_special_tokens=False)
+        if len(ids) > max_tokens:
+            return tokenizer.decode(ids[:max_tokens]) + f"\n[... truncated at {max_tokens} tokens]"
+        return stdout
+    if len(stdout) > max_chars:
+        return stdout[:max_chars] + f"\n[... truncated at {max_chars} chars]"
+    return stdout
+
+
 def run_shell(
     cmd: str,
     *,
     corpus_path: str,
     timeout: float = 30.0,
     max_chars: int = _MAX_OUTPUT_CHARS,
+    tokenizer=None,
+    max_tokens: int | None = None,
 ) -> ToolResult:
-    """Validate, rewrite corpus.jsonl → actual filename, execute in corpus dir."""
+    """Validate, rewrite corpus.jsonl → actual filename, execute in corpus dir.
+
+    stdout is truncated to `max_tokens` (via `tokenizer`) when both are given —
+    this is how GrepSeek's official inference caps tool output (2048 tokens with
+    the model's own tokenizer). Otherwise it falls back to `max_chars`.
+    """
     try:
         validate(cmd)
     except ToolError as e:
@@ -124,8 +144,8 @@ def run_shell(
         exit_code = -1
         timed_out = True
 
-    if len(stdout) > max_chars:
-        stdout = stdout[:max_chars] + f"\n[... truncated at {max_chars} chars]"
+    stdout = _truncate_stdout(stdout, tokenizer=tokenizer, max_tokens=max_tokens,
+                              max_chars=max_chars)
 
     return ToolResult(command=cmd, stdout=stdout, stderr=stderr,
                       exit_code=exit_code, timed_out=timed_out)

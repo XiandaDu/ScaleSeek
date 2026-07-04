@@ -22,7 +22,7 @@ import time
 from typing import Any, Optional
 
 from .shell_tool import run_shell
-from .agent import AgentRecord, _chat_completion
+from .agent import AgentRecord, _chat_completion, clean_answer
 
 # System prompt reproduced from GrepSeek inference/agent.py so the model sees
 # its exact training format without a dependency on the grepseek package.
@@ -82,7 +82,7 @@ def _parse(text: str):
     else:
         return None, None, "no <tool_call> or <answer> found"
     if first == "answer":
-        return None, am.group(1).strip(), None
+        return None, clean_answer(am.group(1)), None
     try:
         obj = json.loads(tm.group(1).strip())
     except Exception as e:
@@ -103,11 +103,18 @@ def run_grepseek(
     corpus_path: str,
     max_turns: int = 6,
     max_tokens: Optional[int] = 2048,
-    temperature: float = 0.0,
+    temperature: float = 0.6,
     top_p: float = 1.0,
     tool_timeout: float = 60.0,
+    tokenizer: Any = None,
+    tool_max_tokens: int = 2048,
 ) -> AgentRecord:
     """Run GrepSeek checkpoint on one example.
+
+    Faithful to GrepSeek's official inference (arxiv 2605.29307): temperature 0.6,
+    max 6 assistant turns (5 tool + 1 answer), and tool stdout truncated to 2048
+    tokens with the model's OWN tokenizer (pass `tokenizer`). Falls back to the
+    shell_tool char cap only if no tokenizer is supplied (logged by the caller).
 
     Conversation format matches GrepSeek's SFT training format:
         system: SYSTEM_PROMPT
@@ -174,7 +181,8 @@ def run_grepseek(
 
         consecutive_errors = 0
         t_tool = time.perf_counter()
-        result = run_shell(cmd, corpus_path=corpus_path, timeout=tool_timeout)
+        result = run_shell(cmd, corpus_path=corpus_path, timeout=tool_timeout,
+                           tokenizer=tokenizer, max_tokens=tool_max_tokens)
         record.tool_time_s += time.perf_counter() - t_tool
         record.n_tool_calls += 1
 

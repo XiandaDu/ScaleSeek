@@ -156,6 +156,11 @@ def run_agentir_rag(
     record.tool_time_s = time.perf_counter() - t_tool
     record.n_tool_calls = 1
     record.final_workspace_size = len(hits)
+    record.workspace_doc_ids = [h["doc_id"] for h in hits]
+    record.bm25_calls = [{
+        "query": question, "k1": None, "b": None, "top_k": top_k,
+        "mode": "replace", "doc_ids": record.workspace_doc_ids,
+    }]
 
     passages_text = "\n\n".join(
         f"[Passage {i+1}]\n{h['text'][:1500]}" for i, h in enumerate(hits)

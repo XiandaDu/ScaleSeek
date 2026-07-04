@@ -14,7 +14,7 @@ import time
 from typing import Any, Optional
 
 from .shell_tool import run_shell
-from .agent import AgentRecord, _chat_completion
+from .agent import AgentRecord, _chat_completion, clean_answer
 from . import prompts
 
 _TOOL_CALL_RE = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
@@ -36,7 +36,7 @@ def _parse(text: str):
     else:
         return None, None, "no <tool_call> or <answer> found"
     if first == "answer":
-        return None, am.group(1).strip(), None
+        return None, clean_answer(am.group(1)), None
     try:
         obj = json.loads(tm.group(1).strip())
     except Exception as e:
@@ -60,8 +60,13 @@ def run_dci(
     temperature: float = 0.0,
     top_p: float = 1.0,
     tool_timeout: float = 30.0,
+    tool_max_chars: int = 20000,
 ) -> AgentRecord:
-    """Run prompt-based DCI (raw corpus grep) on one example."""
+    """Run prompt-based DCI (raw corpus grep) on one example.
+
+    tool_max_chars=20000 matches the DCI paper's L3 per-tool-result truncation cap
+    (arxiv 2605.05242, Table 1), replacing the earlier 8000-char default.
+    """
     ex_id = str(example.get("id", ""))
     question = example.get("question", "")
     golds = list(example.get("golden_answers", []))
@@ -116,7 +121,8 @@ def run_dci(
 
         consecutive_errors = 0
         t_tool = time.perf_counter()
-        result = run_shell(cmd, corpus_path=corpus_path, timeout=tool_timeout)
+        result = run_shell(cmd, corpus_path=corpus_path, timeout=tool_timeout,
+                           max_chars=tool_max_chars)
         record.tool_time_s += time.perf_counter() - t_tool
         record.n_tool_calls += 1
 

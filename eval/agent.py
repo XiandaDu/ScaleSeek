@@ -168,10 +168,13 @@ def execute_tool(
             "tool": "bm25_retrieve",
             "query": query,
             "top_k": top_k,
+            "k1": k1,
+            "b": b,
             "mode": mode,
             "new_hits": len(hits),
             "shown": len(rendered),
             "workspace_size": workspace.size,
+            "doc_ids": [h["doc_id"] for h in hits],
             "results": rendered,
         }
         if len(rendered) < n_total:
@@ -236,8 +239,10 @@ def _chat_completion(
     temperature: float,
     top_p: float,
     max_tokens: Optional[int],
+    stop: Optional[list] = None,
 ) -> tuple[Optional[str], Optional[str]]:
     """Return (text, error). Handles vLLM reasoning_content reconstruction."""
+    _extra = {"stop": stop} if stop else {}
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -245,6 +250,7 @@ def _chat_completion(
             temperature=temperature,
             top_p=top_p,
             max_tokens=max_tokens,
+            **_extra,
         )
     except Exception as e:
         # context-length overflow retry
@@ -261,6 +267,7 @@ def _chat_completion(
                 resp = client.chat.completions.create(
                     model=model, messages=messages,
                     temperature=temperature, top_p=top_p, max_tokens=room,
+                    **_extra,
                 )
             except Exception as e2:
                 return None, f"API error: {e2}"
@@ -293,6 +300,27 @@ class ParseResult:
     error: Optional[str] = None
 
 
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def clean_answer(s: str) -> str:
+    """Strip reasoning leakage from an extracted answer.
+
+    Reasoning models sometimes emit <think>...</think> or stray answer/think tags
+    inside what our regex captures as the answer (observed on DCI: predictions like
+    'tags.\\n</think>\\n<answer>\\n...'). Remove think blocks, keep only text after
+    the last </think>, and drop any leftover tag tokens.
+    """
+    if not s:
+        return s
+    s = _THINK_BLOCK_RE.sub("", s)
+    if "</think>" in s:
+        s = s.rsplit("</think>", 1)[-1]
+    for tag in ("<think>", "</think>", "<answer>", "</answer>"):
+        s = s.replace(tag, "")
+    return s.strip()
+
+
 def parse_assistant(text: str) -> ParseResult:
     if not text:
         return ParseResult(raw="", error="empty response")
@@ -310,7 +338,7 @@ def parse_assistant(text: str) -> ParseResult:
         return ParseResult(raw=text, error="no <tool_call> or <answer> block found")
 
     if first == "answer":
-        return ParseResult(raw=text, answer=ans_m.group(1).strip())
+        return ParseResult(raw=text, answer=clean_answer(ans_m.group(1)))
 
     tc_text = tool_m.group(1).strip()
     try:
@@ -353,6 +381,13 @@ class AgentRecord:
     turns: list = field(default_factory=list)
     messages: list = field(default_factory=list)
 
+    # Structured retrieval trace (for workspace-level Gold/Qrel R@W and future
+    # training data). bm25_calls: one entry per retrieval action with the query,
+    # BM25 params, and the doc-ids it returned. workspace_doc_ids: the final
+    # materialized workspace W_T (deduped, in insertion order).
+    bm25_calls: list = field(default_factory=list)
+    workspace_doc_ids: list = field(default_factory=list)
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -368,6 +403,8 @@ class AgentRecord:
             "llm_time_s": self.llm_time_s,
             "tool_time_s": self.tool_time_s,
             "total_time_s": self.total_time_s,
+            "bm25_calls": self.bm25_calls,
+            "workspace_doc_ids": self.workspace_doc_ids,
             "turns": self.turns,
         }
 
@@ -466,6 +503,14 @@ def run_agent(
         record.n_tool_calls += 1
         if parsed.tool_name == "bm25_retrieve":
             record.n_bm25_calls += 1
+            record.bm25_calls.append({
+                "query": result.get("query"),
+                "k1": result.get("k1"),
+                "b": result.get("b"),
+                "top_k": result.get("top_k"),
+                "mode": result.get("mode"),
+                "doc_ids": result.get("doc_ids", []),
+            })
 
         payload = json.dumps(result, ensure_ascii=False)
         messages.append({"role": "tool", "content": payload})
@@ -475,6 +520,7 @@ def run_agent(
         record.finish_reason = "max_turns"
 
     record.final_workspace_size = workspace.size
+    record.workspace_doc_ids = [d["doc_id"] for d in workspace.docs]
     record.messages = messages
     record.total_time_s = time.perf_counter() - t_start
     return record
@@ -529,6 +575,8 @@ def run_bm25_rag(
     model: str,
     retriever: BM25Retriever,
     top_k: int = 5,
+    k1: float = 1.5,
+    b: float = 0.75,
     max_tokens: int = 256,
     temperature: float = 0.0,
 ) -> AgentRecord:
@@ -539,11 +587,17 @@ def run_bm25_rag(
     t_start = time.perf_counter()
 
     t_tool = time.perf_counter()
-    hits = retriever.retrieve(question, top_k=top_k)
+    hits = retriever.retrieve(question, top_k=top_k, k1=k1, b=b)
     record.tool_time_s = time.perf_counter() - t_tool
     record.n_tool_calls = 1
     record.n_bm25_calls = 1
     record.final_workspace_size = len(hits)
+    doc_ids = [h["doc_id"] for h in hits]
+    record.workspace_doc_ids = doc_ids
+    record.bm25_calls = [{
+        "query": question, "k1": k1, "b": b, "top_k": top_k,
+        "mode": "replace", "doc_ids": doc_ids,
+    }]
 
     passages_text = "\n\n".join(
         f"[Passage {i+1}]\n{h['text'][:1500]}" for i, h in enumerate(hits)

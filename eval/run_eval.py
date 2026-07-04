@@ -65,6 +65,9 @@ from .metrics import score_example, aggregate
 _ALL_AGENTS = [
     "scaleseek", "bm25_rag", "direct",
     "dci", "agentir_rag", "search_r1", "grepseek",
+    "search_o1",
+    # DR-DCI is run via its own official Pi harness (see RUNBOOK §7 +
+    # scripts/convert_dr_dci_output.py), not this runner.
 ]
 
 
@@ -124,12 +127,27 @@ def run_eval(args: argparse.Namespace) -> None:
 
     gs_client = None
     gs_model = None
+    gs_tokenizer = None
     if args.agent == "grepseek":
         gs_host = args.grepseek_host or os.environ.get("GREPSEEK_HOST", host)
         gs_port = int(args.grepseek_port or os.environ.get("GREPSEEK_PORT", 8002))
         gs_model = args.grepseek_model or os.environ.get("GREPSEEK_MODEL", "grepseek")
         gs_client = _make_client(gs_host, gs_port)
-        print(f"GrepSeek: {gs_host}:{gs_port}  model={gs_model}")
+        print(f"GrepSeek: {gs_host}:{gs_port}  model={gs_model}  "
+              f"temp={args.grepseek_temperature}  max_turns={args.grepseek_max_turns}")
+        # GrepSeek truncates tool stdout to 2048 tokens with its OWN tokenizer.
+        tok_name = args.grepseek_tokenizer or os.environ.get("GREPSEEK_TOKENIZER")
+        if tok_name:
+            try:
+                from transformers import AutoTokenizer
+                gs_tokenizer = AutoTokenizer.from_pretrained(tok_name)
+                print(f"GrepSeek tokenizer: {tok_name} (2048-token stdout cap)")
+            except Exception as e:  # noqa: BLE001
+                print(f"warning: could not load GrepSeek tokenizer {tok_name!r} ({e}); "
+                      "tool stdout will fall back to the char cap — NOT paper-faithful.")
+        else:
+            print("warning: no --grepseek-tokenizer / $GREPSEEK_TOKENIZER; tool stdout "
+                  "uses the char cap instead of the paper's 2048-token cap.")
 
     # --- Corpus path (for DCI and GrepSeek) ---
     corpus_path = args.corpus_path or os.environ.get(
@@ -156,7 +174,7 @@ def run_eval(args: argparse.Namespace) -> None:
 
     # --- BM25 retriever (lazy, only loaded when needed) ---
     retriever = None
-    need_bm25 = args.agent in ("scaleseek", "bm25_rag", "search_r1")
+    need_bm25 = args.agent in ("scaleseek", "bm25_rag", "search_r1", "search_o1")
     if need_bm25:
         from .bm25_retriever import BM25Retriever
         retriever = BM25Retriever()
@@ -200,8 +218,8 @@ def run_eval(args: argparse.Namespace) -> None:
             from .agent import run_bm25_rag
             record = run_bm25_rag(
                 ex, client=client, model=model, retriever=retriever,
-                top_k=args.bm25_top_k, max_tokens=args.max_tokens,
-                temperature=args.temperature,
+                top_k=args.bm25_top_k, k1=args.bm25_k1, b=args.bm25_b,
+                max_tokens=args.max_tokens, temperature=args.temperature,
             )
         elif args.agent == "direct":
             from .agent import run_direct
@@ -236,8 +254,16 @@ def run_eval(args: argparse.Namespace) -> None:
             from .grepseek_agent import run_grepseek
             record = run_grepseek(
                 ex, client=gs_client, model=gs_model, corpus_path=corpus_path,
+                max_turns=args.grepseek_max_turns, max_tokens=args.max_tokens,
+                temperature=args.grepseek_temperature,
+                tokenizer=gs_tokenizer,
+            )
+        elif args.agent == "search_o1":
+            from .search_o1_agent import run_search_o1
+            record = run_search_o1(
+                ex, client=client, model=model, retriever=retriever,
                 max_turns=args.max_turns, max_tokens=args.max_tokens,
-                temperature=args.temperature,
+                bm25_top_k=args.bm25_top_k, temperature=args.temperature,
             )
         else:
             sys.exit(f"Unknown agent: {args.agent!r}")
@@ -298,7 +324,11 @@ def main():
     parser.add_argument("--agent", default="scaleseek", choices=_ALL_AGENTS)
     parser.add_argument("--max-turns", type=int, default=8)
     parser.add_argument("--bm25-top-k", type=int, default=5,
-                        help="Top-k for bm25_rag and agentir_rag")
+                        help="Top-k for bm25_rag / agentir_rag / dr_dci pull / search_o1")
+    parser.add_argument("--bm25-k1", type=float, default=1.5,
+                        help="BM25 k1 for the bm25_rag sweep (see reports/metric_support.md)")
+    parser.add_argument("--bm25-b", type=float, default=0.75,
+                        help="BM25 b for the bm25_rag sweep")
     parser.add_argument("--tokenizer", default=None,
                         help="HF tokenizer name/path for exact tool-response token "
                              "budgeting (scaleseek agent). Default: $LLM_TOKENIZER, "
@@ -317,11 +347,18 @@ def main():
                         help="vLLM port for Search-R1 (default: $SEARCH_R1_PORT or 8001)")
     parser.add_argument("--search-r1-model", default=None)
 
-    # GrepSeek
+    # GrepSeek  (paper-faithful defaults: temp 0.6, 6 turns, 2048-token stdout cap)
     parser.add_argument("--grepseek-host", default=None)
     parser.add_argument("--grepseek-port", default=None,
                         help="vLLM port for GrepSeek model (default: $GREPSEEK_PORT or 8002)")
     parser.add_argument("--grepseek-model", default=None)
+    parser.add_argument("--grepseek-temperature", type=float, default=0.6,
+                        help="GrepSeek sampling temperature (paper: 0.6)")
+    parser.add_argument("--grepseek-max-turns", type=int, default=6,
+                        help="GrepSeek assistant turns (paper: 6 = 5 tool + 1 answer)")
+    parser.add_argument("--grepseek-tokenizer", default=None,
+                        help="HF path of the GrepSeek checkpoint tokenizer, for the "
+                             "2048-token stdout cap (default: $GREPSEEK_TOKENIZER)")
 
     # AgentIR
     parser.add_argument("--agentir-index-dir", default=None,
