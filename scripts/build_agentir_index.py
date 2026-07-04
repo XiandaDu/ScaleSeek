@@ -13,21 +13,21 @@ Usage:
         --batch-size 512
 
 Output files:
-    index.faiss     — FAISS ANN index (default: HNSW, ~30–60 GB)
+    index.faiss     — FAISS ANN index (default: hnsw_sq8, ~55–60 GB)
     doc_ids.txt     — one doc_id per line; positional index matches FAISS IDs
     doc_texts.jsonl — one {"text": "..."} per line (same positional order)
 
 Index type notes:
-    --index-type hnsw    (default) — good recall/speed trade-off; requires all
-                           vectors in RAM during build (~120–170 GB for 21M docs)
-    --index-type ivfflat — lower RAM during build (adds in batches); similar
-                           recall to hnsw but slower search without GPU FAISS
-    --index-type flat    — exact search; same RAM as hnsw but ~10x slower search
+    --index-type hnsw_sq8 (default) — SQ8-compressed HNSW: 1 byte/dim instead of
+                           4, ~4x less RAM. Recommended for the full 21M corpus.
+    --index-type hnsw    — uncompressed HNSW (fp32); best recall but ~4x the RAM.
+    --index-type ivfflat — uncompressed IVF; adds in batches, slower CPU search.
+    --index-type flat    — exact search; same RAM as hnsw but ~10x slower search.
 
-Memory: AgentIR-4B hidden size is 3072–4096. Float32 = 4 bytes/dim.
-    21M × 4096 × 4B = 336 GB (flat/hnsw build peak)
-    21M × 4096 × 2B = 168 GB (fp16 encoding, then upcasted for FAISS)
-    Use --index-type ivfflat if the machine has less than 200 GB RAM.
+Memory: AgentIR-4B embedding dim is 2560. Peak build RAM ≈ N × dim × bytes/dim:
+    21M × 2560 × 4B ≈ 215 GB  (flat / hnsw / ivfflat — uncompressed fp32)
+    21M × 2560 × 1B ≈  54 GB  (hnsw_sq8 — SQ8, default; + ~5 GB HNSW graph)
+    Prefer hnsw_sq8 unless the machine has >250 GB RAM to spare.
 """
 from __future__ import annotations
 
@@ -55,14 +55,35 @@ def load_model(device: str):
     return model, tokenizer
 
 
-def encode_batch(texts: list[str], model, tokenizer, device: str) -> np.ndarray:
-    enc = tokenizer(texts, padding=True, truncation=True, max_length=512, return_tensors="pt")
+def _encode_once(texts: list[str], model, tokenizer, device: str, max_length: int) -> np.ndarray:
+    enc = tokenizer(texts, padding=True, truncation=True, max_length=max_length,
+                    return_tensors="pt")
     enc = {k: v.to(device) for k, v in enc.items()}
     with torch.no_grad():
         hidden = model(**enc, return_dict=True).last_hidden_state
         reps = hidden[:, -1]
         reps = torch.nn.functional.normalize(reps, p=2, dim=-1)
-    return reps.cpu().float().numpy()
+    out = reps.cpu().float().numpy()
+    del enc, hidden, reps
+    return out
+
+
+def encode_batch(texts: list[str], model, tokenizer, device: str,
+                 max_length: int = 512) -> np.ndarray:
+    """Encode a batch, halving on CUDA OOM and retrying (recursively) so a single
+    long/wide batch can never kill the whole 21M-passage build."""
+    try:
+        return _encode_once(texts, model, tokenizer, device, max_length)
+    except RuntimeError as e:
+        if "out of memory" not in str(e).lower() or len(texts) == 1:
+            raise
+        if device.startswith("cuda"):
+            torch.cuda.empty_cache()
+        mid = max(1, len(texts) // 2)
+        print(f"  [oom] splitting batch {len(texts)} -> {mid}+{len(texts) - mid}", flush=True)
+        left = encode_batch(texts[:mid], model, tokenizer, device, max_length)
+        right = encode_batch(texts[mid:], model, tokenizer, device, max_length)
+        return np.vstack([left, right])
 
 
 def main():
@@ -76,15 +97,21 @@ def main():
                         help="Output directory for index files")
     parser.add_argument("--device",
                         default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--batch-size", type=int, default=512,
-                        help="Passages per GPU batch (lower if OOM)")
-    parser.add_argument("--index-type", default="hnsw",
-                        choices=["flat", "hnsw", "ivfflat"],
-                        help="FAISS index type")
+    parser.add_argument("--batch-size", type=int, default=256,
+                        help="Passages per GPU batch (auto-halves on CUDA OOM)")
+    parser.add_argument("--max-length", type=int, default=512,
+                        help="Max tokens per passage (lower to cut GPU memory)")
+    parser.add_argument("--index-type", default="hnsw_sq8",
+                        choices=["flat", "hnsw", "hnsw_sq8", "ivfflat", "ivfpq"],
+                        help="FAISS index type. hnsw_sq8 (default): SQ8 HNSW, ~54 GB "
+                             "RAM. ivfpq: PQ-compressed IVF, ~1-3 GB RAM — use when the "
+                             "host has <64 GB free (some recall traded for memory).")
     parser.add_argument("--hnsw-m", type=int, default=32,
                         help="HNSW M (graph connections per node)")
     parser.add_argument("--nlist", type=int, default=65536,
-                        help="IVFFlat number of Voronoi cells")
+                        help="IVFFlat/IVFPQ number of Voronoi cells")
+    parser.add_argument("--pq-m", type=int, default=64,
+                        help="IVFPQ sub-quantizers (bytes/vector). dim must be divisible by it.")
     parser.add_argument("--max-passages", type=int, default=None,
                         help="Encode only first N passages (for smoke tests)")
     args = parser.parse_args()
@@ -118,7 +145,7 @@ def main():
     model, tokenizer = load_model(args.device)
 
     # Infer embedding dimension from a dummy call
-    dummy = encode_batch(["hello"], model, tokenizer, args.device)
+    dummy = encode_batch(["hello"], model, tokenizer, args.device, args.max_length)
     dim = dummy.shape[1]
     print(f"  Embedding dim: {dim}")
     del dummy
@@ -129,6 +156,22 @@ def main():
     elif args.index_type == "hnsw":
         index = faiss.IndexHNSWFlat(dim, args.hnsw_m, faiss.METRIC_INNER_PRODUCT)
         index.hnsw.efConstruction = 200
+    elif args.index_type == "hnsw_sq8":
+        # SQ8-compressed HNSW: stores 1 byte/dim instead of 4 → ~4x less RAM.
+        # The scalar quantizer must be trained on a sample before adding.
+        index = faiss.IndexHNSWSQ(
+            dim, faiss.ScalarQuantizer.QT_8bit, args.hnsw_m,
+            faiss.METRIC_INNER_PRODUCT,
+        )
+        index.hnsw.efConstruction = 200
+    elif args.index_type == "ivfpq":
+        # PQ-compressed IVF: ~pq_m bytes/vector (21M × 64B ≈ 1.3 GB) — the low-RAM
+        # option for the full corpus. Trains both the coarse quantizer and the PQ.
+        if dim % args.pq_m != 0:
+            sys.exit(f"--pq-m ({args.pq_m}) must divide the embedding dim ({dim}).")
+        quantizer = faiss.IndexFlatIP(dim)
+        index = faiss.IndexIVFPQ(quantizer, dim, args.nlist, args.pq_m, 8,
+                                 faiss.METRIC_INNER_PRODUCT)
     else:  # ivfflat
         quantizer = faiss.IndexFlatIP(dim)
         index = faiss.IndexIVFFlat(quantizer, dim, args.nlist, faiss.METRIC_INNER_PRODUCT)
@@ -139,10 +182,16 @@ def main():
     ids_f = open(doc_ids_path, "w")
     texts_f = open(texts_path, "w")
 
-    # For IVFFlat: collect a training sample before adding passages
+    # IVF*/hnsw_sq8 need a training sample collected before adding passages.
+    needs_training = args.index_type in ("ivfflat", "ivfpq", "hnsw_sq8")
     training_vecs: list[np.ndarray] = []
-    sample_target = min(args.nlist * 40, 2_000_000) if args.index_type == "ivfflat" else 0
-    ivf_trained = args.index_type != "ivfflat"
+    if args.index_type in ("ivfflat", "ivfpq"):
+        sample_target = min(args.nlist * 40, 2_000_000)
+    elif args.index_type == "hnsw_sq8":
+        sample_target = 262_144  # ample for SQ8 per-dimension min/max calibration
+    else:
+        sample_target = 0
+    trained = not needs_training
 
     batch_texts: list[str] = []
     batch_ids: list[str] = []
@@ -165,17 +214,17 @@ def main():
             if len(batch_texts) < args.batch_size:
                 continue
 
-            vecs = encode_batch(batch_texts, model, tokenizer, args.device)
+            vecs = encode_batch(batch_texts, model, tokenizer, args.device, args.max_length)
 
-            if not ivf_trained:
+            if not trained:
                 training_vecs.append(vecs)
                 pending_vecs.append((vecs, batch_texts, batch_ids))
                 n_collected = sum(v.shape[0] for v in training_vecs)
                 if n_collected >= sample_target:
                     train_arr = np.vstack(training_vecs)
-                    print(f"  Training IVFFlat on {len(train_arr):,} vectors ...")
+                    print(f"  Training {args.index_type} on {len(train_arr):,} vectors ...")
                     index.train(train_arr)
-                    ivf_trained = True
+                    trained = True
                     del training_vecs, train_arr
                     for pv, pt, pi in pending_vecs:
                         index.add(pv)
@@ -195,17 +244,19 @@ def main():
             total_encoded += len(batch_texts)
             batch_texts, batch_ids = [], []
             if total_encoded % 500_000 == 0:
+                if args.device.startswith("cuda"):
+                    torch.cuda.empty_cache()
                 print(f"  [{total_encoded:,}/{n_total:,}] encoded", flush=True)
 
     # Flush final partial batch
     if batch_texts:
         vecs = encode_batch(batch_texts, model, tokenizer, args.device)
-        if not ivf_trained:
+        if not trained:
             # Edge case: never hit sample_target; train on what we have
             all_vecs = np.vstack([v for v, _, _ in pending_vecs] + [vecs])
-            print(f"  Training IVFFlat on {len(all_vecs):,} vectors (small corpus)...")
+            print(f"  Training {args.index_type} on {len(all_vecs):,} vectors (small corpus)...")
             index.train(all_vecs)
-            ivf_trained = True
+            trained = True
             for pv, pt, pi in pending_vecs:
                 index.add(pv)
                 for bid in pi:
