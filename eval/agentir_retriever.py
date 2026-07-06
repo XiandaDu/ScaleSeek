@@ -39,9 +39,12 @@ _QUERY_PREFIX = (
 # Module-level singletons (loaded once per process)
 _EMBED_MODEL = None
 _EMBED_TOKENIZER = None
-_FAISS_INDEX = None
-_DOC_IDS: Optional[list[str]] = None
-_DOC_TEXTS: Optional[list[str]] = None
+# List of shards: each entry is (faiss_index, doc_ids, doc_texts_or_None).
+# A single monolithic index is just one shard. Multi-shard layouts (index_dir
+# containing shard*/index.faiss, from the multi-GPU sharded build) are searched
+# independently and merged by score — embeddings are L2-normalized so inner-
+# product scores are directly comparable across shards.
+_SHARDS: list = []
 _LOADED_INDEX_DIR: Optional[Path] = None
 
 
@@ -60,40 +63,51 @@ def _load_embed_model(device: str = "cpu"):
     return _EMBED_MODEL, _EMBED_TOKENIZER
 
 
+def _load_one_shard(shard_dir: Path):
+    import faiss
+    idx_path = shard_dir / "index.faiss"
+    ids_path = shard_dir / "doc_ids.txt"
+    texts_path = shard_dir / "doc_texts.jsonl"
+    print(f"[AgentIR] loading FAISS index from {idx_path} ...")
+    index = faiss.read_index(str(idx_path))
+    doc_ids = ids_path.read_text().splitlines() if ids_path.exists() else []
+    doc_texts = None
+    if texts_path.exists():
+        doc_texts = []
+        with open(texts_path) as f:
+            for line in f:
+                try:
+                    doc_texts.append(json.loads(line).get("text", ""))
+                except Exception:
+                    doc_texts.append("")
+    return (index, doc_ids, doc_texts)
+
+
 def _load_index(index_dir: Path) -> None:
-    global _FAISS_INDEX, _DOC_IDS, _DOC_TEXTS, _LOADED_INDEX_DIR
+    global _SHARDS, _LOADED_INDEX_DIR
     if _LOADED_INDEX_DIR == index_dir:
         return
     try:
-        import faiss
+        import faiss  # noqa: F401
     except ImportError:
         raise ImportError(
             "Install faiss:  conda install -c pytorch faiss-gpu  (or faiss-cpu)"
         )
-    idx_path = index_dir / "index.faiss"
-    ids_path = index_dir / "doc_ids.txt"
-    texts_path = index_dir / "doc_texts.jsonl"
-    if not idx_path.exists():
-        raise FileNotFoundError(
-            f"FAISS index not found at {idx_path}.\n"
-            "Build it: python scripts/build_agentir_index.py "
-            "--corpus /path/to/wiki_corpus.jsonl --out <dir>"
-        )
-    print(f"[AgentIR] loading FAISS index from {idx_path} ...")
-    _FAISS_INDEX = faiss.read_index(str(idx_path))
-    _DOC_IDS = ids_path.read_text().splitlines() if ids_path.exists() else []
-    _DOC_TEXTS = None
-    if texts_path.exists():
-        _DOC_TEXTS = []
-        with open(texts_path) as f:
-            for line in f:
-                try:
-                    _DOC_TEXTS.append(json.loads(line).get("text", ""))
-                except Exception:
-                    _DOC_TEXTS.append("")
+    shard_dirs = sorted(d for d in index_dir.glob("shard*")
+                        if (d / "index.faiss").exists())
+    if not shard_dirs:
+        if (index_dir / "index.faiss").exists():
+            shard_dirs = [index_dir]
+        else:
+            raise FileNotFoundError(
+                f"No index.faiss under {index_dir} (or {index_dir}/shard*/).\n"
+                "Build it: python scripts/build_agentir_index.py "
+                "--corpus /path/to/wiki_corpus.jsonl --out <dir>"
+            )
+    _SHARDS = [_load_one_shard(d) for d in shard_dirs]
     _LOADED_INDEX_DIR = index_dir
-    print(f"[AgentIR] index ready: {_FAISS_INDEX.ntotal:,} vectors, "
-          f"{len(_DOC_IDS):,} doc_ids, texts={'yes' if _DOC_TEXTS else 'no'}")
+    n_vec = sum(s[0].ntotal for s in _SHARDS)
+    print(f"[AgentIR] index ready: {len(_SHARDS)} shard(s), {n_vec:,} vectors total")
 
 
 def _embed_query(query: str, device: str) -> "torch.Tensor":
@@ -116,21 +130,22 @@ def retrieve(
     index_dir: Path,
     device: str = "cpu",
 ) -> list[dict]:
-    """Dense retrieval: encode query → FAISS ANN search → top_k passages."""
-    import numpy as np
+    """Dense retrieval: encode query → search every shard → merge by score."""
     _load_index(index_dir)
     q_vec = _embed_query(query, device=device).numpy()
-    scores, indices = _FAISS_INDEX.search(q_vec, top_k)
-    results = []
-    for score, idx in zip(scores[0].tolist(), indices[0].tolist()):
-        if idx < 0:
-            continue
-        doc_id = _DOC_IDS[idx] if idx < len(_DOC_IDS) else str(idx)
-        text = ""
-        if _DOC_TEXTS is not None and idx < len(_DOC_TEXTS):
-            text = _DOC_TEXTS[idx]
-        results.append({"doc_id": doc_id, "score": float(score), "text": text})
-    return results
+    merged: list[dict] = []
+    for index, doc_ids, doc_texts in _SHARDS:
+        scores, indices = index.search(q_vec, top_k)
+        for score, idx in zip(scores[0].tolist(), indices[0].tolist()):
+            if idx < 0:
+                continue
+            doc_id = doc_ids[idx] if idx < len(doc_ids) else str(idx)
+            text = ""
+            if doc_texts is not None and idx < len(doc_texts):
+                text = doc_texts[idx]
+            merged.append({"doc_id": doc_id, "score": float(score), "text": text})
+    merged.sort(key=lambda h: h["score"], reverse=True)
+    return merged[:top_k]
 
 
 def run_agentir_rag(

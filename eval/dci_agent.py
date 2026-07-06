@@ -60,12 +60,16 @@ def run_dci(
     temperature: float = 0.0,
     top_p: float = 1.0,
     tool_timeout: float = 30.0,
-    tool_max_chars: int = 20000,
+    tool_max_chars: int = 8000,
 ) -> AgentRecord:
     """Run prompt-based DCI (raw corpus grep) on one example.
 
-    tool_max_chars=20000 matches the DCI paper's L3 per-tool-result truncation cap
-    (arxiv 2605.05242, Table 1), replacing the earlier 8000-char default.
+    tool_max_chars default is 8000. NOTE: the DCI paper's L3 cap is 20000 chars
+    (arxiv 2605.05242, Table 1), but that is calibrated for a strong backbone
+    (GPT-5.4-nano). Empirically, 20K floods our weak Qwen3-4B with grep noise and
+    *regresses* PopQA EM 0.274 -> 0.155 (more verbose answers, wrong same-name
+    entities, 67 -> 153 max_turns). 8000 suits the 4B; pass 20000 to reproduce the
+    paper's L3 with a stronger model.
     """
     ex_id = str(example.get("id", ""))
     question = example.get("question", "")

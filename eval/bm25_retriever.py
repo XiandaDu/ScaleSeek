@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +28,9 @@ class BM25Retriever:
         env_dir = os.environ.get("BM25_INDEX_DIR", "")
         self._index_dir = Path(index_dir or env_dir)
         self._searcher = None
+        # set_bm25() mutates searcher similarity state, so retrieve() must be
+        # atomic when the eval runs examples concurrently.
+        self._lock = threading.Lock()
 
     def _load(self) -> None:
         if self._searcher is not None:
@@ -65,21 +69,21 @@ class BM25Retriever:
         """
         self._load()
         top_k = max(1, min(top_k, 1000))
-        self._searcher.set_bm25(k1, b)
-        raw_hits = self._searcher.search(query, k=top_k)
-
-        hits = []
-        for h in raw_hits:
-            try:
-                raw = self._searcher.doc(h.docid).raw()
-                contents = json.loads(raw).get("contents", "")
-            except Exception:
-                contents = ""
-            hits.append({
-                "doc_id": h.docid,
-                "score": float(h.score),
-                "text": contents,
-            })
+        with self._lock:
+            self._searcher.set_bm25(k1, b)
+            raw_hits = self._searcher.search(query, k=top_k)
+            hits = []
+            for h in raw_hits:
+                try:
+                    raw = self._searcher.doc(h.docid).raw()
+                    contents = json.loads(raw).get("contents", "")
+                except Exception:
+                    contents = ""
+                hits.append({
+                    "doc_id": h.docid,
+                    "score": float(h.score),
+                    "text": contents,
+                })
         return hits
 
     @property

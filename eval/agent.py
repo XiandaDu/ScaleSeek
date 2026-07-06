@@ -284,6 +284,13 @@ def _chat_completion(
         text = f"<think>\n{reasoning.strip()}\n</think>\n{content}"
     else:
         text = content
+        # No reasoning parser on the server: the chat template injects the opening
+        # "<think>" into the prompt, so vLLM's content carries the reasoning and its
+        # "</think>" but NOT the opening tag. Restore it so recorded/fed-back
+        # assistant turns are well-formed <think>...</think> — a trained model
+        # (GrepSeek) degrades when prior turns don't match its training format.
+        if text and "</think>" in text and "<think>" not in text:
+            text = "<think>\n" + text
     return text, None
 
 

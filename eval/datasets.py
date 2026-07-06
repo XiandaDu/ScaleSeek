@@ -22,7 +22,8 @@ FLASHRAG_REPO = "RUC-NLPIR/FlashRAG_datasets"
 FLASHRAG_DATASETS = {
     "nq":              ("nq",              "test"),
     "triviaqa":        ("triviaqa",        "test"),
-    "popqa":           ("popqa",           "test"),
+    "popqa":           ("popqa",           "test"),   # local override -> popqa_longtail (pop<=99 hard tail)
+    "popqa_full":      ("popqa",           "test"),   # full FlashRAG popqa/test (14267) = paper's set
     "hotpotqa":        ("hotpotqa",        "dev"),
     "2wikimultihopqa": ("2wikimultihopqa", "dev"),
     "musique":         ("musique",         "dev"),

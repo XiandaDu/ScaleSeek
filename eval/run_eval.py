@@ -202,92 +202,113 @@ def run_eval(args: argparse.Namespace) -> None:
     scores: list[dict] = []
 
     t0 = time.perf_counter()
-    print(f"\nRunning agent={args.agent!r} on {len(examples)} examples ...\n")
 
-    for i, ex in enumerate(examples):
+    def _dispatch(ex):
         if args.agent == "scaleseek":
             from .agent import run_agent
-            record = run_agent(
+            return run_agent(
                 ex, client=client, model=model, retriever=retriever,
                 max_turns=args.max_turns, max_tokens=args.max_tokens,
-                temperature=args.temperature,
-                tokenizer=tokenizer,
-                max_tool_response_tokens=args.max_tool_response_tokens,
-            )
+                temperature=args.temperature, tokenizer=tokenizer,
+                max_tool_response_tokens=args.max_tool_response_tokens)
         elif args.agent == "bm25_rag":
             from .agent import run_bm25_rag
-            record = run_bm25_rag(
+            return run_bm25_rag(
                 ex, client=client, model=model, retriever=retriever,
                 top_k=args.bm25_top_k, k1=args.bm25_k1, b=args.bm25_b,
-                max_tokens=args.max_tokens, temperature=args.temperature,
-            )
+                max_tokens=args.max_tokens, temperature=args.temperature)
         elif args.agent == "direct":
             from .agent import run_direct
-            record = run_direct(
+            return run_direct(
                 ex, client=client, model=model,
-                max_tokens=args.max_tokens, temperature=args.temperature,
-            )
+                max_tokens=args.max_tokens, temperature=args.temperature)
         elif args.agent == "dci":
             from .dci_agent import run_dci
-            record = run_dci(
+            return run_dci(
                 ex, client=client, model=model, corpus_path=corpus_path,
                 max_turns=args.max_turns, max_tokens=args.max_tokens,
-                temperature=args.temperature,
-            )
+                temperature=args.temperature)
         elif args.agent == "agentir_rag":
             from .agentir_retriever import run_agentir_rag
-            record = run_agentir_rag(
-                ex, client=client, model=model,
-                index_dir=agentir_index_dir,
-                top_k=args.bm25_top_k,
-                agentir_device=args.agentir_device,
-                max_tokens=args.max_tokens, temperature=args.temperature,
-            )
+            return run_agentir_rag(
+                ex, client=client, model=model, index_dir=agentir_index_dir,
+                top_k=args.bm25_top_k, agentir_device=args.agentir_device,
+                max_tokens=args.max_tokens, temperature=args.temperature)
         elif args.agent == "search_r1":
             from .search_r1_agent import run_search_r1
-            record = run_search_r1(
+            return run_search_r1(
                 ex, client=sr1_client, model=sr1_model, retriever=retriever,
                 max_turns=args.max_turns, max_tokens=args.max_tokens,
-                bm25_top_k=args.bm25_top_k, temperature=args.temperature,
-            )
+                bm25_top_k=args.bm25_top_k, temperature=args.temperature)
         elif args.agent == "grepseek":
             from .grepseek_agent import run_grepseek
-            record = run_grepseek(
+            # Official inference uses NO per-turn generation cap (only tool stdout
+            # is capped at 2048 tokens). A fixed 2048 generation cap truncates long
+            # <think> turns before the <tool_call>/<answer> block -> parse_errors.
+            gs_gen = args.grepseek_max_tokens if args.grepseek_max_tokens and args.grepseek_max_tokens > 0 else None
+            return run_grepseek(
                 ex, client=gs_client, model=gs_model, corpus_path=corpus_path,
-                max_turns=args.grepseek_max_turns, max_tokens=args.max_tokens,
-                temperature=args.grepseek_temperature,
-                tokenizer=gs_tokenizer,
-            )
+                max_turns=args.grepseek_max_turns, max_tokens=gs_gen,
+                temperature=args.grepseek_temperature, tokenizer=gs_tokenizer)
         elif args.agent == "search_o1":
             from .search_o1_agent import run_search_o1
-            record = run_search_o1(
+            return run_search_o1(
                 ex, client=client, model=model, retriever=retriever,
                 max_turns=args.max_turns, max_tokens=args.max_tokens,
-                bm25_top_k=args.bm25_top_k, temperature=args.temperature,
-            )
+                bm25_top_k=args.bm25_top_k, temperature=args.temperature)
         else:
             sys.exit(f"Unknown agent: {args.agent!r}")
 
+    def _finalize(record, ex):
         row = record.to_dict()
         sc = score_example(record.prediction, record.gold_answers)
-        row["em"] = sc["em"]
-        row["f1"] = sc["f1"]
-        results.append(row)
-        scores.append(sc)
+        row["em"], row["f1"] = sc["em"], sc["f1"]
+        return row, sc
 
+    n = len(examples)
+    results = [None] * n
+    scores = [None] * n
+    conc = max(1, args.concurrency)
+    print(f"\nRunning agent={args.agent!r} on {n} examples (concurrency={conc}) ...\n")
+
+    def _record_result(i, record):
+        row, sc = _finalize(record, examples[i])
+        results[i], scores[i] = row, sc
+        return row, sc
+
+    def _progress(done, row):
         elapsed = time.perf_counter() - t0
-        avg_s = elapsed / (i + 1)
-        eta = avg_s * (len(examples) - i - 1)
-        print(
-            f"  [{i+1:4d}/{len(examples)}]  "
-            f"em={sc['em']:.0f}  f1={sc['f1']:.2f}  "
-            f"finish={record.finish_reason:<12s}  "
-            f"ETA {eta/60:.1f}min",
-            flush=True,
-        )
+        eta = (elapsed / done) * (n - done)
+        print(f"  [{done:4d}/{n}]  em={row['em']:.0f}  f1={row['f1']:.2f}  "
+              f"finish={row['finish_reason']:<12s}  ETA {eta/60:.1f}min", flush=True)
 
-        if output_path and (i + 1) % 50 == 0:
-            _save_jsonl(results, output_path)
+    if conc == 1:
+        for i, ex in enumerate(examples):
+            row, _ = _record_result(i, _dispatch(ex))
+            _progress(i + 1, row)
+            if output_path and (i + 1) % 50 == 0:
+                _save_jsonl([r for r in results if r is not None], output_path)
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        done = 0
+        with ThreadPoolExecutor(max_workers=conc) as pool:
+            futs = {pool.submit(_dispatch, ex): i for i, ex in enumerate(examples)}
+            for fut in as_completed(futs):
+                i = futs[fut]
+                try:
+                    record = fut.result()
+                    row, _ = _record_result(i, record)
+                except Exception as e:  # noqa: BLE001
+                    ex = examples[i]
+                    row = {"id": str(ex.get("id", "")), "question": ex.get("question", ""),
+                           "gold_answers": ex.get("golden_answers", []), "prediction": None,
+                           "finish_reason": "exception", "error": str(e), "em": 0.0, "f1": 0.0}
+                    results[i], scores[i] = row, {"em": 0.0, "f1": 0.0}
+                done += 1
+                if done % 20 == 0 or done == n:
+                    _progress(done, row)
+                if output_path and done % 100 == 0:
+                    _save_jsonl([r for r in results if r is not None], output_path)
 
     # --- Save & report ---
     if output_path:
@@ -359,6 +380,9 @@ def main():
     parser.add_argument("--grepseek-tokenizer", default=None,
                         help="HF path of the GrepSeek checkpoint tokenizer, for the "
                              "2048-token stdout cap (default: $GREPSEEK_TOKENIZER)")
+    parser.add_argument("--grepseek-max-tokens", type=int, default=0,
+                        help="Per-turn generation cap for GrepSeek. 0 = UNCAPPED "
+                             "(official; a fixed cap truncates <think> -> parse_errors).")
 
     # AgentIR
     parser.add_argument("--agentir-index-dir", default=None,
@@ -372,6 +396,9 @@ def main():
     parser.add_argument("--model", default=None)
     parser.add_argument("--max-tokens", type=int, default=2048)
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--concurrency", type=int, default=1,
+                        help="Number of examples to run in parallel against the vLLM "
+                             "server (the server batches them). 1 = sequential.")
 
     # Output
     parser.add_argument("--output", default=None,
