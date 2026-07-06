@@ -46,10 +46,12 @@ _AGENTIR_MODEL_ID = "Tevatron/AgentIR-4B"
 def load_model(device: str):
     print(f"[AgentIR] loading {_AGENTIR_MODEL_ID} on {device} ...")
     tokenizer = AutoTokenizer.from_pretrained(_AGENTIR_MODEL_ID)
-    model = AutoModel.from_pretrained(
-        _AGENTIR_MODEL_ID,
-        torch_dtype=torch.float16 if device != "cpu" else torch.float32,
-    ).to(device)
+    kwargs = dict(torch_dtype=torch.float16 if device != "cpu" else torch.float32)
+    try:
+        model = AutoModel.from_pretrained(
+            _AGENTIR_MODEL_ID, attn_implementation="sdpa", **kwargs).to(device)
+    except Exception:
+        model = AutoModel.from_pretrained(_AGENTIR_MODEL_ID, **kwargs).to(device)
     model.eval()
     print("[AgentIR] model loaded.")
     return model, tokenizer
@@ -68,22 +70,49 @@ def _encode_once(texts: list[str], model, tokenizer, device: str, max_length: in
     return out
 
 
+_WORKING_CHUNK: int | None = None  # adaptive sub-batch size learned from OOMs
+
+
 def encode_batch(texts: list[str], model, tokenizer, device: str,
                  max_length: int = 512) -> np.ndarray:
-    """Encode a batch, halving on CUDA OOM and retrying (recursively) so a single
-    long/wide batch can never kill the whole 21M-passage build."""
-    try:
-        return _encode_once(texts, model, tokenizer, device, max_length)
-    except RuntimeError as e:
-        if "out of memory" not in str(e).lower() or len(texts) == 1:
-            raise
-        if device.startswith("cuda"):
-            torch.cuda.empty_cache()
-        mid = max(1, len(texts) // 2)
-        print(f"  [oom] splitting batch {len(texts)} -> {mid}+{len(texts) - mid}", flush=True)
-        left = encode_batch(texts[:mid], model, tokenizer, device, max_length)
-        right = encode_batch(texts[mid:], model, tokenizer, device, max_length)
-        return np.vstack([left, right])
+    """Encode a batch OOM-safely.
+
+    IMPORTANT: the retry happens OUTSIDE the except block (iterative, not
+    recursive). Retrying inside `except` keeps the OOM traceback — and with it
+    references to the half-built activation tensors — alive across the retry,
+    so memory is never actually freed and the process death-spirals to OOM at
+    batch size 1. We also remember the working chunk size so later batches
+    start there instead of re-triggering OOMs.
+    """
+    import gc
+    global _WORKING_CHUNK
+    chunk = min(_WORKING_CHUNK or len(texts), len(texts))
+    outs: list[np.ndarray] = []
+    i = 0
+    while i < len(texts):
+        n = min(chunk, len(texts) - i)
+        oom = False
+        try:
+            outs.append(_encode_once(texts[i:i + n], model, tokenizer, device, max_length))
+        except torch.cuda.OutOfMemoryError:
+            oom = True
+        except RuntimeError as e:
+            if "out of memory" not in str(e).lower():
+                raise
+            oom = True
+        if oom:
+            # traceback is dropped here (except block exited) -> tensors freeable
+            gc.collect()
+            if device.startswith("cuda"):
+                torch.cuda.empty_cache()
+            if n == 1:
+                raise RuntimeError("OOM even at batch size 1 after cache clear")
+            chunk = max(1, n // 2)
+            _WORKING_CHUNK = chunk
+            print(f"  [oom] chunk -> {chunk}", flush=True)
+            continue
+        i += n
+    return outs[0] if len(outs) == 1 else np.vstack(outs)
 
 
 def main():
@@ -113,7 +142,11 @@ def main():
     parser.add_argument("--pq-m", type=int, default=64,
                         help="IVFPQ sub-quantizers (bytes/vector). dim must be divisible by it.")
     parser.add_argument("--max-passages", type=int, default=None,
-                        help="Encode only first N passages (for smoke tests)")
+                        help="Encode only N passages (for smoke tests / sharding)")
+    parser.add_argument("--skip-passages", type=int, default=0,
+                        help="Skip the first N corpus lines (shard offset). Combine "
+                             "with --max-passages to build one shard of a multi-GPU "
+                             "sharded build; eval merges results across shard indexes.")
     args = parser.parse_args()
 
     try:
@@ -132,15 +165,18 @@ def main():
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Count passages (respects --max-passages for testing)
+    # Count passages in this shard's window (respects --skip/--max)
     print("Counting passages ...")
     n_total = 0
     with open(corpus_path) as f:
-        for _ in f:
+        for i, _ in enumerate(f):
+            if i < args.skip_passages:
+                continue
             n_total += 1
             if args.max_passages and n_total >= args.max_passages:
                 break
-    print(f"  {n_total:,} passages to encode.")
+    print(f"  {n_total:,} passages to encode "
+          f"(skip={args.skip_passages:,}, max={args.max_passages or 'all'}).")
 
     model, tokenizer = load_model(args.device)
 
@@ -199,8 +235,12 @@ def main():
     total_encoded = 0
 
     with open(corpus_path) as f:
-        for line in f:
-            if total_encoded >= n_total:
+        for line_no, line in enumerate(f):
+            if line_no < args.skip_passages:
+                continue
+            # stop queueing once done+queued reaches the shard target — the
+            # post-loop flush then encodes exactly n_total (no shard overlap)
+            if total_encoded + len(batch_texts) >= n_total:
                 break
             try:
                 obj = json.loads(line)
@@ -241,9 +281,12 @@ def main():
                 for t in batch_texts:
                     texts_f.write(json.dumps({"text": t}, ensure_ascii=False) + "\n")
 
-            total_encoded += len(batch_texts)
+            n_add = len(batch_texts)
+            total_encoded += n_add
             batch_texts, batch_ids = [], []
-            if total_encoded % 500_000 == 0:
+            # print when a 500K boundary is CROSSED (a `% 500_000 == 0` check never
+            # fires when the batch size doesn't divide 500000 exactly)
+            if (total_encoded // 500_000) != ((total_encoded - n_add) // 500_000):
                 if args.device.startswith("cuda"):
                     torch.cuda.empty_cache()
                 print(f"  [{total_encoded:,}/{n_total:,}] encoded", flush=True)
