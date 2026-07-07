@@ -46,14 +46,22 @@ _AGENTIR_MODEL_ID = "Tevatron/AgentIR-4B"
 def load_model(device: str):
     print(f"[AgentIR] loading {_AGENTIR_MODEL_ID} on {device} ...")
     tokenizer = AutoTokenizer.from_pretrained(_AGENTIR_MODEL_ID)
-    kwargs = dict(torch_dtype=torch.float16 if device != "cpu" else torch.float32)
-    try:
-        model = AutoModel.from_pretrained(
-            _AGENTIR_MODEL_ID, attn_implementation="sdpa", **kwargs).to(device)
-    except Exception:
-        model = AutoModel.from_pretrained(_AGENTIR_MODEL_ID, **kwargs).to(device)
+    want = torch.float16 if device != "cpu" else torch.float32
+    # transformers v5 renamed torch_dtype -> dtype and IGNORES the old kwarg
+    # (silently loading fp32 — 2-4x slower + 2x memory). Try new name first.
+    model = None
+    for kw in ({"dtype": want}, {"torch_dtype": want}):
+        try:
+            model = AutoModel.from_pretrained(
+                _AGENTIR_MODEL_ID, attn_implementation="sdpa", **kw).to(device)
+            break
+        except TypeError:
+            continue
+    if model is None:
+        model = AutoModel.from_pretrained(_AGENTIR_MODEL_ID).to(device).to(want)
     model.eval()
-    print("[AgentIR] model loaded.")
+    p = next(model.parameters())
+    print(f"[AgentIR] model loaded. dtype={p.dtype} (must be float16 on GPU!)")
     return model, tokenizer
 
 
@@ -130,11 +138,14 @@ def main():
                         help="Passages per GPU batch (auto-halves on CUDA OOM)")
     parser.add_argument("--max-length", type=int, default=512,
                         help="Max tokens per passage (lower to cut GPU memory)")
-    parser.add_argument("--index-type", default="hnsw_sq8",
-                        choices=["flat", "hnsw", "hnsw_sq8", "ivfflat", "ivfpq"],
-                        help="FAISS index type. hnsw_sq8 (default): SQ8 HNSW, ~54 GB "
-                             "RAM. ivfpq: PQ-compressed IVF, ~1-3 GB RAM — use when the "
-                             "host has <64 GB free (some recall traded for memory).")
+    parser.add_argument("--index-type", default="sq8_flat",
+                        choices=["flat", "hnsw", "hnsw_sq8", "sq8_flat", "ivfflat", "ivfpq"],
+                        help="FAISS index type. sq8_flat (default): SQ8-compressed flat "
+                             "index — adds are ~free (quantize+append; HNSW insertion is "
+                             "CPU-bound at ~100/s and dominates the build), search is "
+                             "exact brute-force over SQ8 codes (fine at eval-scale query "
+                             "volumes with OMP threads). hnsw_sq8: ANN, fast queries but "
+                             "multi-hour graph construction. ivfpq: lowest RAM.")
     parser.add_argument("--hnsw-m", type=int, default=32,
                         help="HNSW M (graph connections per node)")
     parser.add_argument("--nlist", type=int, default=65536,
@@ -200,6 +211,12 @@ def main():
             faiss.METRIC_INNER_PRODUCT,
         )
         index.hnsw.efConstruction = 200
+    elif args.index_type == "sq8_flat":
+        # Flat SQ8: 1 byte/dim storage, add == quantize+append (no graph build),
+        # search == exact scan over SQ8 codes. Needs the same SQ training sample.
+        index = faiss.IndexScalarQuantizer(
+            dim, faiss.ScalarQuantizer.QT_8bit, faiss.METRIC_INNER_PRODUCT,
+        )
     elif args.index_type == "ivfpq":
         # PQ-compressed IVF: ~pq_m bytes/vector (21M × 64B ≈ 1.3 GB) — the low-RAM
         # option for the full corpus. Trains both the coarse quantizer and the PQ.
@@ -218,12 +235,12 @@ def main():
     ids_f = open(doc_ids_path, "w")
     texts_f = open(texts_path, "w")
 
-    # IVF*/hnsw_sq8 need a training sample collected before adding passages.
-    needs_training = args.index_type in ("ivfflat", "ivfpq", "hnsw_sq8")
+    # IVF*/SQ8 types need a training sample collected before adding passages.
+    needs_training = args.index_type in ("ivfflat", "ivfpq", "hnsw_sq8", "sq8_flat")
     training_vecs: list[np.ndarray] = []
     if args.index_type in ("ivfflat", "ivfpq"):
         sample_target = min(args.nlist * 40, 2_000_000)
-    elif args.index_type == "hnsw_sq8":
+    elif args.index_type in ("hnsw_sq8", "sq8_flat"):
         sample_target = 262_144  # ample for SQ8 per-dimension min/max calibration
     else:
         sample_target = 0
