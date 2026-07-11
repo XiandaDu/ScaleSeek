@@ -160,17 +160,28 @@ def run_eval(args: argparse.Namespace) -> None:
             "Set --corpus-path or CORPUS_PATH env var."
         )
 
-    # --- AgentIR FAISS index ---
+    # --- AgentIR FAISS index (or precomputed retrieval cache) ---
     agentir_index_dir: Optional[Path] = None
+    agentir_cache: Optional[dict] = None
     if args.agent == "agentir_rag":
-        raw = args.agentir_index_dir or os.environ.get("AGENTIR_INDEX_DIR", "")
-        if not raw:
-            sys.exit(
-                "AgentIR requires a prebuilt FAISS index.\n"
-                "Build it: python scripts/build_agentir_index.py --corpus ... --out <dir>\n"
-                "Then pass --agentir-index-dir <dir> or set AGENTIR_INDEX_DIR."
-            )
-        agentir_index_dir = Path(raw)
+        if args.agentir_cache:
+            agentir_cache = {}
+            with open(args.agentir_cache, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        row = json.loads(line)
+                        agentir_cache[str(row["id"])] = row.get("hits", [])
+            print(f"AgentIR cache: {args.agentir_cache} ({len(agentir_cache)} queries)")
+        else:
+            raw = args.agentir_index_dir or os.environ.get("AGENTIR_INDEX_DIR", "")
+            if not raw:
+                sys.exit(
+                    "AgentIR requires a prebuilt FAISS index or a retrieval cache.\n"
+                    "Build: python scripts/build_agentir_index.py --corpus ... --out <dir>\n"
+                    "Or precompute: python scripts/precompute_agentir_retrieval.py ... "
+                    "and pass --agentir-cache <jsonl>."
+                )
+            agentir_index_dir = Path(raw)
 
     # --- BM25 retriever (lazy, only loaded when needed) ---
     retriever = None
@@ -229,6 +240,12 @@ def run_eval(args: argparse.Namespace) -> None:
                 max_turns=args.max_turns, max_tokens=args.max_tokens,
                 temperature=args.temperature)
         elif args.agent == "agentir_rag":
+            if agentir_cache is not None:
+                from .agentir_retriever import run_agentir_rag_cached
+                return run_agentir_rag_cached(
+                    ex, client=client, model=model,
+                    hits=agentir_cache.get(str(ex.get("id", "")), []),
+                    max_tokens=args.max_tokens, temperature=args.temperature)
             from .agentir_retriever import run_agentir_rag
             return run_agentir_rag(
                 ex, client=client, model=model, index_dir=agentir_index_dir,
@@ -387,6 +404,9 @@ def main():
     # AgentIR
     parser.add_argument("--agentir-index-dir", default=None,
                         help="Directory with prebuilt FAISS index (default: $AGENTIR_INDEX_DIR)")
+    parser.add_argument("--agentir-cache", default=None,
+                        help="Precomputed retrieval JSONL (scripts/precompute_agentir_retrieval.py); "
+                             "skips FAISS/embedding at eval time (for small-RAM nodes)")
     parser.add_argument("--agentir-device", default="cpu",
                         help="Device for AgentIR-4B embedding (cpu or cuda)")
 

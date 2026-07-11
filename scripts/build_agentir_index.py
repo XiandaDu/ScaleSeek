@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -76,6 +77,22 @@ def _encode_once(texts: list[str], model, tokenizer, device: str, max_length: in
     out = reps.cpu().float().numpy()
     del enc, hidden, reps
     return out
+
+
+def _trim_file_lines(path, n_keep: int) -> None:
+    """Truncate a text file to its first n_keep lines (stream copy + atomic replace).
+    Used on --resume so the id/text sidecars match the checkpointed index exactly
+    (they may be a little ahead of the last index.faiss write)."""
+    import os
+    tmp = str(path) + ".trim"
+    kept = 0
+    with open(path, encoding="utf-8") as fin, open(tmp, "w", encoding="utf-8") as fout:
+        for line in fin:
+            if kept >= n_keep:
+                break
+            fout.write(line)
+            kept += 1
+    os.replace(tmp, path)
 
 
 _WORKING_CHUNK: int | None = None  # adaptive sub-batch size learned from OOMs
@@ -158,6 +175,13 @@ def main():
                         help="Skip the first N corpus lines (shard offset). Combine "
                              "with --max-passages to build one shard of a multi-GPU "
                              "sharded build; eval merges results across shard indexes.")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from out_dir/index.faiss if present: load it, trim "
+                             "the id/text sidecars to match, and continue encoding after "
+                             "the already-indexed passages. (sq8_flat/flat only.)")
+    parser.add_argument("--checkpoint-every", type=int, default=1_000_000,
+                        help="Write index.faiss every N encoded passages so a crash "
+                             "loses at most N passages of work (0 = only at the end).")
     args = parser.parse_args()
 
     try:
@@ -197,8 +221,24 @@ def main():
     print(f"  Embedding dim: {dim}")
     del dummy
 
-    # Build index skeleton
-    if args.index_type == "flat":
+    # Resume from an existing checkpoint if requested
+    doc_ids_path = out_dir / "doc_ids.txt"
+    texts_path = out_dir / "doc_texts.jsonl"
+    idx_ckpt = out_dir / "index.faiss"
+    resume_done = 0
+    index = None
+    if args.resume and idx_ckpt.exists() and doc_ids_path.exists():
+        print(f"[resume] loading checkpoint {idx_ckpt} ...")
+        index = faiss.read_index(str(idx_ckpt))
+        resume_done = index.ntotal
+        _trim_file_lines(doc_ids_path, resume_done)
+        _trim_file_lines(texts_path, resume_done)
+        print(f"[resume] {resume_done:,} vectors already indexed; continuing after them.")
+
+    # Build index skeleton (fresh start only)
+    if index is not None:
+        pass
+    elif args.index_type == "flat":
         index = faiss.IndexFlatIP(dim)
     elif args.index_type == "hnsw":
         index = faiss.IndexHNSWFlat(dim, args.hnsw_m, faiss.METRIC_INNER_PRODUCT)
@@ -229,14 +269,14 @@ def main():
         quantizer = faiss.IndexFlatIP(dim)
         index = faiss.IndexIVFFlat(quantizer, dim, args.nlist, faiss.METRIC_INNER_PRODUCT)
 
-    doc_ids_path = out_dir / "doc_ids.txt"
-    texts_path = out_dir / "doc_texts.jsonl"
-
-    ids_f = open(doc_ids_path, "w")
-    texts_f = open(texts_path, "w")
+    _mode = "a" if resume_done else "w"
+    ids_f = open(doc_ids_path, _mode)
+    texts_f = open(texts_path, _mode)
 
     # IVF*/SQ8 types need a training sample collected before adding passages.
-    needs_training = args.index_type in ("ivfflat", "ivfpq", "hnsw_sq8", "sq8_flat")
+    # A resumed checkpoint is already trained.
+    needs_training = (resume_done == 0) and \
+        args.index_type in ("ivfflat", "ivfpq", "hnsw_sq8", "sq8_flat")
     training_vecs: list[np.ndarray] = []
     if args.index_type in ("ivfflat", "ivfpq"):
         sample_target = min(args.nlist * 40, 2_000_000)
@@ -249,11 +289,12 @@ def main():
     batch_texts: list[str] = []
     batch_ids: list[str] = []
     pending_vecs: list[np.ndarray] = []   # only used before IVFFlat is trained
-    total_encoded = 0
+    total_encoded = resume_done
+    skip_total = args.skip_passages + resume_done
 
     with open(corpus_path) as f:
         for line_no, line in enumerate(f):
-            if line_no < args.skip_passages:
+            if line_no < skip_total:
                 continue
             # stop queueing once done+queued reaches the shard target — the
             # post-loop flush then encodes exactly n_total (no shard overlap)
@@ -307,6 +348,15 @@ def main():
                 if args.device.startswith("cuda"):
                     torch.cuda.empty_cache()
                 print(f"  [{total_encoded:,}/{n_total:,}] encoded", flush=True)
+            # durable checkpoint every --checkpoint-every passages: a crash/restart
+            # then resumes from here instead of from zero (--resume)
+            ce = args.checkpoint_every
+            if trained and ce and (total_encoded // ce) != ((total_encoded - n_add) // ce):
+                ids_f.flush(); texts_f.flush()
+                tmp = str(out_dir / "index.faiss.tmp")
+                faiss.write_index(index, tmp)
+                os.replace(tmp, out_dir / "index.faiss")
+                print(f"  [checkpoint] index.faiss written at {index.ntotal:,} vectors", flush=True)
 
     # Flush final partial batch
     if batch_texts:

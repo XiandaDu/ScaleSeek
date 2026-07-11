@@ -148,6 +148,56 @@ def retrieve(
     return merged[:top_k]
 
 
+def run_agentir_rag_cached(
+    example: dict,
+    *,
+    client: Any,
+    model: str,
+    hits: list[dict],
+    max_tokens: int = 256,
+    temperature: float = 0.0,
+) -> AgentRecord:
+    """AgentIR reader over PRECOMPUTED hits (scripts/precompute_agentir_retrieval.py).
+    Same reader prompt as run_agentir_rag; no FAISS/embedding at eval time — the
+    retrieval was done shard-by-shard offline to fit small-RAM nodes."""
+    ex_id = str(example.get("id", ""))
+    question = example.get("question", "")
+    golds = list(example.get("golden_answers", []))
+    record = AgentRecord(id=ex_id, question=question, gold_answers=golds)
+    t_start = time.perf_counter()
+
+    record.n_tool_calls = 1
+    record.final_workspace_size = len(hits)
+    record.workspace_doc_ids = [h["doc_id"] for h in hits]
+    record.bm25_calls = [{"query": question, "k1": None, "b": None,
+                          "top_k": len(hits), "mode": "replace",
+                          "doc_ids": record.workspace_doc_ids}]
+
+    passages_text = "\n\n".join(
+        f"[Passage {i+1}]\n{h.get('text', '')[:1500]}" for i, h in enumerate(hits)
+    )
+    messages = [
+        {"role": "system", "content": prompts.load("bm25_rag")},
+        {"role": "user", "content": f"Question: {question}\n\nPassages:\n{passages_text}"},
+    ]
+    t_llm = time.perf_counter()
+    text, err = _chat_completion(
+        client, model=model, messages=messages,
+        temperature=temperature, top_p=1.0, max_tokens=max_tokens,
+    )
+    record.llm_time_s = time.perf_counter() - t_llm
+    record.total_time_s = time.perf_counter() - t_start
+    if err:
+        record.finish_reason = "api_error"
+        record.error = err
+        return record
+    parsed = parse_assistant(text or "")
+    record.prediction = parsed.answer
+    record.finish_reason = "answer" if parsed.answer else "parse_error"
+    record.n_turns = 1
+    return record
+
+
 def run_agentir_rag(
     example: dict,
     *,
