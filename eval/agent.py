@@ -20,6 +20,7 @@ trained on later.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -450,7 +451,10 @@ def run_agent(
 
     t_start = time.perf_counter()
     messages: list = [
-        {"role": "system", "content": prompts.load("scaleseek_prompt")},
+        # SCALESEEK_PROMPT selects an alternate prompt file for ablations
+        # (e.g. scaleseek_prompt_noparams — no numeric parameter hints).
+        {"role": "system", "content": prompts.load(
+            os.environ.get("SCALESEEK_PROMPT", "scaleseek_prompt"))},
         {"role": "user", "content": f"Question: {question}"},
     ]
 
