@@ -138,6 +138,14 @@ def run_search_r1(
         hits = retriever.retrieve(query, top_k=bm25_top_k)
         record.tool_time_s += time.perf_counter() - t_tool
         record.final_workspace_size = max(record.final_workspace_size, len(hits))
+        # record retrieval trace so Gold/Qrel R@W is computable (was missing ->
+        # workspace_doc_ids stayed empty -> GoldR@W read as 0)
+        doc_ids = [h["doc_id"] for h in hits]
+        record.workspace_doc_ids = list(dict.fromkeys(record.workspace_doc_ids + doc_ids))
+        record.bm25_calls.append({
+            "query": query, "k1": None, "b": None, "top_k": bm25_top_k,
+            "mode": "merge", "doc_ids": doc_ids,
+        })
 
         results_text = _format_hits(hits)
         # vLLM stop excludes the stop string — re-add </search> then inject
