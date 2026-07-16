@@ -23,14 +23,15 @@ FLASHRAG_DATASETS = {
     "nq":              ("nq",              "test"),
     "triviaqa":        ("triviaqa",        "test"),
     "popqa":           ("popqa",           "test"),   # local override -> popqa_longtail (pop<=99 hard tail)
-    "popqa_full":      ("popqa",           "test"),   # full FlashRAG popqa/test (14267) = paper's set
+    "popqa_full":      ("popqa",           "test"),   # local fixed random 1500 sample (标准集)
+    "popqa_full14267": ("popqa_full14267", "test"),   # TRUE full popqa/test (14267) for paper对标
     "hotpotqa":        ("hotpotqa",        "dev"),
     "2wikimultihopqa": ("2wikimultihopqa", "dev"),
     "musique":         ("musique",         "dev"),
     "bamboogle":       ("bamboogle",       "test"),
 }
 
-ALL_DATASETS = list(FLASHRAG_DATASETS) + ["bright", "browsecomp"]
+ALL_DATASETS = list(FLASHRAG_DATASETS) + ["bright", "browsecomp", "browsecomp_plus"]
 
 
 def _datasets_dir() -> Path:
@@ -189,6 +190,24 @@ def load_dataset(
             )
         return rows
 
+    if name == "browsecomp_plus":
+        path = _datasets_dir() / "browsecomp_plus" / "queries.jsonl"
+        if not path.exists():
+            raise FileNotFoundError(
+                f"BrowseComp-Plus not found at {path}. "
+                "Run: python scripts/build_browsecomp_plus.py"
+            )
+        rows = []
+        with open(path, encoding="utf-8") as fh:
+            for i, line in enumerate(fh):
+                if i < offset:
+                    continue
+                if limit is not None and len(rows) >= limit:
+                    break
+                if line.strip():
+                    rows.append(json.loads(line))
+        return rows
+
     if name not in FLASHRAG_DATASETS:
         raise ValueError(f"Unknown dataset: {name!r}. Supported: {ALL_DATASETS}")
 
@@ -225,28 +244,7 @@ def load_bright(tasks: Optional[list[str]] = None,
     return rows
 
 
-def _load_browsecomp_hf_UNUSED(limit: Optional[int] = None, offset: int = 0) -> list[dict]:
-    # openai/browsecomp is not public on HF; kept for future reference only
-    from datasets import load_dataset as hf_load
-    cache = _hf_cache()
-    try:
-        ds = hf_load("openai/browsecomp", split="test", cache_dir=cache)
-    except Exception as e:
-        raise RuntimeError(f"Could not load browsecomp: {e}") from e
-    rows = []
-    for i, row in enumerate(ds):
-        if i < offset:
-            continue
-        if limit is not None and len(rows) >= limit:
-            break
-        q = (row.get("problem") or row.get("question") or "").strip()
-        if not q:
-            continue
-        ans = row.get("answer") or ""
-        golds = [ans.strip()] if ans.strip() else []
-        rows.append({
-            "id": f"browsecomp_{i}",
-            "question": q,
-            "golden_answers": golds,
-        })
-    return rows
+# (removed dead _load_browsecomp_hf_UNUSED — BrowseComp-Plus is wired via
+#  scripts/build_browsecomp_plus.py which writes $DATASETS/browsecomp_plus/
+#  {queries.jsonl,corpus.jsonl,qrels.json,doclen.json}; loaded above by name
+#  "browsecomp_plus")
