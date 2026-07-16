@@ -65,7 +65,7 @@ from .metrics import score_example, aggregate
 _ALL_AGENTS = [
     "scaleseek", "bm25_rag", "direct",
     "dci", "agentir_rag", "search_r1", "grepseek",
-    "search_o1",
+    "search_o1", "ircot",
     # DR-DCI is run via its own official Pi harness (see RUNBOOK §7 +
     # scripts/convert_dr_dci_output.py), not this runner.
 ]
@@ -107,6 +107,33 @@ def run_eval(args: argparse.Namespace) -> None:
     print(f"  {len(examples)} examples loaded.")
     if not examples:
         sys.exit("No examples found. Check --dataset and --split.")
+
+    # --- Resume: skip examples already completed in a prior partial output.
+    # Rows with a transient failure (api_error/exception) are re-run, not kept.
+    output_path = Path(args.output) if args.output else None
+    prior_done: dict[str, dict] = {}
+    if args.resume and output_path and output_path.exists():
+        with open(output_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if r.get("id") is not None and \
+                        r.get("finish_reason") not in ("api_error", "exception"):
+                    prior_done[str(r["id"])] = r
+        before = len(examples)
+        examples = [ex for ex in examples if str(ex.get("id", "")) not in prior_done]
+        print(f"  [resume] {len(prior_done)} already done; "
+              f"{before - len(examples)} skipped, {len(examples)} left to run.")
+        if not examples:
+            print("  [resume] nothing left to run; rewriting merged output.")
+            _save_jsonl(list(prior_done.values()), output_path)
+            print(f"Results saved → {output_path}")
+            return
 
     # --- LLM client (main vLLM, port 8000) ---
     host = args.host or os.environ.get("LLM_HOST", "127.0.0.1")
@@ -183,13 +210,22 @@ def run_eval(args: argparse.Namespace) -> None:
                 )
             agentir_index_dir = Path(raw)
 
-    # --- BM25 retriever (lazy, only loaded when needed) ---
+    # --- retriever (lazy, only loaded when needed) ---
+    # --retrieval-backend e5 swaps in the dense E5 index (same .retrieve()
+    # contract; k1/b silently ignored) — used for the paper-faithful search_r1
+    # rerun (E5 is what its ckpt was trained with), search_o1 dense backend,
+    # and the RAG(E5) row.
     retriever = None
-    need_bm25 = args.agent in ("scaleseek", "bm25_rag", "search_r1", "search_o1")
+    need_bm25 = args.agent in ("scaleseek", "bm25_rag", "search_r1", "search_o1", "ircot")
     if need_bm25:
-        from .bm25_retriever import BM25Retriever
-        retriever = BM25Retriever()
-        print(f"BM25 index: {retriever._index_dir}")
+        if args.retrieval_backend == "e5":
+            from .e5_retriever import E5Retriever
+            retriever = E5Retriever()
+            print(f"E5 index: {retriever._index_dir}")
+        else:
+            from .bm25_retriever import BM25Retriever
+            retriever = BM25Retriever()
+            print(f"BM25 index: {retriever._index_dir}")
 
     # --- Tokenizer for exact tool-response token budgeting (scaleseek only) ---
     tokenizer = None
@@ -208,7 +244,6 @@ def run_eval(args: argparse.Namespace) -> None:
                   "budget (set --tokenizer or LLM_TOKENIZER for exact counts)")
 
     # --- Run ---
-    output_path = Path(args.output) if args.output else None
     results: list[dict] = []
     scores: list[dict] = []
 
@@ -266,10 +301,17 @@ def run_eval(args: argparse.Namespace) -> None:
             return run_grepseek(
                 ex, client=gs_client, model=gs_model, corpus_path=corpus_path,
                 max_turns=args.grepseek_max_turns, max_tokens=gs_gen,
+                tool_max_tokens=args.grepseek_tool_max_tokens,
                 temperature=args.grepseek_temperature, tokenizer=gs_tokenizer)
         elif args.agent == "search_o1":
             from .search_o1_agent import run_search_o1
             return run_search_o1(
+                ex, client=client, model=model, retriever=retriever,
+                max_turns=args.max_turns, max_tokens=args.max_tokens,
+                bm25_top_k=args.bm25_top_k, temperature=args.temperature)
+        elif args.agent == "ircot":
+            from .ircot_agent import run_ircot
+            return run_ircot(
                 ex, client=client, model=model, retriever=retriever,
                 max_turns=args.max_turns, max_tokens=args.max_tokens,
                 bm25_top_k=args.bm25_top_k, temperature=args.temperature)
@@ -304,7 +346,8 @@ def run_eval(args: argparse.Namespace) -> None:
             row, _ = _record_result(i, _dispatch(ex))
             _progress(i + 1, row)
             if output_path and (i + 1) % 50 == 0:
-                _save_jsonl([r for r in results if r is not None], output_path)
+                _save_jsonl(list(prior_done.values())
+                            + [r for r in results if r is not None], output_path)
     else:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         done = 0
@@ -325,10 +368,12 @@ def run_eval(args: argparse.Namespace) -> None:
                 if done % 20 == 0 or done == n:
                     _progress(done, row)
                 if output_path and done % 100 == 0:
-                    _save_jsonl([r for r in results if r is not None], output_path)
+                    _save_jsonl(list(prior_done.values())
+                                + [r for r in results if r is not None], output_path)
 
     # --- Save & report ---
     if output_path:
+        results = list(prior_done.values()) + results
         _save_jsonl(results, output_path)
         print(f"\nResults saved → {output_path}")
 
@@ -361,6 +406,10 @@ def main():
     # Agent
     parser.add_argument("--agent", default="scaleseek", choices=_ALL_AGENTS)
     parser.add_argument("--max-turns", type=int, default=8)
+    parser.add_argument("--retrieval-backend", choices=["bm25", "e5"], default="bm25",
+                        help="Retriever for scaleseek/bm25_rag/search_r1/search_o1: "
+                             "bm25 (Lucene, $BM25_INDEX_DIR) or e5 (dense FAISS, "
+                             "$E5_INDEX_DIR, intfloat/e5-base-v2)")
     parser.add_argument("--bm25-top-k", type=int, default=5,
                         help="Top-k for bm25_rag / agentir_rag / dr_dci pull / search_o1")
     parser.add_argument("--bm25-k1", type=float, default=1.5,
@@ -400,6 +449,9 @@ def main():
     parser.add_argument("--grepseek-max-tokens", type=int, default=0,
                         help="Per-turn generation cap for GrepSeek. 0 = UNCAPPED "
                              "(official; a fixed cap truncates <think> -> parse_errors).")
+    parser.add_argument("--grepseek-tool-max-tokens", type=int, default=2048,
+                        help="Tool stdout cap in tokens (official=2048, matches its "
+                             "SFT data). Ablation: 1024 / 4096.")
 
     # AgentIR
     parser.add_argument("--agentir-index-dir", default=None,
@@ -423,6 +475,10 @@ def main():
     # Output
     parser.add_argument("--output", default=None,
                         help="JSONL output file")
+    parser.add_argument("--resume", action="store_true",
+                        help="Skip examples already completed in --output "
+                             "(api_error/exception rows are re-run). Merges prior "
+                             "results into the final file.")
 
     args = parser.parse_args()
     run_eval(args)
