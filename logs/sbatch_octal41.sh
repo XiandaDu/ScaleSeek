@@ -12,10 +12,15 @@
 set -u
 PY=/u/mofengra/miniconda3/envs/scaleseek/bin/python
 cd /data/rech/mofengra/ScaleSeek
-# ⚠ octal40/41 没有 /usr/local/cuda。不设 CUDA_HOME 则 flashinfer JIT 找不到 nvcc，
-# vLLM EngineCore 起不来，整个 job 会跑出 100% api_error 的假结果（见 job 7159）。
+# ⚠ L40S(sm_89) 上 vLLM 起不来的两连坑（octal30/35 是 sm_86，JIT 缓存已编好所以碰不到）：
+#  1) octal40/41 没有 /usr/local/cuda，CUDA_HOME 不设 → flashinfer JIT 找不到 nvcc。
+#  2) pip 里 nvcc 13.2 vs CUDA 头文件 13.0（torch 是 +cu130）→ flashinfer cccl 硬检查
+#     在编 renorm.cu（采样算子）时报 headers incompatible。
+# → 关掉 flashinfer 采样器，退回 torch 原生采样（注意力本来就走 FLASH_ATTN）。
+# 失败是静默的：服务死了 run_eval 照跑，每行 api_error（见 job 7159 的 10 格假数据）。
 export CUDA_HOME=/u/mofengra/miniconda3/envs/scaleseek/lib/python3.11/site-packages/nvidia/cu13
 export PATH=$CUDA_HOME/bin:$PATH
+export VLLM_USE_FLASHINFER_SAMPLER=0
 export HF_HOME=/data/rech/mofengra/data/hf_cache HF_HUB_CACHE=/data/rech/mofengra/data/hf_cache/hub HF_HUB_OFFLINE=1
 export DATASETS=/data/rech/mofengra/datasets LLM_TOKENIZER=Qwen/Qwen3-4B
 export E5_INDEX_DIR=/data/rech/mofengra/data/e5_index E5_DEVICE=cuda
