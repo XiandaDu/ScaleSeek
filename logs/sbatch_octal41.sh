@@ -6,60 +6,58 @@
 #SBATCH --mem=256G
 #SBATCH --time=10-23:14:00
 #SBATCH --output=/data/rech/mofengra/ScaleSeek/logs/sbatch_octal41_%j.log
-# octal41 (4×L40S/48G, 515G RAM) 补矩阵：node30 只跑 prompt agent 的 BM25 版，
-# 这里跑 E5 版 + agentir。全 indexed 检索、非 grep，与 node30/node40 零重叠。全部 --resume。
+# octal41 (4×L40S/48G, 515G RAM)：接手 octal30 宕机后遗留的 4B rollout（缺 28 格）。
+# 按数据集分 4 卡并行；每卡一个 4B 服务，跑该数据集的 6 个 agent。
+# 与 octal35（grepseek全量 + search_r1）零重叠。全部 --resume。
 set -u
 PY=/u/mofengra/miniconda3/envs/scaleseek/bin/python
 cd /data/rech/mofengra/ScaleSeek
+# ⚠ octal40/41 没有 /usr/local/cuda。不设 CUDA_HOME 则 flashinfer JIT 找不到 nvcc，
+# vLLM EngineCore 起不来，整个 job 会跑出 100% api_error 的假结果（见 job 7159）。
+export CUDA_HOME=/u/mofengra/miniconda3/envs/scaleseek/lib/python3.11/site-packages/nvidia/cu13
+export PATH=$CUDA_HOME/bin:$PATH
 export HF_HOME=/data/rech/mofengra/data/hf_cache HF_HUB_CACHE=/data/rech/mofengra/data/hf_cache/hub HF_HUB_OFFLINE=1
 export DATASETS=/data/rech/mofengra/datasets LLM_TOKENIZER=Qwen/Qwen3-4B
 export E5_INDEX_DIR=/data/rech/mofengra/data/e5_index E5_DEVICE=cuda
 export BM25_INDEX_DIR=/data/rech/mofengra/data/bm25_index
-AIDX=/data/rech/mofengra/data/agentir_index_v2
 TDB=/data/rech/mofengra/data/corpus_title_index.db
-DS="nq triviaqa 2wikimultihopqa musique bamboogle"
 tf(){ [ "$1" = 2wikimultihopqa ] && echo "--title-index-db $TDB"; }
-serve4b(){ CUDA_VISIBLE_DEVICES=$1 setsid nohup $PY -m vllm.entrypoints.openai.api_server \
+serve(){ CUDA_VISIBLE_DEVICES=$1 setsid nohup $PY -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen3-4B --served-model-name agent --port $2 --enable-auto-tool-choice \
   --tool-call-parser hermes --reasoning-parser qwen3 --gpu-memory-utilization 0.80 \
   --max-model-len 32768 > logs/o41_$2.log 2>&1 & }
-waitp(){ for t in $(seq 1 180); do curl -sf localhost:$1/v1/models >/dev/null 2>&1 && return; sleep 10; done; }
-
-serve4b 0 8401; serve4b 1 8402; serve4b 2 8403
-for p in 8401 8402 8403; do waitp $p; done
-
-# GPU0: search_o1_e5   GPU1: ircot_e5   GPU2: scaleseek_e5  （全 --retrieval-backend e5）
-( for ds in $DS; do
-    CUDA_VISIBLE_DEVICES=0 $PY -m eval.run_eval --dataset $ds --agent search_o1 -n 1500 \
-      --concurrency 16 --port 8401 --retrieval-backend e5 --bm25-top-k 5 --max-tokens 2048 \
-      --resume --output results/${ds}_search_o1_e5.jsonl
-    $PY scripts/compute_metrics.py --results results/${ds}_search_o1_e5.jsonl $(tf $ds) --out results/${ds}_search_o1_e5.metrics.json
-  done ) &
-( for ds in $DS; do
-    CUDA_VISIBLE_DEVICES=1 $PY -m eval.run_eval --dataset $ds --agent ircot -n 1500 \
-      --concurrency 16 --port 8402 --retrieval-backend e5 --bm25-top-k 3 --max-turns 6 --max-tokens 2048 \
-      --resume --output results/${ds}_ircot_e5.jsonl
-    $PY scripts/compute_metrics.py --results results/${ds}_ircot_e5.jsonl $(tf $ds) --out results/${ds}_ircot_e5.metrics.json
-  done ) &
-( for ds in $DS; do
-    CUDA_VISIBLE_DEVICES=2 $PY -m eval.run_eval --dataset $ds --agent scaleseek -n 1500 \
-      --concurrency 16 --port 8403 --retrieval-backend e5 --max-tokens 2048 \
-      --resume --output results/${ds}_scaleseek_e5.jsonl
-    $PY scripts/compute_metrics.py --results results/${ds}_scaleseek_e5.jsonl $(tf $ds) --out results/${ds}_scaleseek_e5.metrics.json
-  done ) &
-
-# GPU3: agentir —— 先预计算(AgentIR-4B 编码器) 5 集，再起 4B reader 评测
-( for ds in $DS; do
-    [ -f results/${ds}_agentir_retrieval.jsonl ] || \
-    CUDA_VISIBLE_DEVICES=3 $PY scripts/precompute_agentir_retrieval.py --dataset $ds -n 1500 \
-      --index-root $AIDX --top-k 5 --device cuda --out results/${ds}_agentir_retrieval.jsonl
-  done
-  serve4b 3 8404; waitp 8404
-  for ds in $DS; do
-    CUDA_VISIBLE_DEVICES=3 $PY -m eval.run_eval --dataset $ds --agent agentir_rag -n 1500 \
-      --concurrency 16 --port 8404 --agentir-cache results/${ds}_agentir_retrieval.jsonl \
-      --max-tokens 2048 --resume --output results/${ds}_agentir.jsonl
-    $PY scripts/compute_metrics.py --results results/${ds}_agentir.jsonl $(tf $ds) --out results/${ds}_agentir.metrics.json
-  done ) &
+waitp(){ for t in $(seq 1 180); do curl -sf localhost:$1/v1/models >/dev/null 2>&1 && return 0; sleep 10; done
+  echo "[o41] FATAL: 端口 $1 服务未起来，放弃该 lane（不写 api_error 垃圾）"; return 1; }
+# 服务死了 run_eval 也会“跑完”，只是每行 api_error。出 metrics 前先验收。
+sane(){ local out=$1 t e
+  t=$(wc -l < results/$out.jsonl 2>/dev/null | tr -d ' '); [ "${t:-0}" -gt 0 ] || { echo "[o41] $out 空文件"; return 1; }
+  e=$(grep -c '"finish_reason": "api_error"' results/$out.jsonl 2>/dev/null | head -1 | tr -d ' '); e=${e:-0}
+  [ $(( e * 100 / t )) -lt 50 ] || { echo "[o41] $out api_error $e/$t 过半 —— 判为无效，不出 metrics"; return 1; }; }
+# $1 gpu $2 port $3 ds $4 agent $5 out $6 backend ; rest extra
+run(){ local g=$1 p=$2 ds=$3 ag=$4 out=$5 be=$6; shift 6
+  [ -f results/$out.metrics.json ] && { echo "[o41] $out 跳过"; return; }
+  echo "[o41] $out start @ $(date +%m%d-%H:%M)"
+  CUDA_VISIBLE_DEVICES=$g $PY -m eval.run_eval --dataset $ds --agent $ag -n 1500 \
+    --concurrency 16 --port $p --retrieval-backend $be --max-tokens 2048 \
+    --resume --output results/$out.jsonl "$@" \
+    && sane $out \
+    && $PY scripts/compute_metrics.py --results results/$out.jsonl $(tf $ds) --out results/$out.metrics.json \
+    && echo "[o41] $out done @ $(date +%m%d-%H:%M)" || echo "[o41] $out FAILED"; }
+# 一卡跑一(组)数据集的 6 个 agent
+suite(){ local g=$1 p=$2; shift 2
+  waitp $p || { echo "[o41] lane $p 无服务，整条 lane 放弃"; return 1; }
+  for ds in "$@"; do
+    run $g $p $ds direct    ${ds}_direct     bm25
+    run $g $p $ds bm25_rag  ${ds}_bm25_rag   bm25 --bm25-k1 1.2 --bm25-b 0.75
+    run $g $p $ds bm25_rag  ${ds}_rag_e5     e5   --bm25-top-k 5
+    run $g $p $ds scaleseek ${ds}_scaleseek  bm25
+    run $g $p $ds ircot     ${ds}_ircot_bm25 bm25 --bm25-top-k 3 --max-turns 6
+    run $g $p $ds search_o1 ${ds}_search_o1  bm25 --bm25-top-k 5
+  done; }
+serve 0 8041; serve 1 8042; serve 2 8043; serve 3 8044
+suite 0 8041 nq &
+suite 1 8042 triviaqa &
+suite 2 8043 2wikimultihopqa &
+suite 3 8044 musique bamboogle &
 wait
 echo "O41_ALL_DONE @ $(date +%m%d-%H:%M)"
