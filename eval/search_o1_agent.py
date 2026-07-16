@@ -93,6 +93,14 @@ def _reasonchain_instruction(prev_reasoning: str, search_query: str, document: s
 
 _QUERY_RE = re.compile(re.escape(BEGIN_SEARCH_QUERY) + r"(.*?)" + re.escape(END_SEARCH_QUERY), re.DOTALL)
 
+# Lenient marker match for when the model malforms the <|...|> delimiters
+# (e.g. "|<end_search_query>|", "<| end_search_query |>"): tolerate any mix of
+# <, |, > around the begin/end keywords so a real query still triggers retrieval
+# instead of degrading into a hallucinated result block.
+_LENIENT_QUERY_RE = re.compile(
+    r"[<|]{1,2}\s*begin_search_query\s*[|>]{1,2}(.*?)[<|]{1,2}\s*end_search_query\s*[|>]{0,2}",
+    re.DOTALL | re.IGNORECASE)
+
 
 def _clean_latex(s: str) -> str:
     # unwrap \text{...}/\mathrm{...} etc, drop escaped spaces and leftover commands
@@ -214,32 +222,44 @@ def run_search_o1(
             break
 
         record.n_turns += 1
-        generated_total += text
-        record.turns.append({"role": "assistant", "content": text, "stop": str(stop_or_finish)})
 
-        # Did we stop on the search-query stop string?
+        # Did vLLM stop on the exact query stop string?
         stopped_on_query = (stop_or_finish == END_SEARCH_QUERY)
-        if not stopped_on_query:
-            # Heuristic fallback: an unclosed <|begin_search_query|> at the tail
-            tail = text[-400:]
-            stopped_on_query = (BEGIN_SEARCH_QUERY in tail
-                                and END_SEARCH_QUERY not in tail.split(BEGIN_SEARCH_QUERY)[-1])
 
-        if not stopped_on_query:
-            # Natural EOS or length: extract the final boxed answer and stop.
+        # Extract the search query. Strict markers first; if vLLM did NOT stop on
+        # the token, fall back to a LENIENT match — the 4B frequently malforms the
+        # <|...|> delimiters (e.g. "|<end_search_query>|"), which used to slip past
+        # the stop string and let the model hallucinate its own result block
+        # (~24% of the no-retrieval cases). We rebuild clean markers and drop the
+        # hallucinated tail so the real retriever runs.
+        query = None
+        cut_text = text
+        if stopped_on_query:
+            qm = _QUERY_RE.findall(text + END_SEARCH_QUERY)
+            if qm:
+                query = qm[-1].strip()
+                if not text.rstrip().endswith(END_SEARCH_QUERY):
+                    cut_text = text.rstrip() + END_SEARCH_QUERY
+        else:
+            last = None
+            for last in _LENIENT_QUERY_RE.finditer(text):
+                pass
+            if last and last.group(1).strip():
+                query = last.group(1).strip()
+                cut_text = (text[:last.start()].rstrip() + "\n"
+                            + BEGIN_SEARCH_QUERY + query + END_SEARCH_QUERY)
+
+        record.turns.append({"role": "assistant", "content": cut_text, "stop": str(stop_or_finish)})
+
+        if not query:
+            # No search intent at all: natural EOS -> take the boxed answer.
+            generated_total += cut_text
             record.prediction = _extract_answer(generated_total)
             record.finish_reason = "answer" if record.prediction else "no_answer"
             break
 
-        # --- stopped at <|end_search_query|>: extract the query ---
-        qm = _QUERY_RE.findall(text + END_SEARCH_QUERY)
-        if not qm:
-            record.prediction = _extract_answer(generated_total)
-            record.finish_reason = "answer" if record.prediction else "no_answer"
-            break
-        query = qm[-1].strip()
-        prompt_text += text + END_SEARCH_QUERY + "\n\n"
-        generated_total += END_SEARCH_QUERY + "\n\n"
+        prompt_text += cut_text + "\n\n"
+        generated_total += cut_text + "\n\n"
 
         if n_searches >= max_search_limit:
             # Official behavior when the search budget is exhausted.
