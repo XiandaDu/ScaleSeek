@@ -3,6 +3,10 @@
 #SBATCH --partition=rali
 #SBATCH --nodelist=octal[40]
 #SBATCH --gres=gpu:ls40:4
+# ⚠ 不写 --cpus-per-task 的话 slurm 只给 1 核(=2 线程)，节点上 62 核全闲着。
+# 后果：faiss 对 21M 向量穷举 + grepseek grep 14GB 语料 + 4 个 vLLM 全挤 2 线程，
+# E5 lane 掉到 80 题/小时、GPU 利用率 0%（2026-07-17 实测 job 7172）。
+#SBATCH --cpus-per-task=48
 #SBATCH --mem=256G
 #SBATCH --time=10-23:14:00
 #SBATCH --output=/data/rech/mofengra/ScaleSeek/logs/sbatch_octal40_%j.log
@@ -24,6 +28,8 @@ cd /data/rech/mofengra/ScaleSeek
 export CUDA_HOME=/u/mofengra/miniconda3/envs/scaleseek/lib/python3.11/site-packages/nvidia/cu13
 export PATH=$CUDA_HOME/bin:$PATH
 export VLLM_USE_FLASHINFER_SAMPLER=0
+# 3 条 lane 各自跑 faiss；不限线程的话每条都想吃满 48 核，互相抢反而更慢。
+export OMP_NUM_THREADS=12
 export HF_HOME=/data/rech/mofengra/data/hf_cache HF_HUB_CACHE=/data/rech/mofengra/data/hf_cache/hub HF_HUB_OFFLINE=1
 export DATASETS=/data/rech/mofengra/datasets LLM_TOKENIZER=Qwen/Qwen3-4B
 export E5_INDEX_DIR=/data/rech/mofengra/data/e5_index E5_DEVICE=cuda

@@ -3,6 +3,8 @@
 #SBATCH --partition=rali
 #SBATCH --nodelist=octal[41]
 #SBATCH --gres=gpu:ls40:4
+# ⚠ 不写 --cpus-per-task 只给 1 核(=2 线程)，节点 62 核全闲着 —— E5/faiss lane 会被饿死。
+#SBATCH --cpus-per-task=48
 #SBATCH --mem=256G
 #SBATCH --time=10-23:14:00
 #SBATCH --output=/data/rech/mofengra/ScaleSeek/logs/sbatch_octal41_%j.log
@@ -21,6 +23,7 @@ cd /data/rech/mofengra/ScaleSeek
 export CUDA_HOME=/u/mofengra/miniconda3/envs/scaleseek/lib/python3.11/site-packages/nvidia/cu13
 export PATH=$CUDA_HOME/bin:$PATH
 export VLLM_USE_FLASHINFER_SAMPLER=0
+export OMP_NUM_THREADS=12
 export HF_HOME=/data/rech/mofengra/data/hf_cache HF_HUB_CACHE=/data/rech/mofengra/data/hf_cache/hub HF_HUB_OFFLINE=1
 export DATASETS=/data/rech/mofengra/datasets LLM_TOKENIZER=Qwen/Qwen3-4B
 export E5_INDEX_DIR=/data/rech/mofengra/data/e5_index E5_DEVICE=cuda
@@ -60,9 +63,12 @@ suite(){ local g=$1 p=$2; shift 2
     run $g $p $ds search_o1 ${ds}_search_o1  bm25 --bm25-top-k 5
   done; }
 serve 0 8041; serve 1 8042; serve 2 8043; serve 3 8044
-suite 0 8041 nq &
-suite 1 8042 triviaqa &
-suite 2 8043 2wikimultihopqa &
-suite 3 8044 musique bamboogle &
-wait
+# ⚠ 只 wait 这四条 lane 的 PID。裸 wait 会把 serve 起的 vLLM 也等进去 —— 它们永不退出，
+# job 跑完 30 格后照样挂着白占 4 张卡（2026-07-16 job 7173 空转 9.5 小时）。
+suite 0 8041 nq &                    L0=$!
+suite 1 8042 triviaqa &              L1=$!
+suite 2 8043 2wikimultihopqa &       L2=$!
+suite 3 8044 musique bamboogle &     L3=$!
+wait $L0 $L1 $L2 $L3
+for p in 8041 8042 8043 8044; do pkill -f "[v]llm.*--port $p"; done
 echo "O41_ALL_DONE @ $(date +%m%d-%H:%M)"
