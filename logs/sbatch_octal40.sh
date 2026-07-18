@@ -108,8 +108,19 @@ serve4b(){ CUDA_VISIBLE_DEVICES=$1 setsid nohup $PY -m vllm.entrypoints.openai.a
   for ds in $DS; do e5run $ds search_o1 ${ds}_search_o1_e5 --bm25-top-k 5; done
   for ds in $DS; do e5run $ds ircot ${ds}_ircot_e5 --bm25-top-k 3 --max-turns 6; done ) &
 
-# ---- GPU3: scaleseek_e5 + agentir（先预计算再起 reader，避免显存打架）----
-( serve4b 3 8064; waitp 8064 || exit 1; echo "[o40b] 4B@8064 up @ $(date +%m%d-%H:%M)"
+# ---- GPU3: scaleseek_e5 + agentir ----
+# ⚠ agentir 的检索预计算必须跑在 serve4b 之前。4B 服务吃掉 0.80×48G=36.8G，检索模型那
+#   7.5G 再也挤不进去 —— 2026-07-17 job 7176 就是这么 5 个 precompute 全部 CUDA OOM
+#   秒挂，接着 5 个 agentir 找不到 *_agentir_retrieval.jsonl 全 FAILED（沉默了一整天）。
+#   precompute 算完 query 向量就 del model + empty_cache，faiss 检索走 CPU，所以它先跑
+#   完再起 reader 完全不冲突。
+( for ds in $DS; do
+    [ -f results/${ds}_agentir_retrieval.jsonl ] || \
+    CUDA_VISIBLE_DEVICES=3 $PY scripts/precompute_agentir_retrieval.py --dataset $ds -n 1500 \
+      --index-root $AIDX --top-k 5 --device cuda --out results/${ds}_agentir_retrieval.jsonl \
+      || echo "[o40b] precompute $ds FAILED"
+  done
+  serve4b 3 8064; waitp 8064 || exit 1; echo "[o40b] 4B@8064 up @ $(date +%m%d-%H:%M)"
   for ds in $DS; do
     o=${ds}_scaleseek_e5; [ -f results/$o.metrics.json ] && continue
     echo "[o40b] $o start @ $(date +%m%d-%H:%M)"
@@ -121,9 +132,9 @@ serve4b(){ CUDA_VISIBLE_DEVICES=$1 setsid nohup $PY -m vllm.entrypoints.openai.a
       && echo "[o40b] $o done @ $(date +%m%d-%H:%M)" || echo "[o40b] $o FAILED"
   done
   for ds in $DS; do
-    [ -f results/${ds}_agentir_retrieval.jsonl ] || \
-    CUDA_VISIBLE_DEVICES=3 $PY scripts/precompute_agentir_retrieval.py --dataset $ds -n 1500 \
-      --index-root $AIDX --top-k 5 --device cuda --out results/${ds}_agentir_retrieval.jsonl
+    # 检索缓存在上面 serve4b 之前就算好了；没算出来的（precompute FAILED）直接跳过，
+    # 否则 run_eval 会 FileNotFoundError。
+    [ -f results/${ds}_agentir_retrieval.jsonl ] || { echo "[o40b] ${ds}_agentir 无缓存，跳过"; continue; }
     o=${ds}_agentir; [ -f results/$o.metrics.json ] && continue
     echo "[o40b] $o start @ $(date +%m%d-%H:%M)"
     CUDA_VISIBLE_DEVICES=3 $PY -m eval.run_eval --dataset $ds --agent agentir_rag -n 1500 \
