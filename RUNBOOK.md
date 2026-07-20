@@ -39,9 +39,9 @@ surfaced-doc extractors on hand-computed fixtures.
 ## 1. Re-score existing runs offline (no model, ~seconds each)
 Confirms the metric path end-to-end on runs you already have:
 ```bash
-for f in results/popqa_grepseek.jsonl results/popqa_dci.jsonl \
-         results/popqa_scaleseek_4b.jsonl results/popqa_bm25_rag_4b.jsonl \
-         results/popqa_direct_4b.jsonl results/popqa_search_r1.jsonl; do
+for f in results/popqa_full_grepseek.jsonl results/popqa_full_dci.jsonl \
+         results/popqa_full_scaleseek.jsonl results/popqa_full_bm25.jsonl \
+         results/popqa_full_direct.jsonl results/popqa_full_search_r1.jsonl; do
   python scripts/compute_metrics.py --results "$f" --out "${f%.jsonl}.metrics.json"
 done
 ```
@@ -62,9 +62,9 @@ previously api_error rows are simply re-run as part of the full pass):
 python -m eval.run_eval --dataset popqa --agent grepseek \
     --grepseek-port 8002 --grepseek-tokenizer $GREPSEEK_TOKENIZER \
     --corpus-path $CORPUS_FILE \
-    --output results/popqa_grepseek.jsonl
-python scripts/compute_metrics.py --results results/popqa_grepseek.jsonl \
-    --out results/popqa_grepseek.metrics.json
+    --output results/popqa_full_grepseek.jsonl
+python scripts/compute_metrics.py --results results/popqa_full_grepseek.jsonl \
+    --out results/popqa_full_grepseek.metrics.json
 ```
 Check a trajectory: tool `stdout` should end with `[... truncated at 2048 tokens]`
 (not `... chars`), confirming the token cap.
@@ -136,7 +136,7 @@ for DS in popqa hotpotqa 2wikimultihopqa musique bamboogle; do
       --title-index-db $TITLE_INDEX_DB --out results/${DS}_agentir.metrics.json
 done
 ```
-(The old `results/popqa_agentir_rag_4b.jsonl` was the wrong BM25→rerank pipeline —
+(The old `popqa_agentir_rag_4b.jsonl` — wrong BM25→rerank pipeline — was deleted 2026-07-20 —
 these runs replace it.)
 
 ## 7. DR-DCI — official Pi harness, only the model endpoint swapped

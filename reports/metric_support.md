@@ -46,7 +46,10 @@ Granularity note: wiki-18 gold labels are **title-level** (a gold title counts a
 recalled if the agent surfaced ≥1 corpus passage of that article). BrowseComp-Plus
 qrels are **doc-id level**.
 
-**Pipeline validation (smoke50, 2026-07-06)** — the matrix above is empirically
+**Pipeline validation (smoke50, 2026-07-06)** — *(raw smoke50 artifacts were pruned
+2026-07-20; superseded by the full n=1500 / n=830 runs, which exercise the same code
+paths at scale. This paragraph is kept as the dated methodology record.)*
+The matrix above is empirically
 confirmed: hotpotqa (GoldR@W .470 / cov_any .780) and 2wiki (.285 / .540) produce
 title-level retrieval metrics with 50/50 qrels defined; nq/triviaqa/musique/bamboogle
 correctly degrade to EM/F1-only with an explanatory note; **BrowseComp-Plus** built
