@@ -194,11 +194,10 @@ def test_training_and_eval_share_canonical_scaleseek_prompt():
     assert _build_system_prompt() == PROMPT
 
 
-def test_verbatim_grepseek_sft_prompts_live_under_eval():
-    from eval.grepseek_sft_prompts import FINAL_ANSWER_USER, PLANNER_USER
+def test_sft_prompt_suite_is_self_contained():
     from prompts import sft_prompts
-    assert sft_prompts.PLANNER_USER is PLANNER_USER
-    assert sft_prompts.FINAL_ANSWER_USER is FINAL_ANSWER_USER
+    assert sft_prompts.PLANNER_USER.startswith("Question: {question}")
+    assert "<answer>" in sft_prompts.FINAL_ANSWER_USER
 
 
 def test_search_r1_fake_loop_uses_checkpoint_template_and_top3():

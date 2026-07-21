@@ -26,7 +26,7 @@
 - AgentIR 固定使用 [`Tevatron/AgentIR-4B`](https://huggingface.co/Tevatron/AgentIR-4B) 作为 reasoning-aware retriever；其回答 generator 仍使用 Qwen3.5-9B。
 - BrowseComp-Plus 的 judge 统一使用 Qwen3.5-9B。agent 和 judge 必须使用独立、明确记录的 prompt；不得把 agent 自评当作正式判分。
 - 所有 Hugging Face 模型必须在配置 manifest 中固定 `repo_id + revision/commit hash + dtype`，不能只记录可漂移的 `main`。
-- 本项目自写或实质修改的 prompt 必须作为 `prompts/*.py` 中的 Python 常量保存；逐字照抄的第三方 prompt 放在对应 `eval/*.py` 中并自动与固定上游 commit 做 byte diff。训练、评测和 provenance 必须引用同一个常量并对实际传给模型的字符串计算 hash。只由官方外部 harness 消费的 prompt 保留在固定上游 checkout，不在本项目重复复制。
+- 本项目自写或实质修改的 prompt 必须作为 `prompts/*.py` 中的 Python 常量保存；逐字照抄的第三方评测 prompt 放在对应 `eval/*.py` 中并自动与固定上游 commit 做 byte diff。SFT prompt 视为一个整体，全部保留在 `prompts/sft_prompts.py`，其中未修改片段仍需做上游 byte diff。训练、评测和 provenance 必须引用同一个常量并对实际传给模型的字符串计算 hash。只由官方外部 harness 消费的 prompt 保留在固定上游 checkout，不在本项目重复复制。
 
 ### 统一检索器矩阵
 
@@ -144,7 +144,7 @@ BM25 的 `1.2/0.75` 是本项目统一采用的常见经典设置，不再声称
 
 - **generator**：Qwen3.5-9B。
 - **retriever/BM25**：无；使用 bash/read/grep 在完整、物化的 corpus 上工作。
-- **prompt/harness 来源**：[`DCI-Agent/DCI-Agent-Lite`](https://github.com/DCI-Agent/DCI-Agent-Lite) 固定 commit；system prompt 使用官方 `prompts/system_prompt.txt`，任务 prompt 使用 `scripts/bcplus_eval/run_bcplus_eval.py` 的官方构造函数。
+- **prompt/harness 来源**：[`DCI-Agent/DCI-Agent-Lite`](https://github.com/DCI-Agent/DCI-Agent-Lite) 固定 commit；官方公开了 `prompts/system_prompt.txt` 和 `scripts/bcplus_eval/run_bcplus_eval.py` 的 `build_benchmark_prompt`/`build_ir_prompt`。Pi 实际 system prompt 还会由 `src/dci/benchmark/pi_system_prompt.py` 按 cwd 和工具动态生成，不能把静态 txt 误记为唯一完整 prompt。
 - **关键参数**：官方 Pi/DCI-Agent-Lite harness；最多 300 turns；L3 context management；单命令 timeout 30 秒；工具输出和 compaction 使用固定官方配置，不沿用当前自写 8 轮/8000 字符实现。
 - [x] 用官方 Lite 完整替换 `eval/dci_agent.py`、`prompts/dci_prompt.txt` 和自写 shell 行为；若需要 adapter，只允许做数据格式和结果格式转换，不得重写 agent loop。
 
@@ -154,7 +154,7 @@ BM25 的 `1.2/0.75` 是本项目统一采用的常见经典设置，不再声称
 - **BrowseComp-Plus judge**：独立 Qwen3.5-9B。
 - **retriever**：不做三检索器替换。Wiki-18 数据集使用官方 E5 pull 路线；BrowseComp-Plus 使用官方 Qwen3-Embedding-8B index。具体模型 revision、索引和 query instruction 固定到 manifest。
 - **BM25**：不使用。
-- **prompt/harness 来源**：[`EigenTom/DR-DCI`](https://github.com/EigenTom/DR-DCI) 固定 commit 的官方 Pi harness 和任务脚本；Wiki 配置参考官方 Wiki-18 E5 脚本，BCP 配置参考官方 Qwen3-Embedding-8B/root-flat 脚本。
+- **prompt/harness 来源**：[`EigenTom/DR-DCI`](https://github.com/EigenTom/DR-DCI) 固定 commit 的官方 Pi harness 和任务脚本；官方公开了 rank-aware pull、two-stage pull/DCI、benchmark、IR 和 original-DCI prompt builder，实际 prompt 随 root-flat、preview、pull 等运行参数动态拼装。Wiki 配置参考官方 Wiki-18 E5 脚本，BCP 配置参考官方 Qwen3-Embedding-8B/root-flat 脚本。
 - **关键参数**：300 turns、L3、high reasoning 配置、`pull(query, topK)` 动态 300–600、去重后 root-flat 物化、rank-aware top-20 导航预览、正文由 bash/read 查看、单命令 timeout 30 秒。
 - **judge 参数**：使用官方 BrowseComp-Plus judge prompt/答案格式，`temperature=0`、`top_p=1`；judge 不读取 gold 以外的额外轨迹信息，也不复用 agent 对话上下文。
 - **实现边界**：不得为了统一矩阵替换 `pull` 的召回/排序后端；topK 动态策略、去重、物化、预览、Pi loop、prompt 和 context management 必须保持官方 task-specific 设置。
@@ -163,6 +163,7 @@ BM25 的 `1.2/0.75` 是本项目统一采用的常见经典设置，不再声称
 ### 2.8 RISE
 
 - **论文/代码来源**：[`Towards Retrieving Interaction Spaces for Agentic Search`](https://arxiv.org/abs/2606.06880) 与官方 [`texttron/RISE`](https://github.com/texttron/RISE) 固定 commit。优先直接使用官方 `scripts/run_rise.py`、`src/rise/` 工具和 prompt，只增加 Qwen3.5-9B provider/data adapter。
+- **公开 prompt**：`src/rise/rise_agent.py` 公开全部 `RISE_SYSTEM_PROMPT*` 变体与 `RISE_USER_PROMPT`，正式结构化主行使用 `RISE_SYSTEM_PROMPT_STRUCTURED`；`scripts/structured/section_one_doc.py` 公开离线 `SECTION_PROMPT`；`src/rise/bcp_retrieval_agent.py` 公开 Appendix-E、DCI-compatible 与 Appendix-F judge prompt。
 - **generator**：Qwen3.5-9B。
 - **retriever**：只使用 BM25，不参与三检索器矩阵。
 - **BM25**：本项目统一使用 `k1=1.2`、`b=0.75`。必须同时在差异表中记录论文/官方代码原值是 `k1=1.5`、`b=0.75`；这是用户指定的统一参数替换，不能声称参数逐字复现。

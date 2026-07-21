@@ -19,8 +19,6 @@ Key ScaleSeek adaptation from GrepSeek:
       the correct passage landed in the workspace
 """
 
-from eval.grepseek_sft_prompts import FINAL_ANSWER_USER, PLANNER_USER
-
 # ============================================================
 # Corpus description used wherever a prompt needs to describe the tools.
 # ============================================================
@@ -224,7 +222,7 @@ Output exactly one JSON object:
 # Phase C: Planner (forward generation)
 # PLANNER_SYSTEM is the SFT planner template. It deliberately interpolates the
 # tutor corpus description and is distinct from the runtime prompt constant.
-# PLANNER_USER is imported verbatim from eval.grepseek_sft_prompts.
+# PLANNER_USER is retained here because the SFT prompt suite is one unit.
 # ============================================================
 
 PLANNER_SYSTEM = """You are a research agent that answers questions by searching a large Wikipedia corpus through two-stage adaptive retrieval.
@@ -252,6 +250,13 @@ concise answer — typically a noun phrase, name, date, number, or yes/no
 </answer>
 
 Always reason first, then exactly one action block. Never skip the reasoning."""
+
+PLANNER_USER = """Question: {question}
+
+Trace so far:
+{history}
+
+Produce the next step."""
 
 # ============================================================
 # Phase C: Tutor edits the planner's draft reasoning (tutor)
@@ -332,9 +337,19 @@ the final reasoning paragraph (2–4 sentences)
 
 # ============================================================
 # Phase D: Final answer (planner)
-# FINAL_ANSWER_USER is imported verbatim from eval.grepseek_sft_prompts.
+# FINAL_ANSWER_USER is retained here because the SFT prompt suite is one unit.
 # ============================================================
 
+FINAL_ANSWER_USER = """Question: {question}
+
+Trace so far:
+{history}
+
+You now have enough information. Produce a brief reasoning paragraph synthesizing the answer from the trace, then output exactly:
+
+<answer>
+the final answer (concise — just a name, date, or short noun phrase)
+</answer>"""
 
 # ============================================================
 # Phase E: Quality judge (post-hoc filter on assembled trajectories)

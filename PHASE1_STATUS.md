@@ -18,7 +18,8 @@ Status: **Phase 1 implementation complete; final execution tests are assigned to
 - Full-eval sampling guards, retries, strict resume provenance, exact ID-set
   validation, method fingerprints and normalized external-result adapter.
 - Project-authored/modified prompts live under `prompts/`; byte-identical
-  third-party prompts live beside the corresponding evaluator under `eval/`.
+  evaluation prompts live beside the corresponding evaluator under `eval/`.
+  The complete SFT suite stays together under `prompts/sft_prompts.py`.
   Training, evaluation, snapshots and provenance consume the same constants.
 - Deterministic Wiki passage-to-article reconstruction for the RISE structured
   corpus pipeline.

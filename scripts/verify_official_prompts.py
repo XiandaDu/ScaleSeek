@@ -74,7 +74,7 @@ def main() -> None:
         o1.get_webpage_to_reasonchain_instruction("R", "Q", "D")
 
     from eval.browsecomp_plus_judge import BCP_F_JUDGE_PROMPT
-    from eval.grepseek_sft_prompts import FINAL_ANSWER_USER, PLANNER_USER
+    from prompts.sft_prompts import FINAL_ANSWER_USER, PLANNER_USER
     grepseek_sft = args.repo_root / "grepseek/sft/data_generation/utils/prompts.py"
     assert PLANNER_USER == _literal_assignment(grepseek_sft, "PLANNER_USER")
     assert FINAL_ANSWER_USER == _literal_assignment(grepseek_sft, "FINAL_ANSWER_USER")
