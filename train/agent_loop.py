@@ -91,7 +91,7 @@ if _VERL_AVAILABLE:
         def __init__(self, *args, **kwargs):
             # Pass no tools to super — we handle dispatch ourselves.
             super().__init__(*args, **kwargs)
-            # Tool spec is embedded in the system prompt (prompts/scaleseek.txt).
+            # Tool spec is embedded in prompts.scaleseek_prompt.PROMPT.
             # We do NOT register verl tools; dispatch is via _handle_processing_tools_state.
             # The retriever is loaded lazily on first rollout via get_retriever().
             from .environment import get_retriever as _warm_retriever

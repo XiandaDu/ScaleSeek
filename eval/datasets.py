@@ -12,19 +12,19 @@ Sources:
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 from typing import Optional
 
 
 FLASHRAG_REPO = "RUC-NLPIR/FlashRAG_datasets"
+FLASHRAG_REVISION = "bcafb8dd07d453be3cbeeeb3f78be1841bddf92c"
 
 FLASHRAG_DATASETS = {
     "nq":              ("nq",              "test"),
     "triviaqa":        ("triviaqa",        "test"),
-    "popqa":           ("popqa",           "test"),   # local override -> popqa_longtail (pop<=99 hard tail)
-    "popqa_full":      ("popqa",           "test"),   # local fixed random 1500 sample (标准集)
-    "popqa_full14267": ("popqa_full14267", "test"),   # TRUE full popqa/test (14267) for paper对标
+    "popqa":           ("popqa",           "test"),
     "hotpotqa":        ("hotpotqa",        "dev"),
     "2wikimultihopqa": ("2wikimultihopqa", "dev"),
     "musique":         ("musique",         "dev"),
@@ -32,6 +32,13 @@ FLASHRAG_DATASETS = {
 }
 
 ALL_DATASETS = list(FLASHRAG_DATASETS) + ["bright", "browsecomp", "browsecomp_plus"]
+
+# Counts are gates, not sampling targets. Add a value only after pinning and
+# verifying the complete upstream evaluation split.
+EXPECTED_FULL_COUNTS = {"popqa": 14_267}
+EXPECTED_NORMALIZED_SHA256 = {
+    "popqa": "56269abde328a259e4e38a186941cfd755ab0d72d7fbd7a1e8801a8ea781bd42",
+}
 
 
 def _datasets_dir() -> Path:
@@ -77,7 +84,6 @@ _LOCAL_NAME_OVERRIDES: dict[tuple[str, str], str] = {
     ("hotpotqa",        "dev"):   "hotpot_dev",
     ("hotpotqa",        "train"): "hotpot_train",
     ("2wikimultihopqa", "dev"):   "2wiki_dev",
-    ("popqa",           "test"):  "popqa_longtail",
     ("triviaqa",        "test"):  "trivialqa_test",
 }
 
@@ -151,6 +157,7 @@ def load_flashrag(name: str, split: Optional[str] = None,
 
     ds = hf_load(
         FLASHRAG_REPO,
+        revision=FLASHRAG_REVISION,
         data_files={split: f"{subfolder}/{split}.jsonl"},
         split=split,
         cache_dir=cache,
@@ -215,6 +222,35 @@ def load_dataset(
     if rows:
         return rows
     return load_flashrag(name, split=split, limit=limit, offset=offset)
+
+
+def validate_complete_dataset(name: str, rows: list[dict]) -> dict:
+    """Reject duplicate IDs and known incomplete evaluation splits."""
+    ids = [str(row.get("id", "")) for row in rows]
+    if any(not rid for rid in ids):
+        raise ValueError(f"{name}: empty normalized ID")
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"{name}: {len(ids) - len(set(ids))} duplicate normalized IDs")
+    expected = EXPECTED_FULL_COUNTS.get(name)
+    if expected is not None and len(rows) != expected:
+        raise ValueError(f"{name}: full split requires {expected:,} rows, got {len(rows):,}")
+    payload = "\n".join(
+        json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        for row in rows
+    ).encode()
+    manifest = {
+        "dataset": name,
+        "count": len(rows),
+        "unique_ids": len(set(ids)),
+        "normalized_sha256": hashlib.sha256(payload).hexdigest(),
+        "source": FLASHRAG_REPO if name in FLASHRAG_DATASETS else "local",
+        "source_revision": FLASHRAG_REVISION if name in FLASHRAG_DATASETS else None,
+        "split": FLASHRAG_DATASETS.get(name, (None, "test"))[1],
+    }
+    expected_hash = EXPECTED_NORMALIZED_SHA256.get(name)
+    if expected_hash is not None and manifest["normalized_sha256"] != expected_hash:
+        raise ValueError(f"{name}: normalized SHA256 differs from the pinned full split")
+    return manifest
 
 
 def load_bright(tasks: Optional[list[str]] = None,

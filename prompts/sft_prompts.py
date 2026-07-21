@@ -33,7 +33,7 @@ The corpus has 21 million Wikipedia passages and cannot be accessed directly. Th
 
 # ============================================================
 # Phase A: Decomposition (tutor)
-# Identical to GrepSeek — no tool-specific content.
+# Adapted from GrepSeek to use ScaleSeek's decomposition output contract.
 # ============================================================
 
 DECOMPOSE_PROMPT = """You are decomposing a multi-hop question into the ordered chain of single-hop sub-questions an agent would need to solve in order to reach the answer.
@@ -54,7 +54,7 @@ Output ONLY a JSON array, no prose:
 
 # ============================================================
 # Phase B: Bridge-entity extraction (tutor)
-# Identical to GrepSeek — no tool-specific content.
+# Adapted from GrepSeek to use ScaleSeek's bridge/alias output contract.
 # ============================================================
 
 BRIDGE_EXTRACT_PROMPT = """You are reading a Wikipedia passage that was retrieved to help answer a multi-hop question. Your job is to identify the entity the passage uses as the bridge — the answer to the previous sub-question.
@@ -220,8 +220,9 @@ Output exactly one JSON object:
 
 # ============================================================
 # Phase C: Planner (forward generation)
-# PLANNER_SYSTEM is the ScaleSeek system prompt (same as prompts/system_prompt.txt).
-# PLANNER_USER is identical to GrepSeek.
+# PLANNER_SYSTEM is the SFT planner template. It deliberately interpolates the
+# tutor corpus description and is distinct from the runtime prompt constant.
+# PLANNER_USER is retained here because the SFT prompt suite is one unit.
 # ============================================================
 
 PLANNER_SYSTEM = """You are a research agent that answers questions by searching a large Wikipedia corpus through two-stage adaptive retrieval.
@@ -256,7 +257,6 @@ Trace so far:
 {history}
 
 Produce the next step."""
-
 
 # ============================================================
 # Phase C: Tutor edits the planner's draft reasoning (tutor)
@@ -337,7 +337,7 @@ the final reasoning paragraph (2–4 sentences)
 
 # ============================================================
 # Phase D: Final answer (planner)
-# Identical to GrepSeek.
+# FINAL_ANSWER_USER is retained here because the SFT prompt suite is one unit.
 # ============================================================
 
 FINAL_ANSWER_USER = """Question: {question}
@@ -350,7 +350,6 @@ You now have enough information. Produce a brief reasoning paragraph synthesizin
 <answer>
 the final answer (concise — just a name, date, or short noun phrase)
 </answer>"""
-
 
 # ============================================================
 # Phase E: Quality judge (post-hoc filter on assembled trajectories)

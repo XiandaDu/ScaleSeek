@@ -49,6 +49,8 @@ def main():
     parser.add_argument("--threads", type=int, default=16)
     parser.add_argument("--limit", type=int, default=None,
                         help="Index only first N passages (smoke-test)")
+    parser.add_argument("--corpus-manifest", default=None,
+                        help="Manifest from build_corpus_manifest.py (required for formal index)")
     args = parser.parse_args()
 
     if not args.corpus_dir:
@@ -122,6 +124,20 @@ def main():
         searcher = LuceneSearcher(str(index_dir / "index"))
         n = searcher.num_docs
         print(f"  docs  : {n:,}")
+        manifest = {}
+        if args.corpus_manifest:
+            manifest = json.loads(Path(args.corpus_manifest).read_text())
+            if not args.limit and n != manifest["count"]:
+                sys.exit(f"Index count {n:,} != corpus manifest {manifest['count']:,}")
+        index_manifest = {
+            "schema_version": 1, "backend": "bm25_lucene", "count": n,
+            "corpus_manifest_id": manifest.get("corpus_manifest_id"),
+            "k1": 1.2, "b": 0.75, "partial_smoke": args.limit is not None,
+        }
+        (index_dir / "index_manifest.json").write_text(
+            json.dumps(index_manifest, indent=2) + "\n")
+        if not args.corpus_manifest:
+            print("  warning: no corpus manifest; this index is not eligible for formal evaluation")
     except Exception as e:
         print(f"  (sanity check failed: {e})")
 

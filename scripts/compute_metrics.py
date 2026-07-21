@@ -44,8 +44,10 @@ _DATASETS = [
     "musique", "bamboogle", "bright", "browsecomp", "bcp", "browsecomp_plus",
 ]
 _AGENTS = [
-    "scaleseek", "bm25_rag", "direct", "dci", "agentir_rag", "agentir",
-    "search_r1", "grepseek", "dr_dci", "search_o1",
+    "scaleseek", "rag", "direct", "dci", "agentir",
+    "search_r1", "grepseek", "dr_dci", "search_o1", "rise",
+    # Read-only compatibility for historical files, never accepted by run_eval.
+    "bm25_rag", "agentir_rag",
 ]
 
 
@@ -200,8 +202,6 @@ def main():
     stem = path.stem
     dataset = args.dataset or _infer(stem, _DATASETS)
     agent = args.agent or _infer(stem, _AGENTS) or "unknown"
-    if agent == "agentir":
-        agent = "agentir_rag"
     if dataset in ("bcp", "browsecomp_plus"):
         dataset = "browsecomp_plus"
     rows = _load_rows(path)

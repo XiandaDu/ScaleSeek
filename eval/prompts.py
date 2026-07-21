@@ -1,20 +1,29 @@
-"""Prompt template loader.
-
-All prompts live in prompts/<name>.txt at the repo root.
-Loading is cached so repeated calls are free.
-"""
+"""Registry for versioned Python prompt constants."""
 from __future__ import annotations
 
-from functools import lru_cache
-from pathlib import Path
+from prompts.direct import PROMPT as DIRECT_PROMPT
+from prompts.rag import PROMPT as RAG_PROMPT
+from prompts.scaleseek_prompt import PROMPT as SCALESEEK_PROMPT
+from prompts.scaleseek_prompt_noparams import PROMPT as SCALESEEK_NOPARAMS_PROMPT
 
-_PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+_PROMPTS = {
+    "direct": DIRECT_PROMPT,
+    "rag": RAG_PROMPT,
+    "scaleseek_prompt": SCALESEEK_PROMPT,
+    "scaleseek_prompt_noparams": SCALESEEK_NOPARAMS_PROMPT,
+}
+_ALIASES = {
+    # Older training code used this logical name even though no matching
+    # scaleseek.txt ever existed. Keep the logical alias, not a file fallback.
+    "scaleseek": "scaleseek_prompt",
+}
 
 
-@lru_cache(maxsize=None)
 def load(name: str) -> str:
-    """Load prompts/<name>.txt, stripping leading/trailing whitespace."""
-    path = _PROMPTS_DIR / f"{name}.txt"
-    if not path.exists():
-        raise FileNotFoundError(f"Prompt template not found: {path}")
-    return path.read_text(encoding="utf-8").strip()
+    """Return a prompt constant by its stable logical name."""
+    resolved = _ALIASES.get(name, name)
+    try:
+        return _PROMPTS[resolved]
+    except KeyError as exc:
+        choices = ", ".join(sorted(_PROMPTS))
+        raise KeyError(f"Unknown prompt {name!r}; choose one of: {choices}") from exc

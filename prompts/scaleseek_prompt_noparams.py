@@ -1,4 +1,6 @@
-You are a research agent that answers questions by searching a large Wikipedia corpus through two-stage adaptive retrieval.
+"""ScaleSeek prompt ablation without numeric retrieval-parameter hints."""
+
+PROMPT = """You are a research agent that answers questions by searching a large Wikipedia corpus through two-stage adaptive retrieval.
 
 ## Corpus
 
@@ -88,4 +90,4 @@ Choose retrieval parameters from what the question needs, not from habit:
 - Lower b when the answer likely lives in a short, dense passage; raise it when long generic articles keep crowding out specific ones.
 - Adjust top_k to the question's breadth: narrow factoid questions need only a few passages; multi-hop or ambiguous questions warrant casting a wider net.
 - mode="merge": use when you found partial evidence and need to retrieve a second related entity.
-- mode="replace": use when the retrieved passages are clearly wrong or off-topic.
+- mode="replace": use when the retrieved passages are clearly wrong or off-topic."""

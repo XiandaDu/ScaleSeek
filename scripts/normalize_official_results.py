@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Schema-only adapter for outputs produced by pinned official harnesses."""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from eval.config import resolved_method  # noqa: E402
+
+
+def get(row, path: str, default=None):
+    value = row
+    for key in path.split("."):
+        if isinstance(value, dict) and key in value:
+            value = value[key]
+        else:
+            return default
+    return value
+
+
+def load_rows(path: Path) -> list[tuple[str, dict]]:
+    if path.is_file() and path.suffix == ".jsonl":
+        return [(f"{path}:{i + 1}", json.loads(line)) for i, line in enumerate(
+            path.read_text().splitlines()) if line.strip()]
+    files = [path] if path.is_file() else sorted(path.rglob("*.json"))
+    return [(str(file), json.loads(file.read_text())) for file in files]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--method", required=True,
+                        choices=["grepseek", "dci", "dr_dci", "rise", "agentir"])
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--run-record", type=Path, required=True)
+    parser.add_argument("--dataset-manifest", type=Path, required=True)
+    parser.add_argument("--dataset-jsonl", type=Path, required=True,
+                        help="Canonical normalized dataset JSONL for exact ID-set validation")
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--id-field", default="id")
+    parser.add_argument("--question-field", default="question")
+    parser.add_argument("--gold-field", default="gold_answers")
+    parser.add_argument("--prediction-field", default="prediction")
+    parser.add_argument("--finish-field", default="finish_reason")
+    parser.add_argument("--turns-field", default="turns")
+    parser.add_argument("--tool-calls-field", default="n_tool_calls")
+    args = parser.parse_args()
+    run_record = json.loads(args.run_record.read_text())
+    dataset_manifest = json.loads(args.dataset_manifest.read_text())
+    config = resolved_method(args.method)
+    if run_record.get("method") != args.method:
+        raise SystemExit("Run record method mismatch")
+    output = []
+    for source, row in load_rows(args.input):
+        gold = get(row, args.gold_field, [])
+        if isinstance(gold, str):
+            gold = [gold]
+        turns = get(row, args.turns_field, []) or []
+        output.append({
+            "id": str(get(row, args.id_field, "")),
+            "question": get(row, args.question_field, ""),
+            "gold_answers": gold,
+            "prediction": get(row, args.prediction_field),
+            "finish_reason": get(row, args.finish_field, "unknown"),
+            "n_turns": len(turns) if isinstance(turns, list) else 0,
+            "n_tool_calls": int(get(row, args.tool_calls_field, 0) or 0),
+            "turns": turns,
+            "trajectory_path": source,
+            "dataset_manifest": dataset_manifest,
+            "method_config_id": config["method_config_id"],
+            "generator_revision": run_record["generator_revision"],
+            "harness_commit": run_record["harness_commit"],
+            "harness_source_sha256": run_record["harness_source_sha256"],
+            "official_argv": run_record["argv"],
+        })
+    ids = [row["id"] for row in output]
+    if not all(ids) or len(ids) != len(set(ids)):
+        raise SystemExit("Normalized official output has empty or duplicate IDs")
+    expected_ids = {str(json.loads(line)["id"]) for line in
+                    args.dataset_jsonl.read_text().splitlines() if line.strip()}
+    if set(ids) != expected_ids:
+        raise SystemExit("Normalized official output ID set differs from the canonical dataset")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in output))
+    print(f"wrote {len(output)} rows -> {args.output}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,209 @@
+schema_version: 1
+
+global:
+  datasets:
+    flashrag_repo_id: RUC-NLPIR/FlashRAG_datasets
+    flashrag_revision: bcafb8dd07d453be3cbeeeb3f78be1841bddf92c
+    popqa_test_expected_count: 14267
+  generator:
+    repo_id: Qwen/Qwen3.5-9B
+    revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+    dtype: bfloat16
+    max_new_tokens: 8192
+  judge:
+    repo_id: Qwen/Qwen3.5-9B
+    revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+    prompt_module: eval.browsecomp_plus_judge:BCP_F_JUDGE_PROMPT
+    temperature: 0.0
+    top_p: 1.0
+    max_new_tokens: 4096
+    prompt_sha256: c30a12f670d4787d89b211f2ef61bf7512595acde5a124312a59f07ef09ae6ea
+  ordinary_retrieval_top_k: 3
+  fixed_bm25:
+    k1: 1.2
+    b: 0.75
+  retrievers:
+    bm25:
+      kind: lucene_bm25
+    e5:
+      kind: dense_faiss
+      repo_id: intfloat/e5-base-v2
+      revision: f52bf8ec8c7124536f0efb74aca902b2995e5bcd
+      query_prefix: "query: "
+      document_prefix: "passage: "
+      pooling: masked_mean
+      normalize: true
+      max_length: 256
+    qwen3_emb_4b:
+      kind: dense_faiss
+      repo_id: Qwen/Qwen3-Embedding-4B
+      revision: 5cf2132abc99cad020ac570b19d031efec650f2b
+      query_instruction: >-
+        Given a web search query, retrieve relevant passages that answer the query
+      pooling: last_token
+      normalize: true
+      max_length: 8192
+
+methods:
+  direct:
+    runner: local
+    generator: global
+    retrievers: []
+    temperature: 0.0
+    top_p: 1.0
+    max_model_calls: 1
+    max_new_tokens: 8192
+    prompt_provenance: project_defined
+    prompt_module: prompts.direct:PROMPT
+    prompt_sha256: 094b235323b146dea01d5db61847788e67cd5560fde5a828253ba5ab3a3e9115
+
+  rag:
+    runner: local
+    generator: global
+    retrievers: [bm25, e5, qwen3_emb_4b]
+    retrieval_top_k: 3
+    temperature: 0.0
+    top_p: 1.0
+    max_model_calls: 1
+    max_new_tokens: 8192
+    prompt_provenance: project_defined_grepseek_protocol
+    prompt_module: prompts.rag:PROMPT
+    prompt_sha256: 81a9c4338896a2c134a6ae4fab3feff442a8c373430353202253f16c49f0f0eb
+
+  search_r1:
+    runner: local_official_protocol
+    source_repo: search_r1
+    generators:
+      - repo_id: PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-7b-em-grpo-v0.3
+        revision: 395b18f1fecee52f1b51fb22f898c220f0a08ec3
+        dtype: bfloat16
+      - repo_id: PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-14b-em-grpo-v0.3
+        revision: d65f11c88d3c129a01466f0c154aaad7d9b09225
+        dtype: bfloat16
+    retrievers: [bm25, e5, qwen3_emb_4b]
+    retrieval_top_k: 3
+    action_budget: 4
+    max_new_tokens: 1024
+    temperature: 0.7
+    top_p: 1.0
+    prompt_sha256: 325187b4e28848fc12d41dfcb958bf9376b3735630d67686c140b65d1b76d578
+
+  search_o1:
+    runner: local_official_protocol
+    source_repo: search_o1
+    generator: global
+    retrievers: [bm25, e5, qwen3_emb_4b]
+    retrieval_top_k: 3
+    single_hop_search_limit: 5
+    multi_hop_search_limit: 10
+    max_turns: 15
+    temperature: 0.7
+    top_p: 0.8
+    sampling_top_k: 20
+    main_repetition_penalty: 1.0
+    reason_in_documents_repetition_penalty: 1.05
+    max_new_tokens: 8192
+    prompt_snapshots:
+      single_5: 93434a97bcc3b0a662b31157fe49ae0d9e5c615880eec1062ad330b68bd0a835
+      multi_10: b91e723096a0b0975c3722d86d8e40245d5fe8f67a37d2559b43f8c5831d87a8
+      task_openqa: 6b560348b9ced59b426e64ca5f29c276c975d6fa67098489ceb8dcb12a9c26b3
+      reason_in_documents: 68247d38686f60355859f278305852930d765e1f2402c4454faa3c7e3377c225
+
+  grepseek:
+    runner: official_external
+    source_repo: grepseek
+    generator:
+      repo_id: alireza7/GrepSeek-Qwen3.5-9B-GRPO
+      revision: a79563970cfdd2ced3cc5fde481737d0ebea6fa4
+      dtype: bfloat16
+    retrievers: []
+    max_assistant_turns: 6
+    max_tool_calls: 5
+    temperature: 0.6
+    top_p: 1.0
+    per_turn_generation_cap: null
+    tool_max_tokens: 2048
+    official_prompt_sha256: ca25d32709f61f0fb5a82271bc68c69e221355368a72f82bb2f9d4bacc12969c
+
+  dci:
+    runner: official_external
+    source_repo: dci_agent_lite
+    generator: global
+    retrievers: []
+    max_model_calls: 300
+    context_management: level3
+    command_timeout_seconds: 30
+
+  dr_dci:
+    runner: official_external
+    source_repo: dr_dci
+    generator: global
+    judge: global
+    task_retrievers:
+      wiki18:
+        kind: e5_pull
+        repo_id: intfloat/e5-base-v2
+        revision: f52bf8ec8c7124536f0efb74aca902b2995e5bcd
+      browsecomp_plus:
+        kind: qwen3_embedding_8b_official_index
+        repo_id: Qwen/Qwen3-Embedding-8B
+        revision: 1d8ad4ca9b3dd8059ad90a75d4983776a23d44af
+    max_model_calls: 300
+    max_pull_queries: 10
+    pull_top_k_min: 300
+    pull_top_k_max: 600
+    preview_top_k: 20
+    materialization: root_flat_disclosed
+    context_management: level3
+    command_timeout_seconds: 30
+
+  rise:
+    runner: official_external
+    source_repo: rise
+    generator: global
+    judge: global
+    retrievers: [bm25]
+    bm25:
+      k1: 1.2
+      b: 0.75
+      official_k1: 1.5
+      official_b: 0.75
+    retrieval_top_k: 1000
+    preview_top_k: 10
+    max_model_calls: 100
+    wall_clock_seconds: 3600
+    subprocess_timeout_seconds: 60
+    bash_stdout_chars: 4000
+    read_max_lines: 2000
+    structured_bcp_dataset:
+      repo_id: Tevatron/browsecomp-plus-md-toc-gpt5.4-nano
+      revision: 9ae6db9bb5c006cf77b82d6835e3df43a6774d6f
+
+  agentir:
+    runner: official_external
+    source_repo: agentir
+    generator: global
+    retriever:
+      repo_id: Tevatron/AgentIR-4B
+      revision: e31abb637caa227c4b7d04176a24ecff1bcb10f4
+      pooling: last_token
+      normalize: true
+      max_length: 8192
+      reasoning_aware: true
+    retrieval_top_k: 5
+    max_iterations: 100
+
+  scaleseek:
+    runner: local
+    generator: global
+    retrievers: [bm25]
+    max_assistant_turns: 8
+    max_tool_calls: 7
+    max_new_tokens: 8192
+    tool_response_tokens: 2048
+    bm25_default:
+      k1: 1.2
+      b: 0.75
+    adaptive_bm25_parameters: true
+    prompt_module: prompts.scaleseek_prompt:PROMPT
+    prompt_sha256: 6b8db423a297786caad401e0a59479b3850dece0bec383f5e01915b12d520019

@@ -9,7 +9,7 @@ so the agent can control k1/b dynamically without rebuilding the index.
 Usage:
     from eval.bm25_retriever import BM25Retriever
     ret = BM25Retriever()
-    hits = ret.retrieve("Albert Einstein Nobel Prize", top_k=5, k1=1.5, b=0.75)
+    hits = ret.retrieve("Albert Einstein Nobel Prize", top_k=3, k1=1.2, b=0.75)
     # -> [{"doc_id": "...", "score": float, "text": str}, ...]
 """
 from __future__ import annotations
@@ -56,8 +56,8 @@ class BM25Retriever:
     def retrieve(
         self,
         query: str,
-        top_k: int = 5,
-        k1: float = 1.5,
+        top_k: int = 3,
+        k1: float = 1.2,
         b: float = 0.75,
     ) -> list[dict]:
         """Return top_k passages for query.
@@ -90,3 +90,10 @@ class BM25Retriever:
     def num_docs(self) -> int:
         self._load()
         return self._searcher.num_docs
+
+    @property
+    def metadata(self) -> dict:
+        path = self._index_dir / "index_manifest.json"
+        if not path.exists():
+            return {"backend": "bm25_lucene", "manifest_missing": True}
+        return json.loads(path.read_text())

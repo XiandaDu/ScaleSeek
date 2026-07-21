@@ -1,0 +1,11 @@
+schema_version: 1
+datasets:
+  popqa:
+    repo_id: RUC-NLPIR/FlashRAG_datasets
+    revision: bcafb8dd07d453be3cbeeeb3f78be1841bddf92c
+    path: popqa/test.jsonl
+    split: test
+    raw_sha256: f976372fce3d7fe01b070357040391f10bd2710eeaa7c40d21c6574ffcad6cb8
+    normalized_sha256: 56269abde328a259e4e38a186941cfd755ab0d72d7fbd7a1e8801a8ea781bd42
+    count: 14267
+    unique_ids: 14267

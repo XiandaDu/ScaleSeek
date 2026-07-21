@@ -14,8 +14,7 @@ Index dir layout (from build_e5_index.py):
 
 Usage:
     ret = E5Retriever()          # $E5_INDEX_DIR
-    hits = ret.retrieve("Albert Einstein Nobel Prize", top_k=5)
-    # -> [{"doc_id": ..., "score": ..., "text": ...}, ...]  (k1/b accepted+ignored)
+    hits = ret.retrieve("Albert Einstein Nobel Prize", top_k=3)
 """
 from __future__ import annotations
 
@@ -26,7 +25,17 @@ from pathlib import Path
 from typing import Optional
 
 _E5_MODEL_ID = "intfloat/e5-base-v2"
+_E5_MODEL_REVISION = "f52bf8ec8c7124536f0efb74aca902b2995e5bcd"
 _QUERY_PREFIX = "query: "
+
+
+def format_query(query: str) -> str:
+    return _QUERY_PREFIX + query
+
+
+def masked_mean_pool(last_hidden_state, attention_mask):
+    mask = attention_mask.unsqueeze(-1).to(last_hidden_state.dtype)
+    return (last_hidden_state * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
 
 
 class E5Retriever:
@@ -101,31 +110,33 @@ class E5Retriever:
         import torch
         from transformers import AutoModel, AutoTokenizer
         print(f"[E5Retriever] loading {_E5_MODEL_ID} on {self._device} ...", flush=True)
-        self._tokenizer = AutoTokenizer.from_pretrained(_E5_MODEL_ID)
+        self._tokenizer = AutoTokenizer.from_pretrained(
+            _E5_MODEL_ID, revision=_E5_MODEL_REVISION)
         want = torch.float16 if self._device != "cpu" else torch.float32
         model = None
         for kw in ({"dtype": want}, {"torch_dtype": want}):
             try:
                 model = AutoModel.from_pretrained(
-                    _E5_MODEL_ID, attn_implementation="sdpa", **kw).to(self._device)
+                    _E5_MODEL_ID, revision=_E5_MODEL_REVISION,
+                    attn_implementation="sdpa", **kw).to(self._device)
                 break
             except TypeError:
                 continue
         if model is None:
-            model = AutoModel.from_pretrained(_E5_MODEL_ID).to(self._device).to(want)
+            model = AutoModel.from_pretrained(
+                _E5_MODEL_ID, revision=_E5_MODEL_REVISION).to(self._device).to(want)
         model.eval()
         self._model = model
 
     def _encode_query(self, query: str):
         import torch
         self._load_model()
-        enc = self._tokenizer([_QUERY_PREFIX + query], padding=True, truncation=True,
+        enc = self._tokenizer([format_query(query)], padding=True, truncation=True,
                               max_length=256, return_tensors="pt")
         enc = {k: v.to(self._device) for k, v in enc.items()}
         with torch.no_grad():
             hidden = self._model(**enc, return_dict=True).last_hidden_state
-            mask = enc["attention_mask"].unsqueeze(-1).to(hidden.dtype)
-            reps = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
+            reps = masked_mean_pool(hidden, enc["attention_mask"])
             reps = torch.nn.functional.normalize(reps, p=2, dim=-1)
         return reps.cpu().float().numpy()
 
@@ -142,9 +153,7 @@ class E5Retriever:
     def retrieve(
         self,
         query: str,
-        top_k: int = 5,
-        k1: float | None = None,   # accepted for BM25Retriever signature
-        b: float | None = None,    # compatibility; ignored (dense retrieval)
+        top_k: int = 3,
     ) -> list[dict]:
         self._load()
         top_k = max(1, min(top_k, 1000))
@@ -166,3 +175,10 @@ class E5Retriever:
     def num_docs(self) -> int:
         self._load()
         return self._index.ntotal
+
+    @property
+    def metadata(self) -> dict:
+        path = self._index_dir / "index_manifest.json"
+        if not path.exists():
+            return {"backend": "e5", "manifest_missing": True}
+        return json.loads(path.read_text())
