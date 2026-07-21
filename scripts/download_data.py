@@ -25,21 +25,15 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from eval.datasets import (  # noqa: E402
+    FLASHRAG_DATASETS, FLASHRAG_REPO, FLASHRAG_REVISION,
+    validate_complete_dataset,
+)
+
 # ---------------------------------------------------------------------------
 # Dataset registry
 # ---------------------------------------------------------------------------
-
-FLASHRAG_REPO = "RUC-NLPIR/FlashRAG_datasets"
-
-FLASHRAG_DATASETS = {
-    "nq":              ("nq",              "test"),
-    "triviaqa":        ("triviaqa",        "test"),
-    "popqa":           ("popqa",           "test"),
-    "hotpotqa":        ("hotpotqa",        "dev"),
-    "2wikimultihopqa": ("2wikimultihopqa", "dev"),
-    "musique":         ("musique",         "dev"),
-    "bamboogle":       ("bamboogle",       "test"),
-}
 
 # BRIGHT: retrieval benchmark with query/relevant-doc pairs.
 # We download the task query files and treat them as QA queries where applicable.
@@ -94,12 +88,15 @@ def download_flashrag(name: str, datasets_dir: Path, cache_dir: Optional[str]) -
 
     if out_path.exists():
         existing = _load_jsonl(out_path)
+        manifest = validate_complete_dataset(name, existing)
+        (out_path.parent / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         print(f"  [{name}] already exists ({len(existing):,} rows) → {out_path}")
         return out_path
 
     print(f"  [{name}] downloading from {FLASHRAG_REPO}/{subfolder}/{split}.jsonl ...")
     ds = hf_load(
         FLASHRAG_REPO,
+        revision=FLASHRAG_REVISION,
         data_files={split: f"{subfolder}/{split}.jsonl"},
         split=split,
         cache_dir=cache_dir,
@@ -120,6 +117,8 @@ def download_flashrag(name: str, datasets_dir: Path, cache_dir: Optional[str]) -
         rows.append({"id": f"{name}_{rid}", "question": q, "golden_answers": golds})
 
     _save_jsonl(rows, out_path)
+    manifest = validate_complete_dataset(name, rows)
+    (out_path.parent / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return out_path
 
 

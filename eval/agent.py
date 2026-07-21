@@ -152,9 +152,9 @@ def execute_tool(
         query = str(arguments.get("query", "")).strip()
         if not query:
             return {"error": "bm25_retrieve requires a non-empty query"}
-        top_k = int(arguments.get("top_k", 5))
+        top_k = int(arguments.get("top_k", 3))
         top_k = max(1, min(top_k, 50))
-        k1 = float(arguments.get("k1", 1.5))
+        k1 = float(arguments.get("k1", 1.2))
         b = float(arguments.get("b", 0.75))
         mode = str(arguments.get("mode", "replace")).lower()
 
@@ -451,7 +451,7 @@ def run_agent(
 
     t_start = time.perf_counter()
     messages: list = [
-        # SCALESEEK_PROMPT selects an alternate prompt file for ablations
+        # SCALESEEK_PROMPT selects an alternate registered prompt for ablations
         # (e.g. scaleseek_prompt_noparams — no numeric parameter hints).
         {"role": "system", "content": prompts.load(
             os.environ.get("SCALESEEK_PROMPT", "scaleseek_prompt"))},
@@ -579,15 +579,13 @@ def run_direct(
 # BM25-RAG baseline (single retrieve then answer)
 # ---------------------------------------------------------------------------
 
-def run_bm25_rag(
+def run_rag(
     example: dict,
     *,
     client: Any,
     model: str,
     retriever: BM25Retriever,
-    top_k: int = 5,
-    k1: float = 1.5,
-    b: float = 0.75,
+    top_k: int = 3,
     max_tokens: int = 256,
     temperature: float = 0.0,
 ) -> AgentRecord:
@@ -598,23 +596,24 @@ def run_bm25_rag(
     t_start = time.perf_counter()
 
     t_tool = time.perf_counter()
-    hits = retriever.retrieve(question, top_k=top_k, k1=k1, b=b)
+    hits = retriever.retrieve(question, top_k=top_k)
     record.tool_time_s = time.perf_counter() - t_tool
     record.n_tool_calls = 1
-    record.n_bm25_calls = 1
+    record.n_bm25_calls = int(retriever.__class__.__name__ == "FixedBM25Retriever")
     record.final_workspace_size = len(hits)
     doc_ids = [h["doc_id"] for h in hits]
     record.workspace_doc_ids = doc_ids
     record.bm25_calls = [{
-        "query": question, "k1": k1, "b": b, "top_k": top_k,
+        "query": question, "k1": getattr(retriever, "k1", None),
+        "b": getattr(retriever, "b", None), "top_k": top_k,
         "mode": "replace", "doc_ids": doc_ids,
     }]
 
     passages_text = "\n\n".join(
-        f"[Passage {i+1}]\n{h['text'][:1500]}" for i, h in enumerate(hits)
+        f"[Passage {i+1}]\n{h['text']}" for i, h in enumerate(hits)
     )
     messages = [
-        {"role": "system", "content": prompts.load("bm25_rag")},
+        {"role": "system", "content": prompts.load("rag")},
         {"role": "user", "content": f"Question: {question}\n\nPassages:\n{passages_text}"},
     ]
 

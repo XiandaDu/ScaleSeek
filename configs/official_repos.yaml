@@ -1,0 +1,31 @@
+schema_version: 1
+
+repos:
+  search_r1:
+    url: https://github.com/PeterGriffinJin/Search-R1.git
+    commit: 598e61bd1d36895726d28a8d06b3a15bed19f5d3
+    env: SEARCH_R1_REPO
+  search_o1:
+    url: https://github.com/RUC-NLPIR/Search-o1.git
+    commit: c76a700fb2a948039ada577c03b3be958aa57282
+    env: SEARCH_O1_REPO
+  grepseek:
+    url: https://github.com/alirezasalemi7/grepseek.git
+    commit: 1f6ea58372defe774213e22c7650b7fd1b842ab8
+    env: GREPSEEK_REPO
+  dci_agent_lite:
+    url: https://github.com/DCI-Agent/DCI-Agent-Lite.git
+    commit: 271f37e71f053bf0c99c05ce6d2fb53b841d922e
+    env: DCI_AGENT_LITE_REPO
+  dr_dci:
+    url: https://github.com/EigenTom/DR-DCI.git
+    commit: 0d0410f3c2b98fb33145adc250a09fded028cd3c
+    env: DR_DCI_REPO
+  rise:
+    url: https://github.com/texttron/RISE.git
+    commit: 32672b59ead8381decae7d412f05bb53d399946a
+    env: RISE_REPO
+  agentir:
+    url: https://github.com/texttron/AgentIR.git
+    commit: 9626bdc7ab90649608d483e66febe13c6eebab2c
+    env: AGENTIR_REPO

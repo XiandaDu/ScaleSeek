@@ -1,53 +1,9 @@
 #!/usr/bin/env python3
-"""ScaleSeek evaluation runner.
+"""Evaluation runner for locally verified Direct/RAG/search agents.
 
-Usage:
-    source setup_env.sh
-
-    # ScaleSeek adaptive agent (BM25 + workspace DCI)
-    python -m eval.run_eval --dataset hotpotqa --agent scaleseek --n 500 \\
-        --output results/hotpotqa_scaleseek.jsonl
-
-    # BM25-RAG baseline
-    python -m eval.run_eval --dataset nq --agent bm25_rag --n 1000 \\
-        --output results/nq_bm25_rag.jsonl
-
-    # Direct-answer baseline (no retrieval)
-    python -m eval.run_eval --dataset triviaqa --agent direct \\
-        --output results/triviaqa_direct.jsonl
-
-    # DCI baseline — prompt-based grep on full corpus (no BM25 first stage)
-    python -m eval.run_eval --dataset hotpotqa --agent dci \\
-        --corpus-path /data/rech/mofengra/data/wiki_18_corpus/wiki_corpus.jsonl \\
-        --output results/hotpotqa_dci.jsonl
-
-    # AgentIR dense retrieval (requires prebuilt FAISS index)
-    python -m eval.run_eval --dataset nq --agent agentir_rag \\
-        --agentir-index-dir /data/rech/mofengra/data/agentir_index \\
-        --output results/nq_agentir.jsonl
-
-    # GrepSeek trained model (separate vLLM on --grepseek-port)
-    python -m eval.run_eval --dataset hotpotqa --agent grepseek \\
-        --grepseek-port 8002 \\
-        --corpus-path /data/rech/mofengra/data/wiki_18_corpus/wiki_corpus.jsonl \\
-        --output results/hotpotqa_grepseek.jsonl
-
-    # Search-R1 (separate vLLM on --search-r1-port)
-    python -m eval.run_eval --dataset hotpotqa --agent search_r1 \\
-        --search-r1-port 8001 --output results/hotpotqa_search_r1.jsonl
-
-Agents:
-    scaleseek   — adaptive BM25 + workspace DCI (ScaleSeek prompt agent)
-    bm25_rag    — single BM25 retrieve then answer
-    direct      — LLM only, no retrieval
-    dci         — prompt-based DCI: grep on full corpus (Beyond Semantic Similarity)
-    agentir_rag — AgentIR-4B dense retrieval from full-corpus FAISS index
-    search_r1   — Search-R1 (Qwen2.5-3B GRPO) on separate vLLM port
-    grepseek    — GrepSeek trained model on separate vLLM port
-
-Datasets:
-    nq  triviaqa  popqa  hotpotqa  2wikimultihopqa  musique  bamboogle
-    bright  browsecomp
+DCI, DR-DCI, RISE and AgentIR must be launched with
+``scripts/run_official_baseline.py``. Formal runs use ``--full-eval``; see
+RUNBOOK.md for frozen models, revisions, retrievers and action budgets.
 """
 from __future__ import annotations
 
@@ -57,18 +13,53 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
-from .datasets import load_dataset, ALL_DATASETS
+from .datasets import load_dataset, validate_complete_dataset, ALL_DATASETS
+from .config import load_baselines, resolved_method
+from .provenance import prompt_hash, generator_revision, harness_metadata
 from .metrics import score_example, aggregate
 
-_ALL_AGENTS = [
-    "scaleseek", "bm25_rag", "direct",
-    "dci", "agentir_rag", "search_r1", "grepseek",
-    "search_o1", "ircot",
-    # DR-DCI is run via its own official Pi harness (see RUNBOOK §7 +
-    # scripts/convert_dr_dci_output.py), not this runner.
-]
+_ALL_AGENTS = ["scaleseek", "rag", "direct", "search_r1", "search_o1"]
+
+
+def validate_resume_row(row: dict, expected_provenance: dict,
+                        dataset_manifest: dict | None = None) -> None:
+    for key, expected in expected_provenance.items():
+        if row.get(key) != expected:
+            raise ValueError(f"resume row {row.get('id')} has mismatched {key}")
+    if dataset_manifest is not None and row.get("dataset_manifest") != dataset_manifest:
+        raise ValueError(f"resume row {row.get('id')} has a mismatched dataset manifest")
+
+
+def validate_exact_id_set(result_ids: list[str], expected_ids: set[str]) -> None:
+    if len(result_ids) != len(set(result_ids)) or set(result_ids) != expected_ids:
+        raise ValueError("output ID set does not exactly match the dataset manifest")
+
+
+def validate_retriever_manifest(name: str, manifest: dict) -> None:
+    """Reject an index that does not implement the frozen retrieval contract."""
+    cfg = load_baselines()["global"]
+    expected = {
+        "bm25": {"backend": "bm25_lucene", **cfg["fixed_bm25"]},
+        "e5": {
+            "backend": "e5",
+            "model_id": cfg["retrievers"]["e5"]["repo_id"],
+            "model_revision": cfg["retrievers"]["e5"]["revision"],
+            "pooling": "masked_mean",
+            "normalize": True,
+        },
+        "qwen3_emb_4b": {
+            "backend": "qwen3_emb_4b",
+            "model_id": cfg["retrievers"]["qwen3_emb_4b"]["repo_id"],
+            "model_revision": cfg["retrievers"]["qwen3_emb_4b"]["revision"],
+            "pooling": "last_token",
+            "normalize": True,
+        },
+    }[name]
+    mismatches = {key: (manifest.get(key), value) for key, value in expected.items()
+                  if manifest.get(key) != value}
+    if mismatches:
+        raise ValueError(f"{name} index manifest violates frozen settings: {mismatches}")
 
 
 def _make_client(host: str, port: int):
@@ -95,6 +86,13 @@ def _print_metrics(metrics: dict, n_answered: int, n_total: int) -> None:
 
 
 def run_eval(args: argparse.Namespace) -> None:
+    if args.full_eval and (args.n is not None or args.offset != 0):
+        sys.exit("--full-eval forbids --n and non-zero --offset")
+    if args.full_eval and not args.output:
+        sys.exit("--full-eval requires --output")
+    if args.full_eval and args.agent == "scaleseek" and (
+            args.retriever != "bm25" or args.max_tool_response_tokens != 2048):
+        sys.exit("Formal ScaleSeek requires BM25 and a 2048-token tool-response budget")
     # --- Load dataset ---
     print(f"Loading {args.dataset} (split={args.split or 'default'}, "
           f"offset={args.offset}, limit={args.n or 'all'}) ...")
@@ -107,10 +105,28 @@ def run_eval(args: argparse.Namespace) -> None:
     print(f"  {len(examples)} examples loaded.")
     if not examples:
         sys.exit("No examples found. Check --dataset and --split.")
+    dataset_manifest = validate_complete_dataset(args.dataset, examples) if args.full_eval else {
+        "dataset": args.dataset, "count": len(examples), "mode": "smoke_or_partial"}
+    expected_full_ids = {str(ex["id"]) for ex in examples} if args.full_eval else None
+    method_cfg = resolved_method(args.agent)
+    try:
+        model_revision = generator_revision(
+            args.agent, search_r1_checkpoint=args.search_r1_tokenizer)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    method_prompt_hash = prompt_hash(args.agent)
+    method_harness = harness_metadata(args.agent)
+    if args.full_eval and args.generator_revision != model_revision:
+        sys.exit("--full-eval requires --generator-revision equal to the frozen method revision: "
+                 + model_revision)
+    print(f"  dataset_manifest={dataset_manifest}")
+    print(f"  method_config_id={method_cfg['method_config_id']}")
 
     # --- Resume: skip examples already completed in a prior partial output.
     # Rows with a transient failure (api_error/exception) are re-run, not kept.
     output_path = Path(args.output) if args.output else None
+    if args.full_eval and output_path.exists() and not args.resume:
+        sys.exit("Full-eval output already exists; pass --resume or choose a new path")
     prior_done: dict[str, dict] = {}
     if args.resume and output_path and output_path.exists():
         with open(output_path, encoding="utf-8") as f:
@@ -124,12 +140,26 @@ def run_eval(args: argparse.Namespace) -> None:
                     continue
                 if r.get("id") is not None and \
                         r.get("finish_reason") not in ("api_error", "exception"):
+                    expected_provenance = {
+                        "method_config_id": method_cfg["method_config_id"],
+                        "generator_revision": model_revision,
+                        "prompt_sha256": method_prompt_hash,
+                        "harness_source_sha256": method_harness["harness_source_sha256"],
+                    }
+                    try:
+                        validate_resume_row(
+                            r, expected_provenance,
+                            dataset_manifest if args.full_eval else None)
+                    except ValueError as exc:
+                        sys.exit(str(exc))
                     prior_done[str(r["id"])] = r
         before = len(examples)
         examples = [ex for ex in examples if str(ex.get("id", "")) not in prior_done]
         print(f"  [resume] {len(prior_done)} already done; "
               f"{before - len(examples)} skipped, {len(examples)} left to run.")
         if not examples:
+            if args.full_eval and set(prior_done) != expected_full_ids:
+                sys.exit("Resume file does not exactly cover the full dataset manifest")
             print("  [resume] nothing left to run; rewriting merged output.")
             _save_jsonl(list(prior_done.values()), output_path)
             print(f"Results saved → {output_path}")
@@ -139,102 +169,69 @@ def run_eval(args: argparse.Namespace) -> None:
     host = args.host or os.environ.get("LLM_HOST", "127.0.0.1")
     port = int(args.port or os.environ.get("LLM_PORT", 8000))
     model = args.model or os.environ.get("LLM_MODEL", "agent")
-    client = _make_client(host, port)
-    print(f"LLM: {host}:{port}  model={model}")
+    client = None
+    if args.agent != "search_r1":
+        client = _make_client(host, port)
+        print(f"LLM: {host}:{port}  model={model}")
 
     # --- Secondary clients ---
     sr1_client = None
     sr1_model = None
+    sr1_tokenizer = None
     if args.agent == "search_r1":
         sr1_host = args.search_r1_host or os.environ.get("SEARCH_R1_HOST", host)
         sr1_port = int(args.search_r1_port or os.environ.get("SEARCH_R1_PORT", 8001))
         sr1_model = args.search_r1_model or os.environ.get("SEARCH_R1_MODEL", "search_r1")
         sr1_client = _make_client(sr1_host, sr1_port)
         print(f"Search-R1: {sr1_host}:{sr1_port}  model={sr1_model}")
-
-    gs_client = None
-    gs_model = None
-    gs_tokenizer = None
-    if args.agent == "grepseek":
-        gs_host = args.grepseek_host or os.environ.get("GREPSEEK_HOST", host)
-        gs_port = int(args.grepseek_port or os.environ.get("GREPSEEK_PORT", 8002))
-        gs_model = args.grepseek_model or os.environ.get("GREPSEEK_MODEL", "grepseek")
-        gs_client = _make_client(gs_host, gs_port)
-        print(f"GrepSeek: {gs_host}:{gs_port}  model={gs_model}  "
-              f"temp={args.grepseek_temperature}  max_turns={args.grepseek_max_turns}")
-        # GrepSeek truncates tool stdout to 2048 tokens with its OWN tokenizer.
-        tok_name = args.grepseek_tokenizer or os.environ.get("GREPSEEK_TOKENIZER")
-        if tok_name:
-            try:
-                from transformers import AutoTokenizer
-                gs_tokenizer = AutoTokenizer.from_pretrained(tok_name)
-                print(f"GrepSeek tokenizer: {tok_name} (2048-token stdout cap)")
-            except Exception as e:  # noqa: BLE001
-                print(f"warning: could not load GrepSeek tokenizer {tok_name!r} ({e}); "
-                      "tool stdout will fall back to the char cap — NOT paper-faithful.")
-        else:
-            print("warning: no --grepseek-tokenizer / $GREPSEEK_TOKENIZER; tool stdout "
-                  "uses the char cap instead of the paper's 2048-token cap.")
-
-    # --- Corpus path (for DCI and GrepSeek) ---
-    corpus_path = args.corpus_path or os.environ.get(
-        "CORPUS_PATH",
-        "/data/rech/mofengra/data/wiki_18_corpus/wiki_corpus.jsonl",
-    )
-    if args.agent in ("dci", "grepseek") and not Path(corpus_path).exists():
-        sys.exit(
-            f"Corpus not found: {corpus_path}\n"
-            "Set --corpus-path or CORPUS_PATH env var."
-        )
-
-    # --- AgentIR FAISS index (or precomputed retrieval cache) ---
-    agentir_index_dir: Optional[Path] = None
-    agentir_cache: Optional[dict] = None
-    if args.agent == "agentir_rag":
-        if args.agentir_cache:
-            agentir_cache = {}
-            with open(args.agentir_cache, encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        row = json.loads(line)
-                        agentir_cache[str(row["id"])] = row.get("hits", [])
-            print(f"AgentIR cache: {args.agentir_cache} ({len(agentir_cache)} queries)")
-        else:
-            raw = args.agentir_index_dir or os.environ.get("AGENTIR_INDEX_DIR", "")
-            if not raw:
-                sys.exit(
-                    "AgentIR requires a prebuilt FAISS index or a retrieval cache.\n"
-                    "Build: python scripts/build_agentir_index.py --corpus ... --out <dir>\n"
-                    "Or precompute: python scripts/precompute_agentir_retrieval.py ... "
-                    "and pass --agentir-cache <jsonl>."
-                )
-            agentir_index_dir = Path(raw)
+        tok_name = args.search_r1_tokenizer or args.search_r1_model
+        if not tok_name:
+            sys.exit("Search-R1 requires --search-r1-tokenizer (the exact 7B or 14B checkpoint)")
+        try:
+            from transformers import AutoTokenizer
+            sr1_tokenizer = AutoTokenizer.from_pretrained(
+                tok_name, revision=model_revision)
+        except Exception as exc:  # noqa: BLE001
+            sys.exit(f"Cannot load Search-R1 checkpoint tokenizer {tok_name!r}: {exc}")
 
     # --- retriever (lazy, only loaded when needed) ---
-    # --retrieval-backend e5 swaps in the dense E5 index (same .retrieve()
-    # contract; k1/b silently ignored) — used for the paper-faithful search_r1
-    # rerun (E5 is what its ckpt was trained with), search_o1 dense backend,
-    # and the RAG(E5) row.
     retriever = None
-    need_bm25 = args.agent in ("scaleseek", "bm25_rag", "search_r1", "search_o1", "ircot")
+    retriever_manifest = None
+    need_bm25 = args.agent in ("scaleseek", "rag", "search_r1", "search_o1")
     if need_bm25:
-        if args.retrieval_backend == "e5":
-            from .e5_retriever import E5Retriever
-            retriever = E5Retriever()
-            print(f"E5 index: {retriever._index_dir}")
-        else:
+        if args.agent == "scaleseek":
             from .bm25_retriever import BM25Retriever
             retriever = BM25Retriever()
-            print(f"BM25 index: {retriever._index_dir}")
+        else:
+            from .retrievers import build_retriever
+            retriever = build_retriever(args.retriever, device=args.retriever_device)
+        print(f"Retriever: {args.retriever if args.agent != 'scaleseek' else 'bm25-adaptive'}")
+        retriever_manifest = retriever.metadata
+        if args.full_eval and (retriever_manifest.get("manifest_missing")
+                               or retriever_manifest.get("partial_smoke")
+                               or not retriever_manifest.get("corpus_manifest_id")):
+            sys.exit("Formal retrieval requires a complete index_manifest.json tied to a corpus manifest")
+        if args.full_eval:
+            try:
+                validate_retriever_manifest(
+                    "bm25" if args.agent == "scaleseek" else args.retriever,
+                    retriever_manifest)
+            except ValueError as exc:
+                sys.exit(str(exc))
 
-    # --- Tokenizer for exact tool-response token budgeting (scaleseek only) ---
+    # --- Exact checkpoint tokenizer where the local harness needs it. ---
     tokenizer = None
-    if args.agent == "scaleseek":
+    if args.agent in {"scaleseek", "search_o1"}:
         tok_name = args.tokenizer or os.environ.get("LLM_TOKENIZER")
+        if args.agent == "search_o1" and not tok_name:
+            sys.exit("Search-O1 requires --tokenizer Qwen/Qwen3.5-9B")
+        if args.full_eval and tok_name != "Qwen/Qwen3.5-9B":
+            sys.exit("Formal Qwen methods require --tokenizer Qwen/Qwen3.5-9B")
         if tok_name:
             try:
                 from transformers import AutoTokenizer
-                tokenizer = AutoTokenizer.from_pretrained(tok_name)
+                tokenizer = AutoTokenizer.from_pretrained(
+                    tok_name, revision=model_revision)
                 print(f"Tokenizer: {tok_name} (exact tool-response token budgeting)")
             except Exception as e:  # noqa: BLE001
                 print(f"warning: could not load tokenizer {tok_name!r} ({e}); "
@@ -242,6 +239,9 @@ def run_eval(args: argparse.Namespace) -> None:
         else:
             print("Tokenizer: none — using ~4 char/token estimate for the tool-response "
                   "budget (set --tokenizer or LLM_TOKENIZER for exact counts)")
+    if args.full_eval and args.agent == "scaleseek" \
+            and os.environ.get("SCALESEEK_PROMPT", "scaleseek_prompt") != "scaleseek_prompt":
+        sys.exit("Formal ScaleSeek evaluation forbids prompt ablation overrides")
 
     # --- Run ---
     results: list[dict] = []
@@ -254,75 +254,67 @@ def run_eval(args: argparse.Namespace) -> None:
             from .agent import run_agent
             return run_agent(
                 ex, client=client, model=model, retriever=retriever,
-                max_turns=args.max_turns, max_tokens=args.max_tokens,
-                temperature=args.temperature, tokenizer=tokenizer,
+                max_turns=8, max_tokens=8192,
+                temperature=0.0, tokenizer=tokenizer,
                 max_tool_response_tokens=args.max_tool_response_tokens)
-        elif args.agent == "bm25_rag":
-            from .agent import run_bm25_rag
-            return run_bm25_rag(
+        elif args.agent == "rag":
+            from .agent import run_rag
+            return run_rag(
                 ex, client=client, model=model, retriever=retriever,
-                top_k=args.bm25_top_k, k1=args.bm25_k1, b=args.bm25_b,
-                max_tokens=args.max_tokens, temperature=args.temperature)
+                top_k=args.retrieval_top_k,
+                max_tokens=8192, temperature=0.0)
         elif args.agent == "direct":
             from .agent import run_direct
             return run_direct(
                 ex, client=client, model=model,
-                max_tokens=args.max_tokens, temperature=args.temperature)
-        elif args.agent == "dci":
-            from .dci_agent import run_dci
-            return run_dci(
-                ex, client=client, model=model, corpus_path=corpus_path,
-                max_turns=args.max_turns, max_tokens=args.max_tokens,
-                temperature=args.temperature)
-        elif args.agent == "agentir_rag":
-            if agentir_cache is not None:
-                from .agentir_retriever import run_agentir_rag_cached
-                return run_agentir_rag_cached(
-                    ex, client=client, model=model,
-                    hits=agentir_cache.get(str(ex.get("id", "")), []),
-                    max_tokens=args.max_tokens, temperature=args.temperature)
-            from .agentir_retriever import run_agentir_rag
-            return run_agentir_rag(
-                ex, client=client, model=model, index_dir=agentir_index_dir,
-                top_k=args.bm25_top_k, agentir_device=args.agentir_device,
-                max_tokens=args.max_tokens, temperature=args.temperature)
+                max_tokens=8192, temperature=0.0)
         elif args.agent == "search_r1":
             from .search_r1_agent import run_search_r1
             return run_search_r1(
                 ex, client=sr1_client, model=sr1_model, retriever=retriever,
-                max_turns=args.max_turns, max_tokens=args.max_tokens,
-                bm25_top_k=args.bm25_top_k, temperature=args.temperature)
-        elif args.agent == "grepseek":
-            from .grepseek_agent import run_grepseek
-            # Official inference uses NO per-turn generation cap (only tool stdout
-            # is capped at 2048 tokens). A fixed 2048 generation cap truncates long
-            # <think> turns before the <tool_call>/<answer> block -> parse_errors.
-            gs_gen = args.grepseek_max_tokens if args.grepseek_max_tokens and args.grepseek_max_tokens > 0 else None
-            return run_grepseek(
-                ex, client=gs_client, model=gs_model, corpus_path=corpus_path,
-                max_turns=args.grepseek_max_turns, max_tokens=gs_gen,
-                tool_max_tokens=args.grepseek_tool_max_tokens,
-                temperature=args.grepseek_temperature, tokenizer=gs_tokenizer)
+                tokenizer=sr1_tokenizer, action_budget=4, max_tokens=1024,
+                retrieval_top_k=args.retrieval_top_k, temperature=0.7)
         elif args.agent == "search_o1":
             from .search_o1_agent import run_search_o1
             return run_search_o1(
                 ex, client=client, model=model, retriever=retriever,
-                max_turns=args.max_turns, max_tokens=args.max_tokens,
-                bm25_top_k=args.bm25_top_k, temperature=args.temperature)
-        elif args.agent == "ircot":
-            from .ircot_agent import run_ircot
-            return run_ircot(
-                ex, client=client, model=model, retriever=retriever,
-                max_turns=args.max_turns, max_tokens=args.max_tokens,
-                bm25_top_k=args.bm25_top_k, temperature=args.temperature)
+                dataset_name=args.dataset, tokenizer=tokenizer,
+                max_turns=15, max_tokens=8192,
+                retrieval_top_k=args.retrieval_top_k, temperature=0.7,
+                top_p=0.8, sampling_top_k=20)
         else:
             sys.exit(f"Unknown agent: {args.agent!r}")
 
     def _finalize(record, ex):
         row = record.to_dict()
+        row["dataset_manifest"] = dataset_manifest
+        row["method_config_id"] = method_cfg["method_config_id"]
+        row["generator_revision"] = model_revision
+        row["prompt_sha256"] = method_prompt_hash
+        row["retriever_manifest"] = retriever_manifest
+        row.update(method_harness)
         sc = score_example(record.prediction, record.gold_answers)
         row["em"], row["f1"] = sc["em"], sc["f1"]
         return row, sc
+
+    def _dispatch_with_retries(ex):
+        record = None
+        last_error = None
+        for attempt in range(args.retries + 1):
+            try:
+                record = _dispatch(ex)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                continue
+            if record.finish_reason != "api_error":
+                return record
+        if record is None and last_error is not None:
+            from .agent import AgentRecord
+            return AgentRecord(
+                id=str(ex.get("id", "")), question=ex.get("question", ""),
+                gold_answers=list(ex.get("golden_answers", [])),
+                finish_reason="exception", error=str(last_error))
+        return record
 
     n = len(examples)
     results = [None] * n
@@ -343,7 +335,7 @@ def run_eval(args: argparse.Namespace) -> None:
 
     if conc == 1:
         for i, ex in enumerate(examples):
-            row, _ = _record_result(i, _dispatch(ex))
+            row, _ = _record_result(i, _dispatch_with_retries(ex))
             _progress(i + 1, row)
             if output_path and (i + 1) % 50 == 0:
                 _save_jsonl(list(prior_done.values())
@@ -352,7 +344,7 @@ def run_eval(args: argparse.Namespace) -> None:
         from concurrent.futures import ThreadPoolExecutor, as_completed
         done = 0
         with ThreadPoolExecutor(max_workers=conc) as pool:
-            futs = {pool.submit(_dispatch, ex): i for i, ex in enumerate(examples)}
+            futs = {pool.submit(_dispatch_with_retries, ex): i for i, ex in enumerate(examples)}
             for fut in as_completed(futs):
                 i = futs[fut]
                 try:
@@ -362,7 +354,13 @@ def run_eval(args: argparse.Namespace) -> None:
                     ex = examples[i]
                     row = {"id": str(ex.get("id", "")), "question": ex.get("question", ""),
                            "gold_answers": ex.get("golden_answers", []), "prediction": None,
-                           "finish_reason": "exception", "error": str(e), "em": 0.0, "f1": 0.0}
+                           "finish_reason": "exception", "error": str(e), "em": 0.0, "f1": 0.0,
+                           "dataset_manifest": dataset_manifest,
+                           "method_config_id": method_cfg["method_config_id"],
+                           "generator_revision": model_revision,
+                           "prompt_sha256": method_prompt_hash,
+                           "retriever_manifest": retriever_manifest}
+                    row.update(method_harness)
                     results[i], scores[i] = row, {"em": 0.0, "f1": 0.0}
                 done += 1
                 if done % 20 == 0 or done == n:
@@ -377,7 +375,14 @@ def run_eval(args: argparse.Namespace) -> None:
         _save_jsonl(results, output_path)
         print(f"\nResults saved → {output_path}")
 
+    if args.full_eval:
+        result_ids = [str(row["id"]) for row in results]
+        try:
+            validate_exact_id_set(result_ids, expected_full_ids)
+        except ValueError as exc:
+            sys.exit(str(exc))
     n_answered = sum(1 for r in results if r.get("prediction") is not None)
+    scores = [{"em": float(r.get("em", 0)), "f1": float(r.get("f1", 0))} for r in results]
     metrics = aggregate(scores)
     _print_metrics(metrics, n_answered, len(results))
 
@@ -402,75 +407,42 @@ def main():
                         help="Max examples to evaluate")
     parser.add_argument("--offset", type=int, default=0,
                         help="Skip first N examples")
+    parser.add_argument("--full-eval", action="store_true",
+                        help="Require the complete canonical split; forbids --n/--offset")
 
     # Agent
     parser.add_argument("--agent", default="scaleseek", choices=_ALL_AGENTS)
-    parser.add_argument("--max-turns", type=int, default=8)
-    parser.add_argument("--retrieval-backend", choices=["bm25", "e5"], default="bm25",
-                        help="Retriever for scaleseek/bm25_rag/search_r1/search_o1: "
-                             "bm25 (Lucene, $BM25_INDEX_DIR) or e5 (dense FAISS, "
-                             "$E5_INDEX_DIR, intfloat/e5-base-v2)")
-    parser.add_argument("--bm25-top-k", type=int, default=5,
-                        help="Top-k for bm25_rag / agentir_rag / dr_dci pull / search_o1")
-    parser.add_argument("--bm25-k1", type=float, default=1.5,
-                        help="BM25 k1 for the bm25_rag sweep (see reports/metric_support.md)")
-    parser.add_argument("--bm25-b", type=float, default=0.75,
-                        help="BM25 b for the bm25_rag sweep")
+    parser.add_argument("--retriever", choices=["bm25", "e5", "qwen3_emb_4b"],
+                        default="bm25", help="Comparable retriever backend")
+    parser.add_argument("--retrieval-top-k", type=int, choices=[3], default=3,
+                        help="Frozen local-retriever top-k")
+    parser.add_argument("--retriever-device", default=None)
     parser.add_argument("--tokenizer", default=None,
-                        help="HF tokenizer name/path for exact tool-response token "
-                             "budgeting (scaleseek agent). Default: $LLM_TOKENIZER, "
-                             "else a ~4 char/token estimate.")
+                        help="Exact Qwen3.5 tokenizer for Search-O1/ScaleSeek and "
+                             "ScaleSeek tool-response token budgeting")
     parser.add_argument("--max-tool-response-tokens", type=int, default=2048,
                         help="Token budget per tool response for the scaleseek agent "
                              "(whole passages dropped to fit). Default 2048.")
-
-    # Corpus (for dci and grepseek)
-    parser.add_argument("--corpus-path", default=None,
-                        help="Path to wiki_corpus.jsonl (default: $CORPUS_PATH)")
 
     # Search-R1
     parser.add_argument("--search-r1-host", default=None)
     parser.add_argument("--search-r1-port", default=None,
                         help="vLLM port for Search-R1 (default: $SEARCH_R1_PORT or 8001)")
     parser.add_argument("--search-r1-model", default=None)
-
-    # GrepSeek  (paper-faithful defaults: temp 0.6, 6 turns, 2048-token stdout cap)
-    parser.add_argument("--grepseek-host", default=None)
-    parser.add_argument("--grepseek-port", default=None,
-                        help="vLLM port for GrepSeek model (default: $GREPSEEK_PORT or 8002)")
-    parser.add_argument("--grepseek-model", default=None)
-    parser.add_argument("--grepseek-temperature", type=float, default=0.6,
-                        help="GrepSeek sampling temperature (paper: 0.6)")
-    parser.add_argument("--grepseek-max-turns", type=int, default=6,
-                        help="GrepSeek assistant turns (paper: 6 = 5 tool + 1 answer)")
-    parser.add_argument("--grepseek-tokenizer", default=None,
-                        help="HF path of the GrepSeek checkpoint tokenizer, for the "
-                             "2048-token stdout cap (default: $GREPSEEK_TOKENIZER)")
-    parser.add_argument("--grepseek-max-tokens", type=int, default=0,
-                        help="Per-turn generation cap for GrepSeek. 0 = UNCAPPED "
-                             "(official; a fixed cap truncates <think> -> parse_errors).")
-    parser.add_argument("--grepseek-tool-max-tokens", type=int, default=2048,
-                        help="Tool stdout cap in tokens (official=2048, matches its "
-                             "SFT data). Ablation: 1024 / 4096.")
-
-    # AgentIR
-    parser.add_argument("--agentir-index-dir", default=None,
-                        help="Directory with prebuilt FAISS index (default: $AGENTIR_INDEX_DIR)")
-    parser.add_argument("--agentir-cache", default=None,
-                        help="Precomputed retrieval JSONL (scripts/precompute_agentir_retrieval.py); "
-                             "skips FAISS/embedding at eval time (for small-RAM nodes)")
-    parser.add_argument("--agentir-device", default="cpu",
-                        help="Device for AgentIR-4B embedding (cpu or cuda)")
+    parser.add_argument("--search-r1-tokenizer", default=None,
+                        help="Exact Search-R1 7B/14B checkpoint; required")
 
     # Main LLM
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", default=None)
     parser.add_argument("--model", default=None)
-    parser.add_argument("--max-tokens", type=int, default=2048)
-    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--generator-revision", default=None,
+                        help="Required in --full-eval; must match frozen config")
     parser.add_argument("--concurrency", type=int, default=1,
                         help="Number of examples to run in parallel against the vLLM "
                              "server (the server batches them). 1 = sequential.")
+    parser.add_argument("--retries", type=int, default=2,
+                        help="Retries per example after transient API errors")
 
     # Output
     parser.add_argument("--output", default=None,

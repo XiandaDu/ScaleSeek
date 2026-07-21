@@ -47,7 +47,7 @@ TOOL_SCHEMAS: list[dict] = [
                         "description": (
                             "BM25 k1 term-frequency saturation (0.5–3.0). "
                             "Higher → rewards exact-term repetition more. "
-                            "Default 1.5. Use ~2.0 for rare named entities."
+                            "Default 1.2. Use ~2.0 for rare named entities."
                         ),
                     },
                     "b": {

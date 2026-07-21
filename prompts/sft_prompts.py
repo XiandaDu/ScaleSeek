@@ -220,7 +220,8 @@ Output exactly one JSON object:
 
 # ============================================================
 # Phase C: Planner (forward generation)
-# PLANNER_SYSTEM is the ScaleSeek system prompt (same as prompts/system_prompt.txt).
+# PLANNER_SYSTEM is the SFT planner template. It deliberately interpolates the
+# tutor corpus description and is distinct from the runtime prompt constant.
 # PLANNER_USER is identical to GrepSeek.
 # ============================================================
 

@@ -10,7 +10,7 @@ Models") interleaves ONE continuous reasoning stream with retrieval:
          to the SAME generation stream and resumes generation
     ... until EOS; final answer = last \\boxed{...}.
 
-This mirrors the official implementation (github.com/sunnynexus/Search-o1,
+This mirrors the pinned official implementation (github.com/RUC-NLPIR/Search-o1,
 scripts/run_search_o1.py): raw completions with a stop token and inline injection —
 NOT a chat-turn loop (a chat loop breaks the reasoning chain and is unfaithful).
 Prompts/special tokens are verbatim from the official scripts/prompts.py.
@@ -28,8 +28,8 @@ import re
 import time
 from typing import Any, Optional
 
-from .bm25_retriever import BM25Retriever
-from .agent import AgentRecord, _chat_completion
+from .retrievers import Retriever
+from .agent import AgentRecord
 
 BEGIN_SEARCH_QUERY = "<|begin_search_query|>"
 END_SEARCH_QUERY = "<|end_search_query|>"
@@ -38,7 +38,7 @@ END_SEARCH_RESULT = "<|end_search_result|>"
 
 # --- Verbatim prompts from sunnynexus/Search-o1 scripts/prompts.py ------------
 
-def _multiqa_instruction(max_search_limit: int) -> str:
+def _singleqa_instruction(max_search_limit: int) -> str:
     return (
         "You are a reasoning assistant with the ability to perform web searches to help "
         "you answer the user's question accurately. You have special tools:\n\n"
@@ -48,6 +48,46 @@ def _multiqa_instruction(max_search_limit: int) -> str:
         "You can repeat the search process multiple times if necessary. The maximum number of "
         f"search attempts is limited to {max_search_limit}.\n\n"
         "Once you have all the information you need, continue your reasoning.\n\n"
+        "Example:\n"
+        "Question: \"Who got the first Nobel Prize in Physics?\"\n"
+        "Assistant thinking steps:\n"
+        "- I need to find out who was awarded the first Nobel Prize in Physics.\n\n"
+        "Assistant:\n"
+        f"{BEGIN_SEARCH_QUERY}first Nobel Prize in Physics winner{END_SEARCH_QUERY}\n\n"
+        "(System returns processed information from relevant web pages)\n\n"
+        "Assistant continues reasoning with the new information...\n\n"
+        "Remember:\n"
+        f"- Use {BEGIN_SEARCH_QUERY} to request a web search and end with {END_SEARCH_QUERY}.\n"
+        "- When done searching, continue your reasoning.\n\n"
+    )
+
+
+def _multiqa_instruction(max_search_limit: int) -> str:
+    return (
+        "You are a reasoning assistant with the ability to perform web searches to help "
+        "you answer the user's question accurately. You have special tools:\n\n"
+        f"- To perform a search: write {BEGIN_SEARCH_QUERY} your query here {END_SEARCH_QUERY}.\n"
+        "Then, the system will search and analyze relevant web pages, then provide you with "
+        f"helpful information in the format {BEGIN_SEARCH_RESULT} ...search results... {END_SEARCH_RESULT}.\n\n"
+        "You can repeat the search process multiple times if necessary. The maximum number of "
+        f"search attempts is limited to {max_search_limit}.\n\n"
+        "Once you have all the information you need, continue your reasoning.\n\n"
+        "Example:\n"
+        "Question: \"Alice David is the voice of Lara Croft in a video game developed by which company?\"\n"
+        "Assistant thinking steps:\n"
+        "- I need to find out who voices Lara Croft in the video game.\n"
+        "- Then, I need to determine which company developed that video game.\n\n"
+        "Assistant:\n"
+        f"{BEGIN_SEARCH_QUERY}Alice David Lara Croft voice{END_SEARCH_QUERY}\n\n"
+        "(System returns processed information from relevant web pages)\n\n"
+        "Assistant thinks: The search results indicate that Alice David is the voice of Lara Croft in a specific video game. Now, I need to find out which company developed that game.\n\n"
+        "Assistant:\n"
+        f"{BEGIN_SEARCH_QUERY}video game developed by Alice David Lara Croft{END_SEARCH_QUERY}\n\n"
+        "(System returns processed information from relevant web pages)\n\n"
+        "Assistant continues reasoning with the new information...\n\n"
+        "Remember:\n"
+        f"- Use {BEGIN_SEARCH_QUERY} to request a web search and end with {END_SEARCH_QUERY}.\n"
+        "- When done searching, continue your reasoning.\n\n"
     )
 
 
@@ -83,9 +123,9 @@ def _reasonchain_instruction(prev_reasoning: str, search_query: str, document: s
         "- **If the web pages do not provide any helpful information for current search query:** "
         "Output the following text.\n\n**Final Information**\n\nNo helpful information found.\n\n"
         "**Inputs:**\n"
-        f"- **Previous Reasoning Steps:**\n{prev_reasoning}\n\n"
-        f"- **Current Search Query:**\n{search_query}\n\n"
-        f"- **Searched Web Pages:**\n{document}\n\n"
+        f"- **Previous Reasoning Steps:**  \n{prev_reasoning}\n\n"
+        f"- **Current Search Query:**  \n{search_query}\n\n"
+        f"- **Searched Web Pages:**  \n{document}\n\n"
         f'Now you should analyze each web page and find helpful information based on the current '
         f'search query "{search_query}" and previous reasoning steps.\n'
     )
@@ -135,28 +175,46 @@ def _extract_answer(text: str) -> str | None:
     return cleaned or None
 
 
-def _format_docs(hits: list[dict], max_chars: int = 1500) -> str:
+def _format_docs(hits: list[dict]) -> str:
     return "\n\n".join(
-        f"Web Page {i+1}:\n{h.get('text', '')[:max_chars]}" for i, h in enumerate(hits)
+        f"Web Page {i+1}:\n{h.get('text', '')}" for i, h in enumerate(hits)
     )
 
 
-def _apply_chat_template(user_content: str) -> str:
-    """Hardcoded ChatML (Qwen3) — completions API needs the raw prompt text.
-    The model opens its own <think> block after 'assistant\\n'."""
-    return (
-        f"<|im_start|>user\n{user_content}<|im_end|>\n"
-        "<|im_start|>assistant\n"
-    )
+def _truncate_previous_reasoning(reasoning: str) -> str:
+    """Verbatim Search-O1 step-selection logic before Reason-in-Documents."""
+    steps = reasoning.replace("\n\n", "\n").split("\n")
+    rendered = "".join(f"Step {i + 1}: {step}\n\n" for i, step in enumerate(steps))
+    parts = rendered.split("\n\n")
+    if len(parts) <= 5:
+        return "\n\n".join(parts).strip("\n")
+    kept = ""
+    for i, step in enumerate(parts):
+        if i == 0 or i >= len(parts) - 4 or BEGIN_SEARCH_QUERY in step \
+                or BEGIN_SEARCH_RESULT in step:
+            kept += step + "\n\n"
+        elif not kept.endswith("\n\n...\n\n"):
+            kept += "...\n\n"
+    return kept.strip("\n")
+
+
+def _apply_chat_template(user_content: str, tokenizer: Any) -> str:
+    if tokenizer is None or not tokenizer.chat_template:
+        raise ValueError("Search-O1 requires the Qwen3.5-9B checkpoint tokenizer")
+    return tokenizer.apply_chat_template(
+        [{"role": "user", "content": user_content}],
+        add_generation_prompt=True, tokenize=False)
 
 
 def _completion(client: Any, *, model: str, prompt: str, max_tokens: int,
-                temperature: float, stop: list) -> tuple[Optional[str], Optional[str], Optional[str]]:
+                temperature: float, top_p: float, sampling_top_k: int,
+                stop: list) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """Return (text, stop_reason_or_finish, error). Clamps max_tokens on context overflow."""
     def _create(mt):
         return client.completions.create(
             model=model, prompt=prompt, max_tokens=mt,
-            temperature=temperature, top_p=1.0, stop=stop,
+            temperature=temperature, top_p=top_p, stop=stop,
+            extra_body={"top_k": sampling_top_k},
         )
     try:
         resp = _create(max_tokens)
@@ -184,17 +242,40 @@ def _completion(client: Any, *, model: str, prompt: str, max_tokens: int,
     return ch.text or "", (stop_reason if stop_reason else ch.finish_reason), None
 
 
+def _reason_in_documents(client: Any, *, model: str, prompt: str,
+                         max_tokens: int) -> tuple[str | None, str | None]:
+    try:
+        response = client.chat.completions.create(
+            model=model, messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens, temperature=0.7, top_p=0.8,
+            extra_body={"top_k": 20, "repetition_penalty": 1.05})
+    except Exception as exc:  # noqa: BLE001
+        return None, str(exc)
+    if not response.choices:
+        return None, "API returned no choices"
+    message = response.choices[0].message
+    content = message.content or ""
+    reasoning = (getattr(message, "reasoning_content", None)
+                 or getattr(message, "reasoning", None) or "")
+    return ((f"<think>\n{reasoning.strip()}\n</think>\n{content}"
+             if reasoning.strip() else content), None)
+
+
 def run_search_o1(
     example: dict,
     *,
     client: Any,
     model: str,
-    retriever: BM25Retriever,
-    max_turns: int = 10,
+    retriever: Retriever,
+    dataset_name: str,
+    tokenizer: Any,
+    max_turns: int = 15,
     max_tokens: int = 2048,
-    bm25_top_k: int = 5,
-    temperature: float = 0.0,
-    max_search_limit: int = 5,
+    retrieval_top_k: int = 3,
+    temperature: float = 0.7,
+    top_p: float = 0.8,
+    sampling_top_k: int = 20,
+    max_search_limit: int | None = None,
 ) -> AgentRecord:
     """Official Search-o1 loop: continuous completions stream + inline injection."""
     ex_id = str(example.get("id", ""))
@@ -203,16 +284,21 @@ def run_search_o1(
     record = AgentRecord(id=ex_id, question=question, gold_answers=golds)
     t_start = time.perf_counter()
 
-    user_content = _multiqa_instruction(max_search_limit) + _task_instruction_openqa(question)
-    prompt_text = _apply_chat_template(user_content)
+    multi_hop = dataset_name in {"hotpotqa", "2wikimultihopqa", "musique", "bamboogle"}
+    max_search_limit = max_search_limit or (10 if multi_hop else 5)
+    instruction = _multiqa_instruction if multi_hop else _singleqa_instruction
+    user_content = instruction(max_search_limit) + _task_instruction_openqa(question)
+    prompt_text = _apply_chat_template(user_content, tokenizer)
     generated_total = ""
     n_searches = 0
+    executed_search_queries: set[str] = set()
 
     for _ in range(max_turns):
         t_llm = time.perf_counter()
         text, stop_or_finish, err = _completion(
             client, model=model, prompt=prompt_text,
-            max_tokens=max_tokens, temperature=temperature,
+            max_tokens=max_tokens, temperature=temperature, top_p=top_p,
+            sampling_top_k=sampling_top_k,
             stop=[END_SEARCH_QUERY],
         )
         record.llm_time_s += time.perf_counter() - t_llm
@@ -261,31 +347,33 @@ def run_search_o1(
         prompt_text += cut_text + "\n\n"
         generated_total += cut_text + "\n\n"
 
-        if n_searches >= max_search_limit:
+        if query in executed_search_queries:
+            info = "You have searched this query. Please refer to previous results."
+        elif n_searches >= max_search_limit:
             # Official behavior when the search budget is exhausted.
             info = ("The maximum search limit is exceeded. "
                     "You are not allowed to search.")
         else:
             n_searches += 1
+            executed_search_queries.add(query)
             record.n_tool_calls += 1
-            record.n_bm25_calls += 1
+            record.n_bm25_calls += int(retriever.__class__.__name__ == "FixedBM25Retriever")
             t_tool = time.perf_counter()
-            hits = retriever.retrieve(query, top_k=bm25_top_k)
+            hits = retriever.retrieve(query, top_k=retrieval_top_k)
             record.tool_time_s += time.perf_counter() - t_tool
             doc_ids = [h["doc_id"] for h in hits]
             record.workspace_doc_ids = list(dict.fromkeys(record.workspace_doc_ids + doc_ids))
             record.bm25_calls.append({
-                "query": query, "k1": None, "b": None, "top_k": bm25_top_k,
+                "query": query, "k1": getattr(retriever, "k1", None),
+                "b": getattr(retriever, "b", None), "top_k": retrieval_top_k,
                 "mode": "merge", "doc_ids": doc_ids,
             })
             # Reason-in-Documents condensation (official; separate LLM call).
             t_llm = time.perf_counter()
-            condensed, cerr = _chat_completion(
-                client, model=model,
-                messages=[{"role": "user", "content": _reasonchain_instruction(
-                    generated_total[-10000:], query, _format_docs(hits))}],
-                temperature=temperature, top_p=1.0, max_tokens=max_tokens,
-            )
+            condensed, cerr = _reason_in_documents(
+                client, model=model, max_tokens=max_tokens,
+                prompt=_reasonchain_instruction(
+                    _truncate_previous_reasoning(generated_total), query, _format_docs(hits)))
             record.llm_time_s += time.perf_counter() - t_llm
             info = "No helpful information found."
             if not cerr and condensed:

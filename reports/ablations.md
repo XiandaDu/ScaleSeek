@@ -1,4 +1,7 @@
-# 消融实验记录（2026-07-13）
+# 消融实验记录（2026-07-13，历史结果）
+
+> `legacy_invalid_for_main_table`：本文件记录 Phase 1 之前的 4B/抽样实验，
+> 仅供审计，不得被新 runner resume、合并或作为 Phase 2/3 正式结果。
 
 ## 1. scaleseek prompt：参数数字给不给（任务 #11）
 
