@@ -17,8 +17,9 @@ Status: **Phase 1 implementation complete; final execution tests are assigned to
 - Independent Qwen3.5-9B BrowseComp-Plus Appendix-F judge.
 - Full-eval sampling guards, retries, strict resume provenance, exact ID-set
   validation, method fingerprints and normalized external-result adapter.
-- Project-owned prompts migrated to Python constants; training, evaluation,
-  snapshots and provenance consume and hash the same in-memory strings.
+- Project-authored/modified prompts live under `prompts/`; byte-identical
+  third-party prompts live beside the corresponding evaluator under `eval/`.
+  Training, evaluation, snapshots and provenance consume the same constants.
 - Deterministic Wiki passage-to-article reconstruction for the RISE structured
   corpus pipeline.
 - Cleanup of obsolete 4B/3B/1500 launch scripts and mislabeled baseline code;
@@ -26,7 +27,8 @@ Status: **Phase 1 implementation complete; final execution tests are assigned to
 
 ## Verification performed
 
-- `19 passed` offline tests (prompt snapshots, shared train/eval prompt registry,
+- `20 passed` offline tests (prompt snapshots, prompt-placement contracts,
+  shared train/eval prompt registry,
   parsers, fake loops, pooling,
   full-data guards, resume, retrieval merge and harness invariants).
 - Official Search-R1/Search-O1 prompt byte diff passed at frozen commits.

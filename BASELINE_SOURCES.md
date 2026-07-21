@@ -18,11 +18,23 @@ against the pinned source below.
 ## Direct and RAG
 
 GrepSeek reports Direct and RAG comparisons, but its public repository does not
-publish the exact prompts used for every table baseline. The local prompts are
+contain Direct/RAG runner prompts, and the paper's prompt appendix documents the
+GrepSeek training/agent prompts rather than the Direct/RAG reader strings. The
+local prompts are
 therefore project-defined as `prompts.direct:PROMPT` and `prompts.rag:PROMPT`,
 and hash-pinned over the exact Python strings sent to the model; they must never
 be described as official GrepSeek prompts. All three RAG retrievers share the
 same prompt, passage rendering, top-3 and context budget.
+
+## ScaleSeek SFT prompt adaptation
+
+`prompts.sft_prompts` starts from GrepSeek's frozen cold-start pipeline but is
+substantively modified because GrepSeek emits shell commands over a corpus file,
+whereas ScaleSeek must emit `bm25_retrieve`, `grep_workspace`, and `read_doc`
+calls over a bounded workspace. The only byte-identical fragments still reused,
+`PLANNER_USER` and `FINAL_ANSWER_USER`, live in
+`eval.grepseek_sft_prompts` and are byte-diffed against the pinned GrepSeek
+checkout.
 
 ## Search-R1
 
@@ -102,7 +114,9 @@ same prompt, passage rendering, top-3 and context budget.
 - BCP TOC asset:
   `Tevatron/browsecomp-plus-md-toc-gpt5.4-nano@9ae6db9bb5c006cf77b82d6835e3df43a6774d6f`.
 - Independent BCP judging uses the verbatim Appendix-F prompt in
-  `scripts/judge_browsecomp_plus.py`, Qwen3.5-9B, temperature 0 and top-p 1.
+  `eval/browsecomp_plus_judge.py`; `scripts/judge_browsecomp_plus.py` is only the
+  execution wrapper. The prompt is byte-diffed against the pinned RISE source.
+  Qwen3.5-9B runs it with temperature 0 and top-p 1.
 
 ## AgentIR
 

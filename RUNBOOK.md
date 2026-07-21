@@ -2,6 +2,33 @@
 
 All formal runs use the immutable settings in `configs/baselines.yaml` and
 record dataset/config/prompt/model identifiers in every result row.
+The commands are intended for the experiment server, not this code-authoring
+machine, and remain ordered from cheap validation to expensive full runs.
+
+## Required shell initialization
+
+Every command in this runbook must be run from a shell initialized by the
+repository setup script. Do this first on each new compute-node shell or tmux
+pane; do not replace it with a partial set of hand-written exports:
+
+```bash
+cd /data/rech/mofengra/ScaleSeek
+source setup_env.sh
+```
+
+`source` is required (not `bash setup_env.sh`) so `REPO`, `DATA`, `DATASETS`,
+`CORPUS_DIR`, `CORPUS_FILE`, `BM25_INDEX_DIR`, the LLM endpoint variables, and
+the `scaleseek` conda environment remain active in the current shell. The setup
+script also changes directory to `$REPO`; all relative commands below rely on
+that behavior.
+
+The existing corpus-I/O observation remains relevant when choosing server
+parallelism: start DCI-Agent-Lite with `--max-concurrency 2` or lower because
+concurrent full-corpus grep scans can thrash disk. In the earlier local DCI run,
+concurrency 16 caused 44% grep timeouts and reduced EM from 0.274 to 0.179;
+GrepSeek's tighter commands tolerated about `--parallel 16` with 1.6% timeouts.
+These are operational starting points, not method hyperparameters—record and
+adjust them only after measuring the target server.
 
 Project-owned prompts are Python constants under `prompts/`. The stable runtime
 identifiers are `prompts.direct:PROMPT`, `prompts.rag:PROMPT`, and
@@ -28,13 +55,12 @@ documented protocol.
 
 ## Environment
 
+`setup_env.sh` owns the core paths. Define only the additional Phase-1 index
+and tokenizer locations after sourcing it:
+
 ```bash
-export CORPUS_FILE=/data/wiki18/wiki_corpus.jsonl
-export CORPUS_DIR=/data/wiki18
-export BM25_INDEX_DIR=/data/indexes/wiki18-bm25
-export E5_INDEX_DIR=/data/indexes/wiki18-e5
-export QWEN3_EMB_INDEX_DIR=/data/indexes/wiki18-qwen3-emb-4b
-export DATASETS=/data/datasets
+export E5_INDEX_DIR=$DATA/e5_index
+export QWEN3_EMB_INDEX_DIR=$DATA/qwen3_embedding_4b_index
 export LLM_TOKENIZER=Qwen/Qwen3.5-9B
 ```
 
@@ -79,12 +105,13 @@ python scripts/run_official_baseline.py grepseek --repo-root /data/official-base
   --full-eval --model-revision a79563970cfdd2ced3cc5fde481737d0ebea6fa4 -- --model alireza7/GrepSeek-Qwen3.5-9B-GRPO \
   --tokenizer alireza7/GrepSeek-Qwen3.5-9B-GRPO --max_assistant_turns 6 \
   --max_tokens_per_turn 0 --tool_max_tokens 2048 --temperature 0.6 --top_p 1.0 \
+  --parallel 16 \
   --input "$DATASET_JSONL" --corpus_dir "$GREPSEEK_CORPUS" --out_dir "$OUT"
 
 # DCI
 python scripts/run_official_baseline.py dci --repo-root /data/official-baselines \
   --full-eval --model-revision c202236235762e1c871ad0ccb60c8ee5ba337b9a -- --model Qwen/Qwen3.5-9B --max-turns 300 \
-  --runtime-context-level level3 --tools read,bash --dataset "$DATASET" \
+  --runtime-context-level level3 --tools read,bash --max-concurrency 2 --dataset "$DATASET" \
   --corpus-dir "$DCI_CORPUS" --output-root "$OUT"
 
 # DR-DCI (Wiki uses E5 pull; BCP uses the official Qwen3-Embedding-8B service)

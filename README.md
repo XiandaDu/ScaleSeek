@@ -11,8 +11,8 @@ workspace and then use `grep_workspace` / `read_doc` for fine-grained search.
 - `BASELINE_SOURCES.md`: paper, prompt and harness provenance.
 - `RUNBOOK.md`: executable commands and action/search budgets.
 - `cleanup_manifest.json`: removed approximations and obsolete launch scripts.
-- `prompts/*.py`: versioned prompt constants; local runtime code performs no
-  prompt-text file I/O.
+- `prompts/*.py`: project-authored or project-modified prompt constants.
+- `eval/*`: verbatim third-party prompts beside their corresponding evaluator.
 
 Prompt-based generators and the BrowseComp-Plus judge use
 `Qwen/Qwen3.5-9B@c202236235762e1c871ad0ccb60c8ee5ba337b9a`. Search-R1 uses only
@@ -58,11 +58,19 @@ and rejects method parameters that violate the frozen Phase-1 profile.
 
 ## Indexes
 
+On the experiment server, initialize the repository environment before running
+any command:
+
 ```bash
-python scripts/build_corpus_manifest.py --corpus "$CORPUS_FILE" --out /data/indexes/wiki18-corpus.json
-python scripts/build_bm25_index.py --corpus-dir "$CORPUS_DIR" --index-dir "$BM25_INDEX_DIR" --corpus-manifest /data/indexes/wiki18-corpus.json
-python scripts/build_e5_index.py --backend e5 --corpus "$CORPUS_FILE" --out "$E5_INDEX_DIR" --corpus-manifest /data/indexes/wiki18-corpus.json
-python scripts/build_qwen3_embedding_index.py --corpus "$CORPUS_FILE" --out "$QWEN3_EMB_INDEX_DIR" --corpus-manifest /data/indexes/wiki18-corpus.json
+cd /data/rech/mofengra/ScaleSeek
+source setup_env.sh
+```
+
+```bash
+python scripts/build_corpus_manifest.py --corpus "$CORPUS_FILE" --out "$DATA/indexes/wiki18-corpus.json"
+python scripts/build_bm25_index.py --corpus-dir "$CORPUS_DIR" --index-dir "$BM25_INDEX_DIR" --corpus-manifest "$DATA/indexes/wiki18-corpus.json"
+python scripts/build_e5_index.py --backend e5 --corpus "$CORPUS_FILE" --out "$E5_INDEX_DIR" --corpus-manifest "$DATA/indexes/wiki18-corpus.json"
+python scripts/build_qwen3_embedding_index.py --corpus "$CORPUS_FILE" --out "$QWEN3_EMB_INDEX_DIR" --corpus-manifest "$DATA/indexes/wiki18-corpus.json"
 ```
 
 The dense implementations use the frozen model revisions, E5 query/passage

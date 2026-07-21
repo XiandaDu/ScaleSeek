@@ -5,14 +5,12 @@ from prompts.direct import PROMPT as DIRECT_PROMPT
 from prompts.rag import PROMPT as RAG_PROMPT
 from prompts.scaleseek_prompt import PROMPT as SCALESEEK_PROMPT
 from prompts.scaleseek_prompt_noparams import PROMPT as SCALESEEK_NOPARAMS_PROMPT
-from prompts.system_prompt import PROMPT as LEGACY_SYSTEM_PROMPT
 
 _PROMPTS = {
     "direct": DIRECT_PROMPT,
     "rag": RAG_PROMPT,
     "scaleseek_prompt": SCALESEEK_PROMPT,
     "scaleseek_prompt_noparams": SCALESEEK_NOPARAMS_PROMPT,
-    "system_prompt": LEGACY_SYSTEM_PROMPT,
 }
 _ALIASES = {
     # Older training code used this logical name even though no matching

@@ -20,7 +20,7 @@ from eval.qwen3_embedding_retriever import format_query
 from eval.qwen3_embedding_retriever import last_token_pool
 from eval.e5_retriever import format_query as format_e5_query, masked_mean_pool
 from scripts.run_official_baseline import _validate
-from scripts.judge_browsecomp_plus import PROMPT as BCP_JUDGE_PROMPT
+from eval.browsecomp_plus_judge import BCP_F_JUDGE_PROMPT
 from eval.retrievers import merge_ranked_hits
 from eval.run_eval import (validate_exact_id_set, validate_resume_row,
                            validate_retriever_manifest)
@@ -174,14 +174,13 @@ def test_prompt_snapshots():
         "search_o1_multi_10": so1._multiqa_instruction(10),
         "search_o1_task": so1._task_instruction_openqa("{question}"),
         "search_o1_rid": so1._reasonchain_instruction("{reasoning}", "{query}", "{documents}"),
-        "browsecomp_plus_appendix_f_judge": BCP_JUDGE_PROMPT,
+        "browsecomp_plus_appendix_f_judge": BCP_F_JUDGE_PROMPT,
     }
     for module_name, logical_name in {
         "prompts.direct:PROMPT": "direct",
         "prompts.rag:PROMPT": "rag",
         "prompts.scaleseek_prompt:PROMPT": "scaleseek_prompt",
         "prompts.scaleseek_prompt_noparams:PROMPT": "scaleseek_prompt_noparams",
-        "prompts.system_prompt:PROMPT": "system_prompt",
     }.items():
         values[module_name] = prompt_registry.load(logical_name)
     assert {key: hashlib.sha256(value.encode()).hexdigest()
@@ -193,6 +192,13 @@ def test_training_and_eval_share_canonical_scaleseek_prompt():
     from prompts.scaleseek_prompt import PROMPT
     assert prompt_registry.load("scaleseek") == PROMPT
     assert _build_system_prompt() == PROMPT
+
+
+def test_verbatim_grepseek_sft_prompts_live_under_eval():
+    from eval.grepseek_sft_prompts import FINAL_ANSWER_USER, PLANNER_USER
+    from prompts import sft_prompts
+    assert sft_prompts.PLANNER_USER is PLANNER_USER
+    assert sft_prompts.FINAL_ANSWER_USER is FINAL_ANSWER_USER
 
 
 def test_search_r1_fake_loop_uses_checkpoint_template_and_top3():

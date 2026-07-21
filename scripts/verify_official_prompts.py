@@ -40,12 +40,24 @@ def _search_r1_prompt(path: Path, question: str) -> str:
     raise RuntimeError("official Search-R1 prompt assignment not found")
 
 
+def _literal_assignment(path: Path, name: str) -> str:
+    tree = ast.parse(path.read_text())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == name
+                for target in node.targets):
+            value = ast.literal_eval(node.value)
+            if isinstance(value, str):
+                return value
+    raise RuntimeError(f"{path}: literal string assignment {name} not found")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, required=True)
     args = parser.parse_args()
     repos = yaml.safe_load((ROOT / "configs/official_repos.yaml").read_text())["repos"]
-    for key in ("search_r1", "search_o1", "grepseek"):
+    for key in ("search_r1", "search_o1", "grepseek", "rise"):
         _verify_commit(args.repo_root / key, repos[key]["commit"])
 
     from eval import search_r1_agent as local_r1
@@ -60,6 +72,14 @@ def main() -> None:
     assert local_o1._task_instruction_openqa(q) == o1.get_task_instruction_openqa(q)
     assert local_o1._reasonchain_instruction("R", "Q", "D") == \
         o1.get_webpage_to_reasonchain_instruction("R", "Q", "D")
+
+    from eval.browsecomp_plus_judge import BCP_F_JUDGE_PROMPT
+    from eval.grepseek_sft_prompts import FINAL_ANSWER_USER, PLANNER_USER
+    grepseek_sft = args.repo_root / "grepseek/sft/data_generation/utils/prompts.py"
+    assert PLANNER_USER == _literal_assignment(grepseek_sft, "PLANNER_USER")
+    assert FINAL_ANSWER_USER == _literal_assignment(grepseek_sft, "FINAL_ANSWER_USER")
+    rise_bcp = args.repo_root / "rise/src/rise/bcp_retrieval_agent.py"
+    assert BCP_F_JUDGE_PROMPT == _literal_assignment(rise_bcp, "BCP_F_JUDGE_PROMPT")
 
     sys.path.insert(0, str(args.repo_root / "grepseek"))
     from inference.agent import build_system_prompt

@@ -26,7 +26,7 @@
 - AgentIR 固定使用 [`Tevatron/AgentIR-4B`](https://huggingface.co/Tevatron/AgentIR-4B) 作为 reasoning-aware retriever；其回答 generator 仍使用 Qwen3.5-9B。
 - BrowseComp-Plus 的 judge 统一使用 Qwen3.5-9B。agent 和 judge 必须使用独立、明确记录的 prompt；不得把 agent 自评当作正式判分。
 - 所有 Hugging Face 模型必须在配置 manifest 中固定 `repo_id + revision/commit hash + dtype`，不能只记录可漂移的 `main`。
-- 本项目自有 prompt 必须作为 `prompts/*.py` 中的 Python 常量保存；训练、评测和 provenance 必须引用同一个常量并对实际传给模型的字符串计算 hash。官方外部 harness 的 prompt 路径仍按其固定上游 commit 记录。
+- 本项目自写或实质修改的 prompt 必须作为 `prompts/*.py` 中的 Python 常量保存；逐字照抄的第三方 prompt 放在对应 `eval/*.py` 中并自动与固定上游 commit 做 byte diff。训练、评测和 provenance 必须引用同一个常量并对实际传给模型的字符串计算 hash。只由官方外部 harness 消费的 prompt 保留在固定上游 checkout，不在本项目重复复制。
 
 ### 统一检索器矩阵
 
