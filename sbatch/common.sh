@@ -90,25 +90,34 @@ stop_vllm() {
   fi
 }
 
-sane() {  # sane <results.jsonl> -- refuse mostly-api_error outputs (fake-success guard)
+sane() {  # sane <results.jsonl> -- refuse mostly-api_error or parroted outputs
   "$PY" - "$1" <<'PYEOF'
-import json, sys
+import collections, json, sys
 path = sys.argv[1]
 total = err = 0
+preds = collections.Counter()
 with open(path) as fh:
     for line in fh:
         line = line.strip()
         if not line:
             continue
         total += 1
-        if "api_error" in json.dumps(json.loads(line)).lower():
+        row = json.loads(line)
+        if "api_error" in json.dumps(row).lower():
             err += 1
+        preds[str(row.get("prediction", "")).strip().lower()] += 1
 if total == 0:
     sys.exit(f"SANE-FAIL {path}: empty results")
 frac = err / total
 print(f"[sane] {path}: {total} rows, api_error rows {err} ({frac:.1%})")
 if frac > 0.2:
     sys.exit(f"SANE-FAIL {path}: api_error fraction {frac:.1%} > 20%")
+# Parrot guard: a template placeholder echoed as the "answer" makes most
+# predictions identical (2026-07-22: direct/rag returned 'your answer here').
+if total >= 8:
+    top, top_n = preds.most_common(1)[0]
+    if top_n / total > 0.8:
+        sys.exit(f"SANE-FAIL {path}: {top_n}/{total} identical predictions ({top[:60]!r})")
 PYEOF
 }
 

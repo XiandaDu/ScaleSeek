@@ -55,7 +55,7 @@ methods:
     max_new_tokens: 8192
     prompt_provenance: project_defined
     prompt_module: prompts.direct:PROMPT
-    prompt_sha256: 094b235323b146dea01d5db61847788e67cd5560fde5a828253ba5ab3a3e9115
+    prompt_sha256: 019d2e7bbd9649a1ced06c1fbf27b966b5c796352f17796bcce3aa60496f5cd8
 
   rag:
     runner: local
@@ -68,7 +68,7 @@ methods:
     max_new_tokens: 8192
     prompt_provenance: project_defined_grepseek_protocol
     prompt_module: prompts.rag:PROMPT
-    prompt_sha256: 81a9c4338896a2c134a6ae4fab3feff442a8c373430353202253f16c49f0f0eb
+    prompt_sha256: 202e3970605d300c54ac474a2f589a069d3597eb965456224fc1c2c9eb4730fd
 
   search_r1:
     runner: local_official_protocol
