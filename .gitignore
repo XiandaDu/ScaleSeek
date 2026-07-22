@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ScaleSeek runtime state (never commit)
+logs/
+sbatch/queue_lane*.txt

@@ -52,3 +52,17 @@ server must execute the following final acceptance runs:
 
 These are execution tests, not unfinished local implementation. Phase 2 starts
 only after they pass on the server.
+
+## 2026-07-21: server acceptance + Phase 2 launched via SLURM
+
+The cluster is now SLURM-managed (partition `rali`, QOS: 2 running / 4 queued
+jobs per user). The handoff items above were converted into a self-advancing
+job chain under `sbatch/` (see `sbatch/submit_phase2.sh` for the topology):
+`p0_assets` (pinned downloads, PopQA preflight, corpus/index manifests) gates
+`p1_accept` (real-model smokes, judge closure, index stability), which launches
+lane A (direct→rag→scaleseek→search_o1→grepseek→dci→agentir-encode), lane B
+(Search-R1 matrix), the Qwen3-Embedding-4B index build on octal25, and lane D
+(qwen3_emb_4b column). Obsolete 3B/4B checkpoints and all pre-audit results/
+logs were deleted per `cleanup_manifest.json` with user authorization.
+Open items requiring wiring or a user decision before submission: RISE (TOC
+asset scale), DR-DCI (retriever service), AgentIR (tevatron encode flags).

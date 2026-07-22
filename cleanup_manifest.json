@@ -2,21 +2,80 @@
   "schema_version": 1,
   "policy": "Delete only after the replacement entry point exists; preserve historical result JSONL and mark it legacy_invalid_for_main_table.",
   "deleted": [
-    {"path": "eval/dci_agent.py", "reason": "self-written 8-turn approximation", "replacement": "scripts/run_official_baseline.py dci"},
-    {"path": "prompts/dci_prompt.txt", "reason": "self-written prompt", "replacement": "DCI-Agent-Lite prompts/system_prompt.txt at frozen commit"},
-    {"path": "eval/agentir_retriever.py", "reason": "raw-question RAG incorrectly named AgentIR", "replacement": "official AgentIR reasoning-aware search agent"},
-    {"path": "scripts/build_agentir_index.py", "reason": "index format for obsolete static-RAG approximation", "replacement": "official AgentIR evaluation harness/index"},
-    {"path": "scripts/precompute_agentir_retrieval.py", "reason": "raw-question static retrieval cache", "replacement": "official reasoning-aware interactive retrieval"},
-    {"path": "eval/ircot_agent.py", "reason": "zero-shot approximation; official repo has no PopQA adapter", "replacement": "none; IRCoT removed from PopQA matrix"},
-    {"path": "prompts/bm25_rag.txt", "reason": "backend-specific obsolete name and prompt", "replacement": "prompts.rag:PROMPT"},
-    {"path": "logs/*.sh", "reason": "formal launch scripts contain Qwen3-4B, Search-R1 3B, n=1500, obsolete agent names, or unfrozen parameters", "replacement": "RUNBOOK.md commands and frozen YAML configs"}
-    ,{"path": "RESUME_STATE.md", "reason": "obsolete operational instructions point to deleted launch scripts and invalid partial runs", "replacement": "RUNBOOK.md"}
-    ,{"path": "eval/grepseek_agent.py + eval/shell_tool.py", "reason": "local tool validation/payload diverged from official harness", "replacement": "official GrepSeek inference.run at frozen commit"}
-    ,{"path": "scripts/convert_dr_dci_output.py", "reason": "DR-DCI-only ad hoc schema converter", "replacement": "scripts/normalize_official_results.py with exact dataset ID validation"}
+    {
+      "path": "eval/dci_agent.py",
+      "reason": "self-written 8-turn approximation",
+      "replacement": "scripts/run_official_baseline.py dci"
+    },
+    {
+      "path": "prompts/dci_prompt.txt",
+      "reason": "self-written prompt",
+      "replacement": "DCI-Agent-Lite prompts/system_prompt.txt at frozen commit"
+    },
+    {
+      "path": "eval/agentir_retriever.py",
+      "reason": "raw-question RAG incorrectly named AgentIR",
+      "replacement": "official AgentIR reasoning-aware search agent"
+    },
+    {
+      "path": "scripts/build_agentir_index.py",
+      "reason": "index format for obsolete static-RAG approximation",
+      "replacement": "official AgentIR evaluation harness/index"
+    },
+    {
+      "path": "scripts/precompute_agentir_retrieval.py",
+      "reason": "raw-question static retrieval cache",
+      "replacement": "official reasoning-aware interactive retrieval"
+    },
+    {
+      "path": "eval/ircot_agent.py",
+      "reason": "zero-shot approximation; official repo has no PopQA adapter",
+      "replacement": "none; IRCoT removed from PopQA matrix"
+    },
+    {
+      "path": "prompts/bm25_rag.txt",
+      "reason": "backend-specific obsolete name and prompt",
+      "replacement": "prompts.rag:PROMPT"
+    },
+    {
+      "path": "logs/*.sh",
+      "reason": "formal launch scripts contain Qwen3-4B, Search-R1 3B, n=1500, obsolete agent names, or unfrozen parameters",
+      "replacement": "RUNBOOK.md commands and frozen YAML configs"
+    },
+    {
+      "path": "RESUME_STATE.md",
+      "reason": "obsolete operational instructions point to deleted launch scripts and invalid partial runs",
+      "replacement": "RUNBOOK.md"
+    },
+    {
+      "path": "eval/grepseek_agent.py + eval/shell_tool.py",
+      "reason": "local tool validation/payload diverged from official harness",
+      "replacement": "official GrepSeek inference.run at frozen commit"
+    },
+    {
+      "path": "scripts/convert_dr_dci_output.py",
+      "reason": "DR-DCI-only ad hoc schema converter",
+      "replacement": "scripts/normalize_official_results.py with exact dataset ID validation"
+    },
+    {
+      "path": "results/* (311 legacy files, 607M) + logs/* (old-era logs)",
+      "reason": "user-authorized 2026-07-21: all pre-Phase-1-audit experiment results/logs (Qwen3-4B generator, n=1500 slices, longtail popqa) removed to avoid confusing them with Phase-2 outputs",
+      "replacement": "results/phase2/ produced by sbatch/submit_phase2.sh"
+    }
   ],
   "external_checkpoint_cleanup": [
-    {"selector": "PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo*", "reason": "obsolete 3B Search-R1", "status": "not_deleted_no_resolved_workspace_path"},
-    {"selector": "Qwen/Qwen3-4B baseline serving caches", "reason": "obsolete baseline generator", "status": "not_deleted_no_resolved_workspace_path"}
+    {
+      "selector": "hf_cache/hub/models--PeterJinGo--SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo",
+      "reason": "obsolete 3B Search-R1",
+      "status": "deleted_2026-07-21",
+      "freed": "13G"
+    },
+    {
+      "selector": "hf_cache/hub/models--Qwen--Qwen3-4B",
+      "reason": "obsolete baseline generator",
+      "status": "deleted_2026-07-21",
+      "freed": "7.5G"
+    }
   ],
   "preserved_legacy_results": {
     "status": "legacy_invalid_for_main_table",

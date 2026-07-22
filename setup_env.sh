@@ -41,4 +41,7 @@ echo "  LLM=$LLM_HOST:$LLM_PORT  model=$LLM_MODEL"
 cd "$REPO" || echo "warn: REPO 目录不存在: $REPO"
 
 conda activate scaleseek
-pip freeze > requirements.txt
+# 并发 sbatch 作业同时 source 此文件；仅在显式要求时刷新 requirements，避免并发写坏文件。
+if [ "${SCALESEEK_FREEZE:-0}" = "1" ]; then
+  pip freeze > requirements.txt
+fi

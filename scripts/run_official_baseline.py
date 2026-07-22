@@ -47,8 +47,8 @@ def _value(argv: list[str], flag: str) -> str | None:
 
 
 def _validate(method: str, forwarded: list[str], full_eval: bool) -> None:
-    if full_eval and any(x in forwarded for x in ("--limit", "-n", "--offset", "--mini-dev")):
-        raise ValueError("full evaluation forbids limit/offset/mini-dev arguments")
+    if full_eval and any(x in forwarded for x in ("--limit", "-n", "--offset")):
+        raise ValueError("full evaluation forbids limit/offset arguments")
     required_model = ("alireza7/GrepSeek-Qwen3.5-9B-GRPO" if method == "grepseek"
                       else "Qwen/Qwen3.5-9B")
     if full_eval and _value(forwarded, "--model") != required_model:
@@ -75,6 +75,11 @@ def _validate(method: str, forwarded: list[str], full_eval: bool) -> None:
                 raise ValueError(f"RISE requires {flag} {expected}")
         if "--structured-docs" not in forwarded:
             raise ValueError("RISE main method requires --structured-docs")
+        if full_eval and _value(forwarded, "--mini-dev") is None:
+            # --mini-dev is the harness's only query-file input; full runs must
+            # point it at the complete canonical file (validated in main()).
+            raise ValueError("RISE full evaluation requires --mini-dev with the "
+                             "complete canonical query file")
     if method == "agentir":
         for flag in ("--reasoning-aware", "--normalize"):
             if flag not in forwarded:
@@ -102,6 +107,9 @@ def main() -> None:
     parser.add_argument("--record", type=Path)
     parser.add_argument("--model-revision",
                         help="Immutable revision of the served generator checkpoint")
+    parser.add_argument("--dataset-manifest", type=Path,
+                        help="Canonical dataset manifest; required for rise --full-eval "
+                             "to prove the --mini-dev file is the complete split")
     args, forwarded = parser.parse_known_args()
     if forwarded and forwarded[0] == "--":
         forwarded = forwarded[1:]
@@ -123,6 +131,21 @@ def main() -> None:
                                else BASELINES["global"]["generator"]["revision"])
     if args.full_eval and args.model_revision != expected_model_revision:
         sys.exit(f"--model-revision must be {expected_model_revision}")
+    if args.full_eval and args.method == "rise":
+        if args.dataset_manifest is None:
+            sys.exit("rise --full-eval requires --dataset-manifest")
+        manifest = json.loads(args.dataset_manifest.read_text())
+        mini = Path(_value(forwarded, "--mini-dev"))
+        qids: set[str] = set()
+        rows = 0
+        with mini.open(encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    rows += 1
+                    qids.add(str(json.loads(line)["query_id"]))
+        if rows != manifest["count"] or len(qids) != manifest["unique_ids"]:
+            sys.exit(f"--mini-dev {mini} has {rows} rows / {len(qids)} unique ids; "
+                     f"manifest requires {manifest['count']} / {manifest['unique_ids']}")
     if args.full_eval and args.method == "agentir":
         expected_retriever_revision = BASELINES["methods"]["agentir"]["retriever"]["revision"]
         model_path = Path(_value(forwarded, "--model-name") or "")
