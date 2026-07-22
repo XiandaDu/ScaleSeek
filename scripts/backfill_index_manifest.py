@@ -59,13 +59,32 @@ def main() -> None:
                          f"manifest has {corpus['count']:,}")
     if ordered_sha is not None and ordered_sha != corpus["ordered_doc_ids_sha256"]:
         raise SystemExit(f"{args.backend}: ordered doc-ID hash differs from corpus manifest")
+
+    # Emit exactly the frozen-contract fields that eval.run_eval's
+    # validate_retriever_manifest checks (mirrors build_e5_index.py's schema).
+    import yaml
+    cfg = yaml.safe_load((Path(__file__).resolve().parents[1]
+                          / "configs" / "baselines.yaml").read_text())["global"]
+    if args.backend == "bm25":
+        contract = {"backend": "bm25_lucene", **cfg["fixed_bm25"]}
+    else:
+        rcfg = cfg["retrievers"][args.backend]
+        contract = {
+            "backend": args.backend,
+            "model_id": rcfg["repo_id"],
+            "model_revision": rcfg["revision"],
+            "pooling": rcfg["pooling"],
+            "normalize": True,
+            "max_length": rcfg["max_length"],
+        }
     manifest = {
         "schema_version": 1,
-        "backend": args.backend,
+        **contract,
         "index_dir": str(args.index_dir.resolve()),
         "corpus_manifest_id": corpus["corpus_manifest_id"],
         "count": count,
         "ordered_doc_ids_sha256": ordered_sha,
+        "backfilled": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)

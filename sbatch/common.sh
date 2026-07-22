@@ -126,9 +126,10 @@ submit_retry() {  # submit_retry <sbatch args...> -- survive QOSMaxSubmitJobPerU
   while true; do
     if out=$(sbatch "$@" 2>&1); then echo "[submit] $out <- $*"; return 0; fi
     tries=$((tries+1))
-    echo "[submit] blocked ($out); retry $tries in 600s: $*"
-    if [ "$tries" -ge 288 ]; then echo "FATAL: could not submit after 48h: $*"; return 1; fi
-    sleep 600
+    echo "[submit] blocked ($out); retry $tries in 300s: $*"
+    # Give up after ~30 min: a job stuck here is holding its GPUs hostage.
+    if [ "$tries" -ge 6 ]; then return 1; fi
+    sleep 300
   done
 }
 
@@ -137,12 +138,16 @@ advance_lane() {  # advance_lane -- pop the next job off this lane's queue file
   [ -n "$lane" ] || return 0
   local qf=$REPO/sbatch/queue_${lane}.txt
   [ -s "$qf" ] || { echo "[lane $lane] queue empty"; return 0; }
-  local line rest
+  local line
   line=$(head -1 "$qf")
   tail -n +2 "$qf" > "$qf.tmp" && mv "$qf.tmp" "$qf"
   echo "[lane $lane] next: $line"
   # shellcheck disable=SC2086
-  submit_retry $line
+  if ! submit_retry $line; then
+    # Put the line back so the lane can be kicked manually; free our resources.
+    printf '%s\n' "$line" | cat - "$qf" > "$qf.tmp" && mv "$qf.tmp" "$qf"
+    echo "FATAL: lane $lane stalled at QOS submit cap; requeued line for manual kick"
+  fi
 }
 
 echo "[common] host=$(hostname) job=${SLURM_JOB_NAME:-manual}/${SLURM_JOB_ID:-0}" \
