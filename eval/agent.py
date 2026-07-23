@@ -571,6 +571,11 @@ def run_direct(
     parsed = parse_assistant(text or "")
     record.prediction = parsed.answer
     record.finish_reason = "answer" if parsed.answer else "parse_error"
+    if not (text or "").strip():
+        # vLLM returns neither content nor reasoning_content when generation
+        # hits max_tokens inside thinking; tag it so the error taxonomy can
+        # tell truncation apart from a malformed answer.
+        record.error = "empty completion (max_tokens likely exhausted inside thinking)"
     record.n_turns = 1
     return record
 
@@ -633,5 +638,7 @@ def run_rag(
     parsed = parse_assistant(text or "")
     record.prediction = parsed.answer
     record.finish_reason = "answer" if parsed.answer else "parse_error"
+    if not (text or "").strip():
+        record.error = "empty completion (max_tokens likely exhausted inside thinking)"
     record.n_turns = 1
     return record

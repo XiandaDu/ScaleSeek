@@ -259,15 +259,18 @@ def run_eval(args: argparse.Namespace) -> None:
                 max_tool_response_tokens=args.max_tool_response_tokens)
         elif args.agent == "rag":
             from .agent import run_rag
+            # 28000: the budget must hold the full thinking trace plus the
+            # answer (TASK.md direct/rag spec) while leaving prompt headroom
+            # under the 32768 serving context; 8192 truncated every response.
             return run_rag(
                 ex, client=client, model=model, retriever=retriever,
                 top_k=args.retrieval_top_k,
-                max_tokens=8192, temperature=0.0)
+                max_tokens=28000, temperature=0.0)
         elif args.agent == "direct":
             from .agent import run_direct
             return run_direct(
                 ex, client=client, model=model,
-                max_tokens=8192, temperature=0.0)
+                max_tokens=28000, temperature=0.0)
         elif args.agent == "search_r1":
             from .search_r1_agent import run_search_r1
             return run_search_r1(

@@ -54,6 +54,18 @@ if [ "$AGENT" = search_r1 ]; then
 else
   start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B --reasoning-parser qwen3
   waitp "$PORT" 3600
+  # Gate before burning a full run: at temperature=0 the model must close its
+  # thinking within budget or every row degenerates to parse_error (2026-07-22:
+  # 12h of 100% empty predictions). On failure the probe prints a mode
+  # comparison table for a human decision and the lane moves on.
+  case "$AGENT" in direct|rag|scaleseek)
+    if ! "$PY" scripts/probe_thinking_closure.py \
+          --base-url "http://127.0.0.1:$PORT/v1" --model Qwen/Qwen3.5-9B \
+          --popqa "$POPQA_NORM" --n 16 --max-tokens 28000; then
+      echo "FATAL: thinking-closure gate failed for $AGENT; frozen temp=0 config needs a user decision (see mode tables above)"
+      exit 3
+    fi;;
+  esac
   EXTRA=()
   case "$AGENT" in
     search_o1|scaleseek) EXTRA=(--tokenizer Qwen/Qwen3.5-9B);;
