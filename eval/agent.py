@@ -241,9 +241,12 @@ def _chat_completion(
     top_p: float,
     max_tokens: Optional[int],
     stop: Optional[list] = None,
+    extra_body: Optional[dict] = None,
 ) -> tuple[Optional[str], Optional[str]]:
     """Return (text, error). Handles vLLM reasoning_content reconstruction."""
     _extra = {"stop": stop} if stop else {}
+    if extra_body:
+        _extra["extra_body"] = extra_body
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -546,8 +549,9 @@ def run_direct(
     *,
     client: Any,
     model: str,
-    max_tokens: int = 256,
+    max_tokens: Optional[int] = 256,
     temperature: float = 0.0,
+    thinking_token_budget: Optional[int] = None,
 ) -> AgentRecord:
     ex_id = str(example.get("id", ""))
     question = example.get("question", "")
@@ -561,6 +565,8 @@ def run_direct(
     text, err = _chat_completion(
         client, model=model, messages=messages,
         temperature=temperature, top_p=1.0, max_tokens=max_tokens,
+        extra_body=({"thinking_token_budget": thinking_token_budget}
+                    if thinking_token_budget else None),
     )
     record.llm_time_s = time.perf_counter() - t_start
     record.total_time_s = record.llm_time_s
@@ -591,8 +597,9 @@ def run_rag(
     model: str,
     retriever: BM25Retriever,
     top_k: int = 3,
-    max_tokens: int = 256,
+    max_tokens: Optional[int] = 256,
     temperature: float = 0.0,
+    thinking_token_budget: Optional[int] = None,
 ) -> AgentRecord:
     ex_id = str(example.get("id", ""))
     question = example.get("question", "")
@@ -626,6 +633,8 @@ def run_rag(
     text, err = _chat_completion(
         client, model=model, messages=messages,
         temperature=temperature, top_p=1.0, max_tokens=max_tokens,
+        extra_body=({"thinking_token_budget": thinking_token_budget}
+                    if thinking_token_budget else None),
     )
     record.llm_time_s = time.perf_counter() - t_llm
     record.total_time_s = time.perf_counter() - t_start

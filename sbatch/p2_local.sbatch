@@ -52,20 +52,32 @@ if [ "$AGENT" = search_r1 ]; then
     --generator-revision "$R" --concurrency "$CONC" --retries 3 \
     --output "$OUT" "${RESUME[@]}"
 else
+  # thinking_token_budget (direct/rag forced thinking closure) is only wired
+  # into vLLM 0.23's V1 model runner.
+  export VLLM_USE_V2_MODEL_RUNNER=0
   start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B --reasoning-parser qwen3
   waitp "$PORT" 3600
-  # Gate before burning a full run: at temperature=0 the model must close its
-  # thinking within budget or every row degenerates to parse_error (2026-07-22:
-  # 12h of 100% empty predictions). On failure the probe prints a mode
-  # comparison table for a human decision and the lane moves on.
-  case "$AGENT" in direct|rag|scaleseek)
+  # Gate before burning a full run: the probe must produce parseable answers
+  # under the exact production decoding mode or every row degenerates to
+  # parse_error (2026-07-22: 12h of 100% empty predictions). On failure it
+  # prints a mode comparison table for a human decision and the lane moves on.
+  # direct/rag production mode = budget_think (no max_tokens cap + forced
+  # thinking closure); scaleseek still runs plain temp=0 thinking, so it is
+  # gated on greedy_think until its own config decision is made.
+  case "$AGENT" in
+    direct|rag) GATE_MODE=budget_think;;
+    scaleseek)  GATE_MODE=greedy_think;;
+    *)          GATE_MODE=;;
+  esac
+  if [ -n "$GATE_MODE" ]; then
     if ! "$PY" scripts/probe_thinking_closure.py \
           --base-url "http://127.0.0.1:$PORT/v1" --model Qwen/Qwen3.5-9B \
-          --popqa "$POPQA_NORM" --n 16 --max-tokens 28000; then
-      echo "FATAL: thinking-closure gate failed for $AGENT; frozen temp=0 config needs a user decision (see mode tables above)"
+          --popqa "$POPQA_NORM" --n 16 --max-tokens 28000 \
+          --gate-mode "$GATE_MODE" --thinking-budget 4096; then
+      echo "FATAL: thinking-closure gate ($GATE_MODE) failed for $AGENT; config needs a user decision (see mode tables above)"
       exit 3
-    fi;;
-  esac
+    fi
+  fi
   EXTRA=()
   case "$AGENT" in
     search_o1|scaleseek) EXTRA=(--tokenizer Qwen/Qwen3.5-9B);;

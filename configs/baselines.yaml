@@ -52,7 +52,14 @@ methods:
     temperature: 0.0
     top_p: 1.0
     max_model_calls: 1
-    max_new_tokens: 8192
+    # No output cap (vLLM bounds generation at context length), mirroring the
+    # official GrepSeek/DCI harnesses. Thinking closure is enforced instead by
+    # vLLM's native thinking_token_budget (Qwen3 TR "thinking budget"
+    # mechanism; the local equivalent of the API effort levels DCI relies on).
+    # Raw Qwen3.5-9B at temp=0 provably never closes thinking on its own
+    # (probe 2026-07-23: 0/16 answered at max_tokens=28000).
+    max_new_tokens: null
+    thinking_token_budget: 4096
     prompt_provenance: project_defined
     prompt_module: prompts.direct:PROMPT
     prompt_sha256: 019d2e7bbd9649a1ced06c1fbf27b966b5c796352f17796bcce3aa60496f5cd8
@@ -65,7 +72,9 @@ methods:
     temperature: 0.0
     top_p: 1.0
     max_model_calls: 1
-    max_new_tokens: 8192
+    # Same no-cap + thinking-budget scheme as `direct` (see comment there).
+    max_new_tokens: null
+    thinking_token_budget: 4096
     prompt_provenance: project_defined_grepseek_protocol
     prompt_module: prompts.rag:PROMPT
     prompt_sha256: 202e3970605d300c54ac474a2f589a069d3597eb965456224fc1c2c9eb4730fd

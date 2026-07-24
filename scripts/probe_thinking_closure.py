@@ -29,7 +29,7 @@ from eval.agent import parse_assistant  # noqa: E402  (exact production parser)
 from eval import prompts  # noqa: E402  (exact production prompt loader)
 
 
-def probe_one(client, model, question, mode, max_tokens):
+def probe_one(client, model, question, mode, max_tokens, thinking_budget):
     messages = [
         {"role": "system", "content": prompts.load("direct")},
         {"role": "user", "content": f"Question: {question}"},
@@ -44,6 +44,12 @@ def probe_one(client, model, question, mode, max_tokens):
         # Qwen thinking-mode recommended sampling (model card): the vendor's
         # documented alternative if greedy decoding cannot close its thinking.
         kwargs.update(temperature=0.6, top_p=0.95, extra_body={"top_k": 20})
+    elif mode == "budget_think":
+        # Production candidate: no output cap (vLLM bounds at context length,
+        # as the official GrepSeek/DCI harnesses do) + vLLM-native forced
+        # thinking closure. Server must run VLLM_USE_V2_MODEL_RUNNER=0.
+        kwargs.update(temperature=0.0, top_p=1.0, max_tokens=None,
+                      extra_body={"thinking_token_budget": thinking_budget})
     else:
         raise ValueError(mode)
     resp = client.chat.completions.create(**kwargs)
@@ -63,15 +69,19 @@ def probe_one(client, model, question, mode, max_tokens):
         "finish_reason": choice.finish_reason,
         "completion_tokens": resp.usage.completion_tokens,
         "answer": answer,
+        "content_head": (content or "")[:160],
+        "reasoning_tail": (reasoning or "")[-120:],
     }
 
 
-def run_mode(client, model, examples, mode, max_tokens):
+def run_mode(client, model, examples, mode, max_tokens, thinking_budget):
     def one(ex):
         try:
-            r = probe_one(client, model, ex["question"], mode, max_tokens)
+            r = probe_one(client, model, ex["question"], mode, max_tokens,
+                          thinking_budget)
         except Exception as e:  # a dead server must fail the gate, not hang it
-            r = {"finish_reason": f"error:{e}", "completion_tokens": 0, "answer": None}
+            r = {"finish_reason": f"error:{e}", "completion_tokens": 0,
+                 "answer": None, "content_head": "", "reasoning_tail": ""}
         r["id"] = ex["id"]
         r["golds"] = ex["golden_answers"][:3]
         return r
@@ -79,11 +89,15 @@ def run_mode(client, model, examples, mode, max_tokens):
         rows = list(pool.map(one, examples))
     answered = sum(1 for r in rows if r["answer"])
     toks = sorted(r["completion_tokens"] for r in rows)
-    print(f"\n== mode {mode} (max_tokens={max_tokens}) ==")
+    print(f"\n== mode {mode} (max_tokens={max_tokens}, "
+          f"thinking_budget={thinking_budget}) ==")
     for r in rows:
         print(f"  {r['id']:16s} finish={str(r['finish_reason']):10s} "
               f"tokens={r['completion_tokens']:6d} answer={str(r['answer'])[:40]!r} "
               f"golds={r['golds']}")
+        if not r["answer"]:  # show what came out instead of an <answer> block
+            print(f"      content_head={r['content_head']!r}")
+            print(f"      reasoning_tail={r['reasoning_tail']!r}")
     print(f"  -> answered {answered}/{len(rows)}, completion_tokens "
           f"median={toks[len(toks)//2]} max={toks[-1]}")
     return answered, len(rows)
@@ -98,6 +112,10 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=16)
     ap.add_argument("--max-tokens", type=int, default=28000)
     ap.add_argument("--threshold", type=float, default=0.8)
+    ap.add_argument("--gate-mode", default="greedy_think",
+                    choices=["greedy_think", "greedy_nothink",
+                             "sampling_think", "budget_think"])
+    ap.add_argument("--thinking-budget", type=int, default=4096)
     args = ap.parse_args()
 
     from openai import OpenAI
@@ -111,18 +129,21 @@ def main() -> None:
             if len(examples) >= args.n:
                 break
 
-    answered, n = run_mode(client, args.model, examples, "greedy_think", args.max_tokens)
+    answered, n = run_mode(client, args.model, examples, args.gate_mode,
+                           args.max_tokens, args.thinking_budget)
     if answered / n >= args.threshold:
-        print(f"GATE-PASS: greedy thinking closes within {args.max_tokens} tokens "
-              f"({answered}/{n}); frozen temperature=0 config is runnable.")
+        print(f"GATE-PASS: mode {args.gate_mode} answered {answered}/{n}; "
+              f"config is runnable.")
         return
-    print(f"\nGATE-FAIL: only {answered}/{n} answered under the frozen config. "
-          f"Collecting evidence for the two candidate deviations:")
-    for mode in ("greedy_nothink", "sampling_think"):
-        run_mode(client, args.model, examples, mode, args.max_tokens)
-    print("\nGATE-FAIL summary: frozen temperature=0 + thinking cannot produce "
-          "answers within budget; a config deviation needs user approval. "
-          "See the mode tables above.")
+    print(f"\nGATE-FAIL: only {answered}/{n} answered under gate mode "
+          f"{args.gate_mode}. Collecting evidence from the other modes:")
+    for mode in ("greedy_think", "greedy_nothink", "sampling_think",
+                 "budget_think"):
+        if mode != args.gate_mode:
+            run_mode(client, args.model, examples, mode, args.max_tokens,
+                     args.thinking_budget)
+    print(f"\nGATE-FAIL summary: gate mode {args.gate_mode} cannot produce "
+          "answers; a config decision is needed. See the mode tables above.")
     sys.exit(3)
 
 
