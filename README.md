@@ -3,6 +3,66 @@
 ScaleSeek trains and evaluates retrieval agents that construct a bounded BM25
 workspace and then use `grep_workspace` / `read_doc` for fine-grained search.
 
+## Pipeline overview
+
+ScaleSeek is one two-stage pipeline. Every stage — evaluation, SFT generation,
+RL — shares the **same system prompt, the same three tools, and the same output
+format**, so a trajectory is interchangeable across them:
+
+- system prompt: `prompts/scaleseek_prompt.py:PROMPT` (single canonical constant)
+- tools (`eval.agent.execute_tool` + `Workspace` + `BM25Retriever`):
+  `bm25_retrieve(query, top_k, k1, b, mode)`, `grep_workspace(pattern, case_insensitive)`,
+  `read_doc(doc_id)`
+- format: assistant = `<think>…</think>` + exactly one `<tool_call>`/`<answer>`;
+  tool turn = `{"role":"tool","content":<json>}`
+- data: canonical QA `{id, question, golden_answers}`
+
+```text
+                     canonical QA  {id, question, golden_answers}
+                              │
+   ┌──────────────────────────┼───────────────────────────────┐
+   │ Stage 1: evaluation       │ Stage 2: training              │
+   ▼                          ▼                                │
+ eval/run_eval.py       (1) SFT cold-start generation           │
+ direct / rag /         scripts/generate_sft_data.py            │
+ search_r1 / search_o1  train/sft/coldstart.py  (teacher LLM)   │
+ / scaleseek +           backward: decompose→trace→judge→bridge │
+ official harnesses      forward:  planner→tutor-edit→execute   │
+   │                              →final(pinned gold)→quality   │
+   ▼                          ▼                                 │
+ metrics                 trajectory JSONL (messages+loss_mask)  │
+ (EM/F1, recall,             │  train/sft_dataset.py            │
+  latency)              ┌─────┴───── verl parquet / token mask  │
+                        ▼                                        │
+                   (2) SFT training                             │
+             run_sft.sh (verl, cluster) |                       │
+             run_sft_local.py (local smoke)                     │
+                        ▼                                        │
+                  HF checkpoint ───────────────────────┐        │
+                        │  SCALESEEK_MODEL_PATH         │        │
+                        ▼                               │        │
+             (3) RL (GRPO, verl)  scripts/run_rl.sh     │        │
+        train/{agent_loop,environment,reward}.py        │        │
+        ScaleSeekAgentLoop + ScaleSeekEnv (same tools)  │        │
+                        ▼                               │        │
+                RL checkpoint (HF) ─────────────────────┴────────┘
+                        │  becomes the scaleseek agent's model
+                        ▼
+               eval/run_eval.py --agent scaleseek
+```
+
+| Stage | Entry points | Status |
+|---|---|---|
+| 1. Evaluation | `eval/run_eval.py`, official launchers (`RUNBOOK.md`) | implemented |
+| 2a. SFT cold-start generation | `scripts/generate_sft_data.py`, `train/sft/` | implemented (`train/sft/README.md`) |
+| 2b. SFT training | `scripts/run_sft.sh` (verl) / `scripts/run_sft_local.py` (local) | implemented |
+| 2c. RL (GRPO) | `scripts/run_rl.sh`, `train/config/grpo_trainer.yaml` | implemented; SFT→RL handoff not yet run end-to-end |
+
+The SFT stage runs in two environments from one codebase: a single-GPU **local
+smoke** (tiny corpus, `hf:` teacher, `run_sft_local.py`) proves the plumbing, and
+the **cluster** path (full wiki-18 index, vLLM teacher, verl SFT) does real runs.
+See `train/sft/README.md` for the exact commands and the local-vs-cluster split.
+
 ## Phase-1 source of truth
 
 - `TASK.md`: gated three-phase experiment plan.

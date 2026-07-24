@@ -4,6 +4,32 @@ Builds GrepSeek-style cold-start supervised trajectories for the ScaleSeek
 two-stage retrieval agent, then fine-tunes a small student on them. The SFT
 checkpoint warm-starts RL (`scripts/run_rl.sh` via `SCALESEEK_MODEL_PATH`).
 
+This is Stage 2a/2b of the whole pipeline; see the top-level `README.md`
+"Pipeline overview" for how it connects to evaluation (Stage 1) and RL (Stage 2c).
+
+## How one trajectory is built
+
+The teacher knows the gold answer and works backward, then a fresh forward pass
+reconstructs the trajectory a student can learn from without seeing the answer:
+
+```text
+BACKWARD (Tutor; knows gold)              FORWARD (Planner+Tutor; frontier-safe)
+  DECOMPOSE  q -> sub_q[0..n-1]             for each verified tool call, in order:
+  for hop i = n-1 … 0:                        PLANNER   draft reasoning from
+    BACKWARD_TOOL  propose bm25(+grep)                  (question, history) only
+    execute        run vs real BM25            execute  run the verified call
+    JUDGE          confirms expected[i]?        TUTOR_EDIT  rewrite reasoning to
+                   refine on NO                              lead to that call,
+    BRIDGE_EXTRACT passage -> expected[i-1]                  no future-fact leak
+  (answer-leak rule: a bm25 query never      FINAL_ANSWER  synthesize; <answer>
+   contains expected[i]; grep may)                         pinned to gold
+                                             QUALITY_JUDGE drop leaky/unsupported
+```
+
+Output: one JSONL row per example — the full `[system, user, assistant, tool, …]`
+message list plus an assistant-only loss mask and a `status` (`ok` /
+`quality_fail` / `skipped`).
+
 ## What each piece is
 
 | File | Role |
