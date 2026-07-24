@@ -1,0 +1,55 @@
+{
+  "_comment": "SMOKE-ONLY fixtures for the ScaleSeek SFT pipeline bring-up. Passages are short, self-consistent, Wikipedia-style snippets authored so that BM25 over this tiny corpus retrieves the answer-bearing passage from sub-question terms alone (never from the answer string). NOT real evaluation data; smoke numbers must never enter result tables (TASK.md).",
+  "distractors": [
+    {"title": "Photosynthesis", "text": "Photosynthesis is the process by which green plants and some other organisms use sunlight to synthesize foods from carbon dioxide and water, releasing oxygen as a byproduct."},
+    {"title": "The Amazon River", "text": "The Amazon River in South America is the largest river by discharge volume of water in the world, and by some definitions the longest river system."},
+    {"title": "Beethoven", "text": "Ludwig van Beethoven was a German composer and pianist of the Classical and Romantic eras, best known for his nine symphonies and numerous piano sonatas."},
+    {"title": "The Great Barrier Reef", "text": "The Great Barrier Reef, off the coast of Queensland, Australia, is the world's largest coral reef system, composed of over 2,900 individual reefs."},
+    {"title": "Penicillin", "text": "Penicillin is a group of antibiotics discovered by Alexander Fleming in 1928, marking a major advance in the treatment of bacterial infections."},
+    {"title": "The Sahara", "text": "The Sahara is the largest hot desert in the world, covering much of North Africa and comparable in size to the United States or China."},
+    {"title": "Basketball", "text": "Basketball is a team sport in which two teams of five players each try to score by shooting a ball through a hoop elevated ten feet above the ground."},
+    {"title": "The Colosseum", "text": "The Colosseum is an ancient amphitheatre in the centre of Rome, Italy, the largest ever built, used for gladiatorial contests and public spectacles."}
+  ],
+  "examples": [
+    {"id": "smoke_0001", "question": "What is the capital city of Australia?", "golden_answers": ["Canberra"],
+     "passages": [{"title": "Canberra", "text": "Canberra is the capital city of Australia. Founded in 1913, it lies in the Australian Capital Territory and is home to the national parliament."}]},
+    {"id": "smoke_0002", "question": "Who wrote the novel Pride and Prejudice?", "golden_answers": ["Jane Austen"],
+     "passages": [{"title": "Pride and Prejudice", "text": "Pride and Prejudice is an 1813 novel of manners. The book was written by the English author Jane Austen and follows the character of Elizabeth Bennet."}]},
+    {"id": "smoke_0003", "question": "What is the chemical symbol for gold?", "golden_answers": ["Au"],
+     "passages": [{"title": "Gold", "text": "Gold is a chemical element with atomic number 79. Its chemical symbol is Au, derived from the Latin word aurum, meaning shining dawn."}]},
+    {"id": "smoke_0004", "question": "In what year did the Berlin Wall fall?", "golden_answers": ["1989"],
+     "passages": [{"title": "Berlin Wall", "text": "The Berlin Wall was a guarded concrete barrier that divided Berlin. It fell on 9 November 1989, marking a pivotal moment near the end of the Cold War."}]},
+    {"id": "smoke_0005", "question": "Which planet is known as the Red Planet?", "golden_answers": ["Mars"],
+     "passages": [{"title": "The fourth planet", "text": "The fourth planet from the Sun is often called the Red Planet because of the reddish iron oxide on its surface. Its name is Mars, after the Roman god of war."}]},
+    {"id": "smoke_0006", "question": "Who painted the Mona Lisa?", "golden_answers": ["Leonardo da Vinci"],
+     "passages": [{"title": "Mona Lisa", "text": "The Mona Lisa is a half-length portrait painting. It was created by the Italian Renaissance artist Leonardo da Vinci and is displayed at the Louvre in Paris."}]},
+    {"id": "smoke_0007", "question": "What is the largest ocean on Earth?", "golden_answers": ["Pacific Ocean", "the Pacific"],
+     "passages": [{"title": "Oceans of Earth", "text": "The largest and deepest of Earth's five oceans is the Pacific Ocean, covering about one third of the planet's surface, larger than all land area combined."}]},
+    {"id": "smoke_0008", "question": "Who is credited with patenting the first practical telephone?", "golden_answers": ["Alexander Graham Bell"],
+     "passages": [{"title": "Invention of the telephone", "text": "The first practical telephone was patented in 1876. The inventor credited with this achievement is Alexander Graham Bell, a Scottish-born scientist and engineer."}]},
+    {"id": "smoke_0009", "question": "What is the highest mountain above sea level on Earth?", "golden_answers": ["Mount Everest", "Everest"],
+     "passages": [{"title": "Himalayan peaks", "text": "The highest mountain above sea level on Earth stands 8,849 metres tall on the border between Nepal and China. This peak is named Mount Everest."}]},
+    {"id": "smoke_0010", "question": "Which chemical element has the atomic number 1?", "golden_answers": ["Hydrogen"],
+     "passages": [{"title": "The lightest element", "text": "The chemical element with atomic number 1 and symbol H is Hydrogen. It is the lightest and most abundant chemical substance in the universe."}]},
+    {"id": "smoke_0011", "question": "In which city is the Eiffel Tower located?", "golden_answers": ["Paris"],
+     "passages": [{"title": "Eiffel Tower", "text": "The Eiffel Tower is a wrought-iron lattice tower on the Champ de Mars. It is located in Paris, France, and was completed in 1889 for the World's Fair."}]},
+    {"id": "smoke_0012", "question": "Who developed the theory of general relativity?", "golden_answers": ["Albert Einstein", "Einstein"],
+     "passages": [{"title": "General relativity", "text": "The theory of general relativity, a geometric theory of gravitation, was developed by the physicist Albert Einstein and published in 1915."}]},
+    {"id": "smoke_0013", "question": "In which city is the headquarters of the company that makes the iPhone?", "golden_answers": ["Cupertino"],
+     "passages": [
+       {"title": "iPhone", "text": "The iPhone is a line of smartphones. It is designed and marketed by the company Apple, which released the first model in 2007."},
+       {"title": "Apple company profile", "text": "Apple is an American multinational technology company. Its corporate headquarters are located in Cupertino, California."}]},
+    {"id": "smoke_0014", "question": "What was the nationality of the author who wrote The Old Man and the Sea?", "golden_answers": ["American"],
+     "passages": [
+       {"title": "The Old Man and the Sea", "text": "The Old Man and the Sea is a short novel published in 1952. The book was written by the author Ernest Hemingway."},
+       {"title": "Ernest Hemingway", "text": "Ernest Hemingway was an American novelist and journalist. He won the Nobel Prize in Literature in 1954 and was of United States nationality."}]},
+    {"id": "smoke_0015", "question": "What is the capital of the country where the Great Pyramid of Giza is located?", "golden_answers": ["Cairo"],
+     "passages": [
+       {"title": "Great Pyramid of Giza", "text": "The Great Pyramid of Giza is the largest ancient pyramid. It stands on the Giza plateau in the country of Egypt."},
+       {"title": "Egypt", "text": "Egypt is a country in North Africa. Its capital and largest city is Cairo, which lies near the Nile Delta."}]},
+    {"id": "smoke_0016", "question": "What is the official currency of the country where Mount Fuji is located?", "golden_answers": ["yen", "Japanese yen"],
+     "passages": [
+       {"title": "Mount Fuji", "text": "Mount Fuji is the highest peak in the country of Japan. It is an active volcano located on the island of Honshu."},
+       {"title": "Economy of Japan", "text": "Japan is an island nation in East Asia. Its official currency is the yen, which is among the most traded currencies in the world."}]}
+  ]
+}

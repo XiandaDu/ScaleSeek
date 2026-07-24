@@ -222,3 +222,7 @@ __marimo__/
 # ScaleSeek runtime state (never commit)
 logs/
 sbatch/queue_lane*.txt
+
+# ScaleSeek SFT smoke artifacts (local-only, never committed)
+.smoke/
+.venv/
