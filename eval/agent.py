@@ -336,8 +336,19 @@ def parse_assistant(text: str) -> ParseResult:
     if not text:
         return ParseResult(raw="", error="empty response")
 
-    tool_m = _TOOL_CALL_RE.search(text)
-    ans_m = _ANSWER_RE.search(text)
+    # Only the text outside <think> blocks is actionable. Thinking models
+    # quote the format instruction verbatim (a literal empty
+    # "<answer></answer>") and rehearse candidate blocks while reasoning, so
+    # the first tag match in the full text is usually not the commitment
+    # (2026-07-24: budget-forced direct emitted a valid <answer> in content
+    # on 16/16 probes, yet the instruction quote inside thinking matched
+    # first and every prediction came out empty).
+    visible = _THINK_BLOCK_RE.sub("", text)
+    if "</think>" in visible:
+        visible = visible.rsplit("</think>", 1)[-1]
+
+    tool_m = _TOOL_CALL_RE.search(visible)
+    ans_m = _ANSWER_RE.search(visible)
 
     if tool_m and ans_m:
         first = "tool" if tool_m.start() < ans_m.start() else "answer"
