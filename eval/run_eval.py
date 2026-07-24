@@ -259,22 +259,25 @@ def run_eval(args: argparse.Namespace) -> None:
                 max_tool_response_tokens=args.max_tool_response_tokens)
         elif args.agent == "rag":
             from .agent import run_rag
-            # max_new_tokens null in baselines.yaml = no cap (vLLM bounds at
-            # context length); thinking_token_budget forces thinking closure —
-            # raw Qwen3.5-9B at temp=0 otherwise never closes (probe 07-23).
+            # All decoding values come from the frozen baselines.yaml entry
+            # (max_new_tokens null = no cap, vLLM bounds at context length;
+            # thinking_token_budget forces thinking closure — raw Qwen3.5-9B
+            # at temp=0 otherwise never closes, probe 07-23).
+            mcfg = method_cfg["method"]
             return run_rag(
                 ex, client=client, model=model, retriever=retriever,
                 top_k=args.retrieval_top_k,
-                max_tokens=method_cfg["method"]["max_new_tokens"],
-                thinking_token_budget=method_cfg["method"]["thinking_token_budget"],
-                temperature=0.0)
+                max_tokens=mcfg["max_new_tokens"],
+                thinking_token_budget=mcfg["thinking_token_budget"],
+                temperature=mcfg["temperature"], top_p=mcfg["top_p"])
         elif args.agent == "direct":
             from .agent import run_direct
+            mcfg = method_cfg["method"]
             return run_direct(
                 ex, client=client, model=model,
-                max_tokens=method_cfg["method"]["max_new_tokens"],
-                thinking_token_budget=method_cfg["method"]["thinking_token_budget"],
-                temperature=0.0)
+                max_tokens=mcfg["max_new_tokens"],
+                thinking_token_budget=mcfg["thinking_token_budget"],
+                temperature=mcfg["temperature"], top_p=mcfg["top_p"])
         elif args.agent == "search_r1":
             from .search_r1_agent import run_search_r1
             return run_search_r1(

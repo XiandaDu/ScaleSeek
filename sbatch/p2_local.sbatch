@@ -73,7 +73,7 @@ else
     if ! "$PY" scripts/probe_thinking_closure.py \
           --base-url "http://127.0.0.1:$PORT/v1" --model Qwen/Qwen3.5-9B \
           --popqa "$POPQA_NORM" --n 16 --max-tokens 28000 \
-          --gate-mode "$GATE_MODE" --thinking-budget 4096; then
+          --gate-mode "$GATE_MODE"; then
       echo "FATAL: thinking-closure gate ($GATE_MODE) failed for $AGENT; config needs a user decision (see mode tables above)"
       exit 3
     fi

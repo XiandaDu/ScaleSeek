@@ -115,8 +115,13 @@ def main() -> None:
     ap.add_argument("--gate-mode", default="greedy_think",
                     choices=["greedy_think", "greedy_nothink",
                              "sampling_think", "budget_think"])
-    ap.add_argument("--thinking-budget", type=int, default=4096)
+    ap.add_argument("--thinking-budget", type=int, default=None,
+                    help="default: the frozen value from configs/baselines.yaml "
+                         "(direct entry), so the gate always tests production")
     args = ap.parse_args()
+    if args.thinking_budget is None:
+        from eval.config import resolved_method
+        args.thinking_budget = resolved_method("direct")["method"]["thinking_token_budget"]
 
     from openai import OpenAI
     client = OpenAI(base_url=args.base_url, api_key="EMPTY", timeout=1800)

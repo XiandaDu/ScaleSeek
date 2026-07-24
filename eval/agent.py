@@ -551,6 +551,7 @@ def run_direct(
     model: str,
     max_tokens: Optional[int] = 256,
     temperature: float = 0.0,
+    top_p: float = 1.0,
     thinking_token_budget: Optional[int] = None,
 ) -> AgentRecord:
     ex_id = str(example.get("id", ""))
@@ -564,7 +565,7 @@ def run_direct(
     ]
     text, err = _chat_completion(
         client, model=model, messages=messages,
-        temperature=temperature, top_p=1.0, max_tokens=max_tokens,
+        temperature=temperature, top_p=top_p, max_tokens=max_tokens,
         extra_body=({"thinking_token_budget": thinking_token_budget}
                     if thinking_token_budget else None),
     )
@@ -599,6 +600,7 @@ def run_rag(
     top_k: int = 3,
     max_tokens: Optional[int] = 256,
     temperature: float = 0.0,
+    top_p: float = 1.0,
     thinking_token_budget: Optional[int] = None,
 ) -> AgentRecord:
     ex_id = str(example.get("id", ""))
@@ -632,7 +634,7 @@ def run_rag(
     t_llm = time.perf_counter()
     text, err = _chat_completion(
         client, model=model, messages=messages,
-        temperature=temperature, top_p=1.0, max_tokens=max_tokens,
+        temperature=temperature, top_p=top_p, max_tokens=max_tokens,
         extra_body=({"thinking_token_budget": thinking_token_budget}
                     if thinking_token_budget else None),
     )
