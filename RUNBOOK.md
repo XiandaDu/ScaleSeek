@@ -32,8 +32,9 @@ adjust them only after measuring the target server.
 
 Project-owned prompts are Python constants under `prompts/`. The stable runtime
 identifiers are `prompts.direct:PROMPT`, `prompts.rag:PROMPT`, and
-`prompts.scaleseek_prompt:PROMPT`; `SCALESEEK_PROMPT=scaleseek_prompt_noparams`
-selects the registered ablation only for non-formal runs. Upstream paths shown
+`prompts.scaleseek_prompt:PROMPT` (default: no numeric parameter bias);
+`SCALESEEK_PROMPT=scaleseek_prompt_withparams` selects the numeric-hint ablation
+only for non-formal runs. Upstream paths shown
 for official external harnesses remain inside their pinned repositories.
 
 ## Action and search budgets

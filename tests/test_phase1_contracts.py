@@ -180,7 +180,7 @@ def test_prompt_snapshots():
         "prompts.direct:PROMPT": "direct",
         "prompts.rag:PROMPT": "rag",
         "prompts.scaleseek_prompt:PROMPT": "scaleseek_prompt",
-        "prompts.scaleseek_prompt_noparams:PROMPT": "scaleseek_prompt_noparams",
+        "prompts.scaleseek_prompt_withparams:PROMPT": "scaleseek_prompt_withparams",
     }.items():
         values[module_name] = prompt_registry.load(logical_name)
     assert {key: hashlib.sha256(value.encode()).hexdigest()

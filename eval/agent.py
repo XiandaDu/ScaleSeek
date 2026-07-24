@@ -466,7 +466,8 @@ def run_agent(
     t_start = time.perf_counter()
     messages: list = [
         # SCALESEEK_PROMPT selects an alternate registered prompt for ablations
-        # (e.g. scaleseek_prompt_noparams — no numeric parameter hints).
+        # (e.g. scaleseek_prompt_withparams — adds numeric parameter hints; the
+        # default scaleseek_prompt explains the knobs without anchoring values).
         {"role": "system", "content": prompts.load(
             os.environ.get("SCALESEEK_PROMPT", "scaleseek_prompt"))},
         {"role": "user", "content": f"Question: {question}"},

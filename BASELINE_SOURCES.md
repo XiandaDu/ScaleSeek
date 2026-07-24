@@ -159,7 +159,8 @@ PopQA adapter and labeling it IRCoT.
 
 ScaleSeek is the project method, not an external reproduction. Its prompt,
 tool schema and environment protocol are versioned locally. Evaluation and RL
-both import `prompts.scaleseek_prompt:PROMPT`; the no-parameter ablation imports
-`prompts.scaleseek_prompt_noparams:PROMPT`. Qwen3.5-9B is the generator; its
+both import `prompts.scaleseek_prompt:PROMPT` (default: no numeric parameter
+bias); the numeric-hint ablation imports
+`prompts.scaleseek_prompt_withparams:PROMPT`. Qwen3.5-9B is the generator; its
 BM25 fallback is 1.2/0.75. Adaptive k1/b choices remain a method feature and
 must be logged per call.

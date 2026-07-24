@@ -117,7 +117,7 @@ Example (sub_question = "Which hotel company is the Oberoi family part of?", exp
   WRONG (near-paraphrase):     bm25_retrieve(query="The Oberoi Group hospitality")
   RIGHT (question terms):      bm25_retrieve(query="Oberoi family hotel company")
   RIGHT (synonym):             bm25_retrieve(query="Oberoi family hospitality business")
-  RIGHT (broader + narrower):  bm25_retrieve(query="Oberoi family", top_k=10)
+  RIGHT (broader net):         bm25_retrieve(query="Oberoi family")
 
 If a query keeps failing to retrieve the right passage, try a different paraphrase of the sub-question's key concept rather than reaching for the answer string.
 
@@ -125,11 +125,13 @@ If a query keeps failing to retrieve the right passage, try a different paraphra
 grep_workspace runs AFTER bm25_retrieve and is used to confirm the answer appears in a retrieved passage. Using the answer term as the grep pattern is acceptable and expected.
 
 (3) BM25 PARAMETER CHOICE.
-Choose parameters deliberately:
-- top_k: 5 is usually sufficient; use 10–20 for rare or ambiguous entities.
-- k1=2.0, b=0.5: better for rare named-entity queries (boosts exact-term matches).
-- k1=1.2, b=0.9: better for long descriptive queries (penalizes length more).
-- mode="replace" for the first call in a trace; mode="merge" only if a second entity must be added.
+The tool exposes top_k, k1, b and mode. Set one ONLY when the sub-question gives a
+concrete reason to; otherwise omit it and the default is used. Reason
+qualitatively about direction, never from a fixed number or habit:
+- top_k: widen it when the target entity is rare or ambiguous; keep it small for a sharp factoid.
+- k1: raise it when a rare proper noun should dominate through repeated mentions; lower it when term repetition is uninformative.
+- b: lower it when the answer lives in a short, dense passage; raise it when long generic articles crowd out specific ones.
+- mode="replace" starts a fresh workspace; mode="merge" adds a second entity to what you already have.
 
 (4) TRACE LENGTH.
 Keep the trace short — typically 1 bm25_retrieve call, optionally 1 grep_workspace. Avoid unnecessary steps."""
@@ -151,7 +153,7 @@ your reasoning (2–4 sentences); explicitly confirm your bm25_retrieve query do
 </reasoning>
 <tool_trace>
 [
-  {{"name": "bm25_retrieve", "arguments": {{"query": "...", "top_k": 5, "k1": 1.5, "b": 0.75, "mode": "replace"}}}},
+  {{"name": "bm25_retrieve", "arguments": {{"query": "...", "mode": "replace"}}}},
   {{"name": "grep_workspace", "arguments": {{"pattern": "...", "case_insensitive": true}}}}
 ]
 </tool_trace>
@@ -190,7 +192,7 @@ why the previous query failed and what is different about your new approach
 </reasoning>
 <tool_trace>
 [
-  {{"name": "bm25_retrieve", "arguments": {{"query": "...", "top_k": 5, "k1": 1.5, "b": 0.75, "mode": "replace"}}}},
+  {{"name": "bm25_retrieve", "arguments": {{"query": "...", "mode": "replace"}}}},
   {{"name": "grep_workspace", "arguments": {{"pattern": "...", "case_insensitive": true}}}}
 ]
 </tool_trace>"""
@@ -233,7 +235,7 @@ For every turn, write 2–4 sentences of reasoning first: what you have learned 
 
 Tool call:
 <tool_call>
-{{"name": "bm25_retrieve", "arguments": {{"query": "...", "top_k": 5, "k1": 1.5, "b": 0.75, "mode": "replace"}}}}
+{{"name": "bm25_retrieve", "arguments": {{"query": "...", "mode": "replace"}}}}
 </tool_call>
 
 <tool_call>
@@ -306,13 +308,13 @@ ALLOWED — the agent's reasoning may freely include:
 - Words from the question and synonyms/paraphrases ("hotel" → "hospitality", "head office" → "headquarters").
 - Tentative hypotheses about WHERE the answer might be found, phrased as guesses.
 - Common-knowledge inference (e.g., "Delhi is the capital of India" once Delhi has appeared).
-- BM25 parameter reasoning ("I'll use k1=2.0 for this rare named-entity query").
+- BM25 parameter reasoning about direction ("I'll raise k1 so this rare named entity's repeated mentions dominate the match").
 
 Concrete pass/fail examples:
 
   Question: "The Oberoi family is part of a hotel company that has a head office in what city?"
   Trace so far: (no tool calls yet)
-  Target tool call: bm25_retrieve(query="Oberoi family hotel company", top_k=5)
+  Target tool call: bm25_retrieve(query="Oberoi family hotel company")
 
     LEAK (names the bridge answer "Oberoi Group" before it has been seen):
       "I need to find the Oberoi Group's headquarters city."

@@ -6,8 +6,10 @@ imports its adapted templates from `prompts.sft_prompts`.
 
 - `prompts.direct:PROMPT`: Direct baseline.
 - `prompts.rag:PROMPT`: backend-neutral RAG reader.
-- `prompts.scaleseek_prompt:PROMPT`: canonical ScaleSeek evaluation/RL prompt.
-- `prompts.scaleseek_prompt_noparams:PROMPT`: parameter-guidance ablation.
+- `prompts.scaleseek_prompt:PROMPT`: canonical ScaleSeek evaluation/RL prompt —
+  default, explains the BM25 knobs without anchoring them to numeric values.
+- `prompts.scaleseek_prompt_withparams:PROMPT`: ablation that adds numeric
+  parameter hints (top_k/k1/b examples).
 - `prompts.sft_prompts`: GrepSeek-derived templates modified for ScaleSeek's
   BM25/workspace tools. The complete SFT prompt suite is intentionally kept as
   one unit here, including the few unchanged upstream fragments.

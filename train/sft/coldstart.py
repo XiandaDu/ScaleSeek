@@ -163,10 +163,9 @@ def _normalize_tool_call(tc: dict, cfg: ColdStartConfig) -> Optional[dict]:
     if name == "bm25_retrieve":
         if not str(args.get("query", "")).strip():
             return None
-        args.setdefault("top_k", cfg.top_k_default)
-        args.setdefault("k1", 1.2)
-        args.setdefault("b", 0.75)
-        args.setdefault("mode", "replace")
+        # No parameter bias: preserve exactly what the teacher chose (or omitted)
+        # for top_k/k1/b/mode. execute_tool applies its own defaults at run time for
+        # any omitted knob, so the recorded assistant turn carries no anchored value.
     elif name == "grep_workspace":
         if not str(args.get("pattern", "")).strip():
             return None
