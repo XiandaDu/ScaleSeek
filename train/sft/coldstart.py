@@ -383,7 +383,7 @@ def _param_policy(query: str, bm25_idx: int) -> tuple[dict, str]:
 
 # Search-then-teach mentor: try BM25 settings, keep the one that actually ranks the
 # target passage best, and teach THOSE parameters (empirically grounded, not a rule).
-_K1_GRID = (0.9, 1.2, 1.5, 2.0, 2.5)
+_K1_GRID = (0.4, 0.6, 0.9, 1.2, 1.6, 2.0, 2.5)
 _B_GRID = (0.3, 0.5, 0.75, 0.9)
 _TOPK_LADDER = (3, 5, 10, 20)
 

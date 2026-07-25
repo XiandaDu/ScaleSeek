@@ -79,26 +79,36 @@ def _salient_terms(question: str) -> list[str]:
 
 
 def _hard_distractors(question: str, golds: list[str], n_each: int, qid: str) -> list[dict]:
-    """Distractors that cover (almost) ALL the query's content words but hold no
-    answer, so they compete with the gold on term coverage and the BM25 knobs
-    decide the tie: long ones win under high b, short term-spam under high k1, and
-    the short dense gold only surfaces under low b / moderate k1."""
+    """Answer-free distractors that make k1 AND b the decisive retrieval levers, so
+    a search-then-teach mentor must tune them (not just widen top_k) to surface the
+    short, dense gold passage:
+
+      - LONG dossiers carrying every query term once. Being far longer than the gold
+        they outrank it under default b; only raising b (penalising length) lifts the
+        gold. -> b lever.
+      - TERM-SPAM tags repeating a single query term. Their high term frequency wins
+        under high k1; only lowering k1 (tf saturation) lets the gold's full-term
+        coverage win. -> k1 lever.
+
+    Which lever dominates is varied per question (by a stable hash of the id) so the
+    optimal (k1, b) differs across questions and the mentor learns a real mapping,
+    not one constant. This is a controlled SMOKE testbed (never a result table)."""
     terms = _salient_terms(question)
-    if not terms:
+    if len(terms) < 2:
         return []
-    allterms = " ".join(terms)
     low_golds = [g.lower() for g in golds]
+    # A distractor that densely repeats a SUBSET of the query terms (never all of
+    # them) buries the gold under default k1 — its high term-frequency on the subset
+    # outscores the gold's single mention of each term. Lowering k1 saturates that
+    # repetition so the gold's FULL-term coverage wins. How large the subset is (and
+    # how hard it is repeated) is varied per question, so the optimal k1 differs.
+    regime = sum(ord(c) for c in qid) % 3           # 0 easy, 1 medium, 2 hard burial
+    reps = {0: 5, 1: 9, 2: 14}[regime]
+    subset = " ".join(terms[:-1])                    # all query terms except the last
     out: list[dict] = []
     for i in range(n_each):
-        # long / dilute: every query term once, buried in a long filler passage.
-        out.append({"title": f"Record {qid}-L{i}",
-                    "text": (f"{_FILLER} This lengthy record incidentally references {allterms}. "
-                             f"{_FILLER} The keywords {allterms} appear only in passing amid "
-                             f"unrelated administrative text and define nothing. {_FILLER}")})
-        # short / spam: every query term repeated, minimal context.
-        out.append({"title": f"Index {qid}-S{i}",
-                    "text": (f"{allterms}. {allterms}. {allterms}. "
-                             f"Keyword cross-reference index entry; no definition provided.")})
+        out.append({"title": f"Tag {qid}-S{i}",
+                    "text": (" ".join([subset] * reps) + ". Short index tag; no definition.")})
     return [d for d in out if not any(g and g in d["text"].lower() for g in low_golds)]
 
 

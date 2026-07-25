@@ -226,3 +226,6 @@ sbatch/queue_lane*.txt
 # ScaleSeek SFT smoke artifacts (local-only, never committed)
 .smoke/
 .venv/
+.smoke_hard/
+.smoke_hard2/
+.puzzles/
