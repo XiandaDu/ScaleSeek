@@ -100,20 +100,30 @@ def _workspace_penalty(
     workspace_size: int,
     n_bm25_calls: int,
     *,
-    max_workspace_size: int,   # TODO: tune
-    max_bm25_calls: int,       # TODO: tune
+    workspace_target: int,
+    max_workspace_size: int,
+    max_bm25_calls: int,
+    workspace_coef: float,
+    bm25_call_coef: float,
 ) -> float:
-    """Placeholder for workspace-efficiency penalty term.
+    """Workspace-efficiency penalty in [0, workspace_coef + bm25_call_coef].
 
-    TODO: design this properly once we understand what workspace sizes/call counts
-    the prompt baseline produces. Candidates:
-      - penalize workspace_size > threshold (discourage over-retrieval)
-      - penalize n_bm25_calls > 1 unless the second call used 'merge'
-      - reward small workspaces that still yield correct answers
+    Rewards getting the answer into a SMALL bounded workspace with few retrievals.
+    Combined with the EM base (which already requires retrieving the answer), this
+    is the signal that pushes the policy to tune top_k / k1 / b so the gold lands in
+    a tight workspace instead of brute-forcing a large one — the reward supplies the
+    "did retrieval work efficiently" signal the model cannot observe on its own.
 
-    For now returns 0.0 (no effect on training signal).
+    - No penalty while workspace_size <= workspace_target; ramps linearly to
+      workspace_coef at max_workspace_size.
+    - No penalty for the first bm25_retrieve; ramps to bm25_call_coef at
+      max_bm25_calls (discourages redundant re-retrieval).
     """
-    return 0.0  # TBD
+    span_ws = max(1, max_workspace_size - workspace_target)
+    ws_over = min(1.0, max(0, workspace_size - workspace_target) / span_ws)
+    span_calls = max(1, max_bm25_calls - 1)
+    call_over = min(1.0, max(0, n_bm25_calls - 1) / span_calls)
+    return workspace_coef * ws_over + bm25_call_coef * call_over
 
 
 # ---------------------------------------------------------------------------
@@ -134,10 +144,13 @@ def scaleseek_reward(
     # Reward signal
     reward_metric: str = "em",        # "em" | "f1"  [TBD: may mix both]
     failed_rollout_reward: float = 0.0,
-    # Workspace penalty  [TBD]
+    # Workspace-efficiency penalty
     enable_workspace_penalty: bool = False,
+    workspace_target: int = 5,
     max_workspace_size: int = 50,
     max_bm25_calls: int = 3,
+    workspace_coef: float = 0.2,
+    bm25_call_coef: float = 0.1,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Compute ScaleSeek reward for one rollout.
@@ -212,11 +225,14 @@ def scaleseek_reward(
     # 5. Length penalty.
     pen_L = _length_penalty(L, decay_type=decay_type, a=a, L_max=L_max) if enable_length_decay else 0.0
 
-    # 6. Workspace penalty  [TBD].
+    # 6. Workspace-efficiency penalty.
     pen_ws = (
         _workspace_penalty(workspace_size, n_bm25_calls,
+                           workspace_target=workspace_target,
                            max_workspace_size=max_workspace_size,
-                           max_bm25_calls=max_bm25_calls)
+                           max_bm25_calls=max_bm25_calls,
+                           workspace_coef=workspace_coef,
+                           bm25_call_coef=bm25_call_coef)
         if enable_workspace_penalty else 0.0
     )
 

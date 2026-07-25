@@ -270,10 +270,16 @@ custom_reward_function:
     a: 0.1
     L_max: ${data.max_response_length}
     failed_rollout_reward: 0.0
-    # Workspace penalty: disabled until we understand prompt-baseline behavior.
-    enable_workspace_penalty: false
+    # Workspace-efficiency penalty: rewards landing the answer in a small workspace
+    # with few retrievals, which is the pressure that makes the policy tune
+    # top_k/k1/b instead of brute-forcing a large workspace. Enable for the
+    # adaptive-retrieval RL run; keep coefs small so EM stays the dominant signal.
+    enable_workspace_penalty: true
+    workspace_target: 5
     max_workspace_size: 20
     max_bm25_calls: 3
+    workspace_coef: 0.2
+    bm25_call_coef: 0.1
 
 # ─────────────────────────────────────────────
 # Algorithm: GRPO
