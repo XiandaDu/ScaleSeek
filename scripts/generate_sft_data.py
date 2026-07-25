@@ -72,6 +72,10 @@ def main() -> None:
     ap.add_argument("--tool-response-tokens", type=int, default=512)
     ap.add_argument("--strict", action="store_true", help="skip examples whose hops don't verify")
     ap.add_argument("--no-quality-judge", action="store_true")
+    ap.add_argument("--param-policy", choices=["heuristic", "search", "teacher"], default="heuristic",
+                    help="'heuristic': assign k1/b/top_k/mode from query features; "
+                         "'search': grid-search BM25 params and teach the ones that best rank the "
+                         "target passage (empirically grounded); 'teacher': keep what the teacher emitted")
     args = ap.parse_args()
 
     if not args.index_dir:
@@ -89,6 +93,7 @@ def main() -> None:
         tool_response_tokens=args.tool_response_tokens,
         strict=args.strict,
         run_quality_judge=not args.no_quality_judge,
+        param_policy=args.param_policy,
     )
 
     questions = _load_questions(args.questions, args.limit)

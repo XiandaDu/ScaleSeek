@@ -58,6 +58,14 @@ class ColdStartConfig:
     run_quality_judge: bool = True
     teacher_max_tokens: int = 768
     preview_chars: int = 700
+    # BM25 parameter policy for the forward trajectory:
+    #   "heuristic" — assign k1/b/top_k/mode from query features (a rule).
+    #   "search"    — grid-search BM25 params against the real index and teach the
+    #                 setting that ranks the target passage best (empirically grounded).
+    #   "teacher"   — keep exactly what the teacher emitted (often omitted -> runtime
+    #                 defaults; no adaptation shown).
+    # heuristic/search annotate the turn's reasoning with the rationale.
+    param_policy: str = "heuristic"
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +349,87 @@ def _history_append(history: str, assistant: str, tool_result: Optional[str]) ->
     return history + block + "\n"
 
 
+def _param_policy(query: str, bm25_idx: int) -> tuple[dict, str]:
+    """Heuristic cold-start BM25 parameter policy: query features -> parameters.
+
+    A sensible starting policy the student imitates; RL later optimizes it. It ties
+    the knobs to a generalizable feature (query length / specificity) rather than a
+    fixed constant:
+      - long descriptive query -> lower k1, higher b, wider top_k (don't let long
+        generic articles crowd out the specific passage)
+      - short focused query    -> higher k1, lower b (let exact repeated mentions win)
+      - medium                 -> moderate settings
+    The first retrieval replaces the workspace; later ones merge to keep prior evidence.
+    Returns (params, rationale) — rationale is appended to the turn's reasoning so the
+    action stays consistent with the reasoning.
+    """
+    n = len(query.split())
+    if n >= 6:
+        params = {"top_k": 10, "k1": 1.2, "b": 0.9}
+        why = ("This is a longer, descriptive query, so I'll lower k1 and raise b so long "
+               "generic articles don't crowd out the specific passage, and widen top_k a little.")
+    elif n <= 3:
+        params = {"top_k": 5, "k1": 2.0, "b": 0.5}
+        why = ("This is a short, focused query on a distinctive term, so I'll raise k1 so its "
+               "repeated exact mentions dominate the match and lower b to favor short, dense passages.")
+    else:
+        params = {"top_k": 5, "k1": 1.5, "b": 0.75}
+        why = ""
+    params["mode"] = "replace" if bm25_idx == 0 else "merge"
+    if bm25_idx > 0:
+        why = (why + " " if why else "") + "I'll merge these into the workspace to keep the earlier evidence."
+    return params, why.strip()
+
+
+# Search-then-teach mentor: try BM25 settings, keep the one that actually ranks the
+# target passage best, and teach THOSE parameters (empirically grounded, not a rule).
+_K1_GRID = (0.9, 1.2, 1.5, 2.0, 2.5)
+_B_GRID = (0.3, 0.5, 0.75, 0.9)
+_TOPK_LADDER = (3, 5, 10, 20)
+
+
+def _gold_rank(hits: list[dict], targets: list[str]) -> Optional[int]:
+    """1-based rank of the first retrieved passage that contains a target string."""
+    norm_targets = [normalize(t) for t in targets if t]
+    for i, h in enumerate(hits, 1):
+        t = normalize(h.get("text", ""))
+        if any(nt and nt in t for nt in norm_targets):
+            return i
+    return None
+
+
+def _search_params(retriever, query: str, targets: list[str], bm25_idx: int) -> tuple[dict, str]:
+    """Grid-search (k1, b); pick the setting that ranks the target passage highest,
+    then the smallest top_k that includes it. Returns (params, rationale).
+    Falls back to a bare replace/merge if no setting surfaces the target."""
+    top_probe = max(_TOPK_LADDER)
+    default_rank = _gold_rank(retriever.retrieve(query, top_k=top_probe, k1=1.2, b=0.75), targets)
+    best = None  # (rank, closeness_to_default, k1, b)
+    for k1 in _K1_GRID:
+        for b in _B_GRID:
+            rank = _gold_rank(retriever.retrieve(query, top_k=top_probe, k1=k1, b=b), targets)
+            if rank is None:
+                continue
+            cand = (rank, abs(k1 - 1.2) + abs(b - 0.75), k1, b)
+            if best is None or cand < best:
+                best = cand
+    mode = "replace" if bm25_idx == 0 else "merge"
+    if best is None:
+        return {"mode": mode}, ""
+    rank, _, k1, b = best
+    top_k = next((t for t in _TOPK_LADDER if t >= rank), top_probe)
+    params = {"top_k": top_k, "k1": round(k1, 2), "b": round(b, 2), "mode": mode}
+    if default_rank and default_rank <= 3 and rank >= default_rank:
+        why = ""  # default already retrieves it well; no need to justify a tweak
+    else:
+        why = (f"A default search ranks the most on-topic passage around position "
+               f"{default_rank or 'off the list'}; with k1={params['k1']} and b={params['b']} it moves to "
+               f"position {rank}, so I'll use those and set top_k={top_k} to pull it into the workspace.")
+    if bm25_idx > 0:
+        why = (why + " " if why else "") + "I'll merge it with the earlier evidence."
+    return params, why.strip()
+
+
 # ---------------------------------------------------------------------------
 # Backward pass
 # ---------------------------------------------------------------------------
@@ -464,10 +553,23 @@ def _forward_pass(teacher, question: str, golds: list[str], hops: list[Hop],
     workspace = Workspace()
     history = ""
     n_tool_calls = 0
+    bm25_idx = 0
 
     for hop in hops:
         for target_tc in hop.trace:
             draft_think, draft_tc = _planner_draft(teacher, question, history, cfg)
+            # Apply the cold-start parameter policy so the trajectory demonstrates
+            # adaptive k1/b/top_k/mode control instead of a constant or all-omitted set.
+            param_note = ""
+            if cfg.param_policy in ("heuristic", "search") and target_tc["name"] == "bm25_retrieve":
+                query = str(target_tc["arguments"].get("query", ""))
+                if cfg.param_policy == "heuristic":
+                    params, param_note = _param_policy(query, bm25_idx)
+                else:
+                    targets = [hop.expected] + list(hop.forms)
+                    params, param_note = _search_params(retriever, query, targets, bm25_idx)
+                target_tc["arguments"].update(params)
+                bm25_idx += 1
             result = execute_tool(target_tc["name"], target_tc["arguments"], workspace,
                                   retriever, tokenizer=tokenizer,
                                   max_response_tokens=cfg.tool_response_tokens)
@@ -475,6 +577,8 @@ def _forward_pass(teacher, question: str, golds: list[str], hops: list[Hop],
             preview = result_json[: cfg.preview_chars]
             reasoning = _tutor_edit(teacher, question, history, draft_think, draft_tc,
                                     target_tc, preview, cfg)
+            if param_note:
+                reasoning = (_sanitize_reasoning(reasoning) + " " + param_note).strip()
             assistant = _fmt_tool_turn(reasoning, target_tc)
             messages.append({"role": "assistant", "content": assistant}); mask.append(1)
             messages.append({"role": "tool", "content": result_json}); mask.append(0)

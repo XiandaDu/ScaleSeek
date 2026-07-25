@@ -39,7 +39,70 @@ def _passage_contents(p: dict) -> str:
     return f"{title}. {text}" if title else text
 
 
-def build(fixtures_path: Path, out_dir: Path) -> dict:
+# ---------------------------------------------------------------------------
+# Hard (parameter-sensitive) distractors
+# ---------------------------------------------------------------------------
+# k1/b/top_k only matter when the corpus contains passages that overlap the query
+# lexically but do NOT hold the answer, in a mix of lengths and term-frequencies.
+# For each question we synthesize such traps (never containing a golden answer):
+#   - long/dilute : long filler with query terms sprinkled -> favored by high b;
+#                   a short dense gold beats them only when b is lowered.
+#   - short/spam  : a query term repeated many times -> favored by high k1.
+#   - medium      : moderate overlap in a wrong context.
+# This pushes the gold passage down to a rank where the BM25 knobs change whether
+# and where it is retrieved, giving the search-then-teach mentor real signal.
+
+_STOP = {
+    "the", "a", "an", "of", "in", "on", "at", "to", "is", "are", "was", "were",
+    "what", "which", "who", "whom", "where", "when", "how", "why", "did", "do",
+    "does", "and", "or", "for", "by", "that", "this", "with", "as", "it", "its",
+    "official", "used", "country", "city", "known", "first", "year",
+}
+_FILLER = (
+    "This passage concerns unrelated administrative matters and miscellaneous "
+    "trivia. It records routine footnotes, scheduling notes, and clerical details "
+    "that bear no substantive connection to any particular fact. Various committees "
+    "reviewed the paperwork and filed it without further comment. The remainder is "
+    "boilerplate retained only for archival completeness and indexing purposes."
+)
+
+
+def _salient_terms(question: str) -> list[str]:
+    seen: list[str] = []
+    for raw in question.split():
+        w = raw.strip("?.,:;\"'()").strip()
+        if len(w) < 4 or w.lower() in _STOP:
+            continue
+        if w not in seen:
+            seen.append(w)
+    return seen or (question.split()[:1] if question.split() else [])
+
+
+def _hard_distractors(question: str, golds: list[str], n_each: int, qid: str) -> list[dict]:
+    """Distractors that cover (almost) ALL the query's content words but hold no
+    answer, so they compete with the gold on term coverage and the BM25 knobs
+    decide the tie: long ones win under high b, short term-spam under high k1, and
+    the short dense gold only surfaces under low b / moderate k1."""
+    terms = _salient_terms(question)
+    if not terms:
+        return []
+    allterms = " ".join(terms)
+    low_golds = [g.lower() for g in golds]
+    out: list[dict] = []
+    for i in range(n_each):
+        # long / dilute: every query term once, buried in a long filler passage.
+        out.append({"title": f"Record {qid}-L{i}",
+                    "text": (f"{_FILLER} This lengthy record incidentally references {allterms}. "
+                             f"{_FILLER} The keywords {allterms} appear only in passing amid "
+                             f"unrelated administrative text and define nothing. {_FILLER}")})
+        # short / spam: every query term repeated, minimal context.
+        out.append({"title": f"Index {qid}-S{i}",
+                    "text": (f"{allterms}. {allterms}. {allterms}. "
+                             f"Keyword cross-reference index entry; no definition provided.")})
+    return [d for d in out if not any(g and g in d["text"].lower() for g in low_golds)]
+
+
+def build(fixtures_path: Path, out_dir: Path, hard: int = 0) -> dict:
     fixtures = json.loads(fixtures_path.read_text(encoding="utf-8"))
     examples = fixtures.get("examples", [])
     distractors = fixtures.get("distractors", [])
@@ -68,6 +131,10 @@ def build(fixtures_path: Path, out_dir: Path) -> dict:
     for ex in examples:
         for p in ex.get("passages", []):
             _add(p)
+        if hard:
+            for d in _hard_distractors(ex["question"], list(ex.get("golden_answers", [])),
+                                       hard, str(ex["id"])):
+                _add(d)
         q_rows.append({
             "id": str(ex["id"]),
             "question": ex["question"],
@@ -114,10 +181,13 @@ def main() -> None:
     ap.add_argument("--out-dir", default=".smoke")
     ap.add_argument("--build-index", action="store_true",
                     help="also build the Pyserini/Lucene BM25 index (needs Java + pyserini)")
+    ap.add_argument("--hard", type=int, default=0, metavar="N",
+                    help="add N*3 parameter-sensitive lexical-overlap distractors per question "
+                         "(long/dilute + short/spam + medium), so k1/b/top_k change gold ranking")
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir)
-    info = build(Path(args.fixtures), out_dir)
+    info = build(Path(args.fixtures), out_dir, hard=args.hard)
     print(f"[make_smoke_corpus] wrote {info['n_docs']} docs -> {info['corpus_file']}")
     print(f"[make_smoke_corpus] wrote {info['n_questions']} questions -> {info['questions_file']}")
 

@@ -164,6 +164,39 @@ def test_answer_is_pinned_to_gold_even_if_planner_differs():
     assert "Paris" in final and "WrongCity" not in final
 
 
+def test_param_policy_varies_by_query_features():
+    from train.sft.coldstart import _param_policy
+    short_p, short_why = _param_policy("Mona Lisa painter", 0)          # 3 tokens -> focused
+    long_p, long_why = _param_policy(
+        "what is the official currency used in the country of Japan today", 0)  # long -> descriptive
+    assert short_p["k1"] > long_p["k1"]        # focused query raises k1
+    assert short_p["b"] < long_p["b"]          # focused query lowers b
+    assert long_p["top_k"] >= short_p["top_k"]  # descriptive query casts a wider net
+    assert short_p["mode"] == "replace"
+    assert _param_policy("a b c", 1)[0]["mode"] == "merge"   # later retrieval merges
+    assert short_why and long_why              # both annotate the reasoning
+
+
+def test_gold_rank_and_search_params():
+    from train.sft.coldstart import _gold_rank, _search_params
+    hits = [{"text": "nothing relevant here"}, {"text": "the answer is Paris indeed"}]
+    assert _gold_rank(hits, ["Paris"]) == 2
+    assert _gold_rank(hits, ["Berlin"]) is None
+
+    class NoTarget:  # target never retrieved -> search falls back to a bare replace
+        def retrieve(self, q, top_k=3, k1=1.2, b=0.75):
+            return [{"text": "unrelated"} for _ in range(top_k)]
+    params, why = _search_params(NoTarget(), "q", ["Zzz"], 0)
+    assert params == {"mode": "replace"} and why == ""
+
+    class GoldAt5:  # target sits at rank 5 -> search must widen top_k to include it
+        def retrieve(self, q, top_k=3, k1=1.2, b=0.75):
+            docs = [{"text": "filler"}] * 4 + [{"text": "contains Canberra"}]
+            return docs[:top_k]
+    params, _ = _search_params(GoldAt5(), "q", ["Canberra"], 0)
+    assert params["top_k"] >= 5 and params["mode"] == "replace"
+
+
 def test_no_gold_is_skipped():
     ex = {"id": "t3", "question": "q?", "golden_answers": []}
     traj = build_trajectory(ex, _single_hop_teacher(), FakeRetriever(), cfg=ColdStartConfig())
