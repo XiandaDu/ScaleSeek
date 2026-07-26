@@ -447,6 +447,7 @@ def run_agent(
     top_p: float = 1.0,
     tokenizer: Any = None,
     max_tool_response_tokens: Optional[int] = DEFAULT_MAX_RESPONSE_TOKENS,
+    enable_thinking: bool = True,
 ) -> AgentRecord:
     """Run ScaleSeek prompt agent on one example.
 
@@ -480,6 +481,8 @@ def run_agent(
         text, err = _chat_completion(
             client, model=model, messages=messages,
             temperature=temperature, top_p=top_p, max_tokens=max_tokens,
+            extra_body=(None if enable_thinking else
+                        {"chat_template_kwargs": {"enable_thinking": False}}),
         )
         record.llm_time_s += time.perf_counter() - t_llm
 

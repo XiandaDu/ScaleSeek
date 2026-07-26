@@ -62,11 +62,12 @@ else
   # parse_error (2026-07-22: 12h of 100% empty predictions). On failure it
   # prints a mode comparison table for a human decision and the lane moves on.
   # direct/rag production mode = budget_think (no max_tokens cap + forced
-  # thinking closure); scaleseek still runs plain temp=0 thinking, so it is
-  # gated on greedy_think until its own config decision is made.
+  # thinking closure); scaleseek production mode = thinking disabled
+  # (enable_thinking=false in baselines.yaml — greedy thinking never closes,
+  # budget forcing corrupts <tool_call>, vllm#44676), gated on greedy_nothink.
   case "$AGENT" in
     direct|rag) GATE_MODE=budget_think;;
-    scaleseek)  GATE_MODE=greedy_think;;
+    scaleseek)  GATE_MODE=greedy_nothink;;
     *)          GATE_MODE=;;
   esac
   if [ -n "$GATE_MODE" ]; then

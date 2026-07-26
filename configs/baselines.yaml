@@ -210,6 +210,11 @@ methods:
     max_tool_calls: 7
     max_new_tokens: 8192
     tool_response_tokens: 2048
+    # Thinking disabled (user decision 2026-07-26): greedy thinking never
+    # closes within any usable budget (probe 07-23), and vLLM's
+    # thinking_token_budget forced closure corrupts <tool_call> blocks
+    # (vllm#44676), leaving enable_thinking=false as the only working mode.
+    enable_thinking: false
     bm25_default:
       k1: 1.2
       b: 0.75

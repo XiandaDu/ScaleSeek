@@ -252,11 +252,16 @@ def run_eval(args: argparse.Namespace) -> None:
     def _dispatch(ex):
         if args.agent == "scaleseek":
             from .agent import run_agent
+            # enable_thinking=false is the frozen production mode (2026-07-26):
+            # greedy thinking provably never closes (probe 07-23) and vLLM's
+            # thinking_token_budget corrupts <tool_call> output (vllm#44676),
+            # so scaleseek runs with the chat template's thinking disabled.
             return run_agent(
                 ex, client=client, model=model, retriever=retriever,
                 max_turns=8, max_tokens=8192,
                 temperature=0.0, tokenizer=tokenizer,
-                max_tool_response_tokens=args.max_tool_response_tokens)
+                max_tool_response_tokens=args.max_tool_response_tokens,
+                enable_thinking=method_cfg["method"].get("enable_thinking", True))
         elif args.agent == "rag":
             from .agent import run_rag
             # All decoding values come from the frozen baselines.yaml entry
