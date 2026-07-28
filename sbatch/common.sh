@@ -40,7 +40,28 @@ fi
 if [ -z "${CUDA_HOME:-}" ] && command -v nvcc >/dev/null 2>&1; then
   CUDA_HOME=$(dirname "$(dirname "$(command -v nvcc)")"); export CUDA_HOME
 fi
+# octal40/41 have no /usr/local/cuda and no nvcc on PATH, so both probes above
+# miss and vLLM dies silently -> a whole run of 100% api_error rows. The pip
+# CUDA package inside the env is the working CUDA_HOME there (commit 00e687f).
+if [ -z "${CUDA_HOME:-}" ]; then
+  for c in /u/mofengra/miniconda3/envs/scaleseek/lib/python3.11/site-packages/nvidia/cu13 \
+           /u/mofengra/miniconda3/envs/scaleseek/lib/python3.11/site-packages/nvidia/cu12; do
+    [ -x "$c/bin/nvcc" ] && export CUDA_HOME=$c && break
+  done
+fi
 [ -n "${CUDA_HOME:-}" ] && export PATH=$CUDA_HOME/bin:$PATH
+if [ -z "${CUDA_HOME:-}" ]; then
+  echo "FATAL: CUDA_HOME unresolved on $(hostname); vLLM would fail silently and"
+  echo "       produce a full run of api_error rows. Refusing to start."
+  exit 1
+fi
+
+# L40S (sm_89, octal40/41): flashinfer's JIT is built against mismatched CUDA
+# headers and breaks sampling; torch-native sampling works (commit 1be8033).
+if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qiE "l40|ls40"; then
+  export VLLM_USE_FLASHINFER_SAMPLER=0
+  echo "[common] L40S detected -> VLLM_USE_FLASHINFER_SAMPLER=0"
+fi
 
 export TMPDIR=/var/tmp/mofengra/${SLURM_JOB_ID:-manual}
 mkdir -p "$TMPDIR"
@@ -88,6 +109,64 @@ stop_vllm() {
     VLLM_PID=""
     sleep 5
   fi
+}
+
+# --- Packed mode: several independent cells inside one job -------------------
+# The QOS caps JOBS (2 running / 4 queued), not GPUs -- there is no MaxTRES at
+# all. Asking for gpu:2 on a 4-GPU node therefore burned half of every
+# allocation and serialised a matrix that has no data dependencies. These
+# helpers let one job hold a whole node and run one cell per GPU.
+
+gpu_mem_mib() {  # smallest GPU memory in the allocation, MiB
+  nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null \
+    | sort -n | head -1
+}
+
+gpus_per_cell() {  # how many GPUs one Qwen3.5-9B server needs on this node
+  # 9B bf16 needs ~18GB weights + KV; it fits on a 48GB L40S/A6000 at TP=1 but
+  # not on a 24GB A5000, where TP=2 is mandatory (32 layers / 4 KV heads /
+  # head_dim 256 = 128 KB per token, so a single 32k sequence alone is 4.0 GB).
+  local mem; mem=$(gpu_mem_mib)
+  if [ -n "$mem" ] && [ "$mem" -ge 40000 ]; then echo 1; else echo 2; fi
+}
+
+PACK_PIDS=()
+start_vllm_on() {  # start_vllm_on <gpus> <model> <rev> <port> <tp> <name> [extra...]
+  local gpus=$1 model=$2 rev=$3 port=$4 tp=$5 name=$6; shift 6
+  local log=$REPO/logs/vllm_${SLURM_JOB_NAME:-manual}_${SLURM_JOB_ID:-0}_$port.log
+  echo "[vllm] gpus=$gpus serving $model@$rev on :$port tp=$tp as '$name'"
+  CUDA_VISIBLE_DEVICES="$gpus" \
+  "$PY" -m vllm.entrypoints.openai.api_server \
+      --model "$model" --revision "$rev" --dtype bfloat16 \
+      --host 127.0.0.1 --port "$port" --tensor-parallel-size "$tp" \
+      --served-model-name "$name" \
+      --max-model-len "${VLLM_MAX_LEN:-32768}" \
+      --gpu-memory-utilization "${VLLM_MEM_UTIL:-0.90}" \
+      --disable-custom-all-reduce \
+      "$@" > "$log" 2>&1 &
+  PACK_PIDS+=("$!")
+  echo "$!"
+}
+
+stop_pack() {
+  for p in "${PACK_PIDS[@]:-}"; do
+    [ -n "$p" ] && kill "$p" 2>/dev/null || true
+  done
+  PACK_PIDS=()
+  sleep 5
+}
+
+waitp_pid() {  # waitp_pid <port> <pid> [timeout] -- like waitp but for a given pid
+  local port=$1 pid=$2 timeout=${3:-3600} t=0
+  until curl -sf "http://127.0.0.1:$port/v1/models" >/dev/null 2>&1; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "FATAL: vLLM (pid $pid) exited before :$port opened"; return 1
+    fi
+    t=$((t+5))
+    [ "$t" -ge "$timeout" ] && { echo "FATAL: vLLM :$port not up after ${timeout}s"; return 1; }
+    sleep 5
+  done
+  echo "[vllm] :$port up after ${t}s"
 }
 
 sane() {  # sane <results.jsonl> -- refuse mostly-api_error or parroted outputs

@@ -10,15 +10,36 @@ for f in sbatch/queue_lane*.txt; do
   printf '  %-28s %s 个待跑\n' "$(basename "$f")" "$(grep -c . "$f")"
 done
 
+echo; echo "== 打包作业内各 cell 进度（p2_pack）=="
+shopt -s nullglob
+packlogs=(logs/cell_*.log)
+if [ ${#packlogs[@]} -eq 0 ]; then
+  echo "  (无打包作业在跑)"
+else
+  for c in "${packlogs[@]}"; do
+    name=$(basename "$c" .log); name=${name#cell_}
+    last=$(grep -oE "\[ *[0-9]+/[0-9]+\]" "$c" 2>/dev/null | tail -1)
+    gate=$(grep -oE "GATE-(PASS|FAIL)" "$c" 2>/dev/null | tail -1)
+    done_=$(grep -c "ALL_DONE" "$c" 2>/dev/null)
+    st="running"; [ "${done_:-0}" -gt 0 ] && st="DONE"
+    grep -q "FATAL" "$c" 2>/dev/null && st="FATAL"
+    printf '  %-46s %-8s %-14s %s\n' "$name" "$st" "${gate:-—}" "${last:-启动中}"
+  done
+fi
+shopt -u nullglob
+
 echo; echo "== 已完成的 phase-2 指标 =="
 ls results/phase2/*.metrics.json 2>/dev/null | while read -r m; do
   python3 - "$m" <<'EOF'
 import json, sys
 d = json.load(open(sys.argv[1]))
 name = sys.argv[1].split("/")[-1].replace(".metrics.json", "")
-flat = {k: v for k, v in d.items() if isinstance(v, (int, float, str)) and k not in ("results",)}
-keep = {k: flat[k] for k in list(flat)[:8]}
-print(f"  {name:40s} {keep}")
+a, l = d.get("answer_quality", {}), d.get("latency", {})
+ci = a.get("em_ci95") or {}
+band = f" ±{(ci['hi']-ci['lo'])/2:.3f}" if ci.get("hi") is not None else ""
+print(f"  {name:34s} n={d.get('n')}  EM={a.get('em', 0):.4f}{band}  "
+      f"F1={a.get('f1', 0):.4f}  ans={l.get('answer_rate', 0):.3f}  "
+      f"conc={l.get('concurrency')}  wall={l.get('wall_s_per_example', '?')}s/ex")
 EOF
 done
 [ -z "$(ls results/phase2/*.metrics.json 2>/dev/null)" ] && echo "  (还没有完成的 run)"

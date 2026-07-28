@@ -91,6 +91,36 @@ python -m eval.run_eval --dataset popqa --full-eval --agent search_r1 \
 Repeat RAG, Search-R1 and Search-O1 with `bm25`, `e5`, and `qwen3_emb_4b`.
 Repeat Search-R1 for both frozen checkpoints. `--retrieval-top-k` is fixed to 3.
 
+## Cluster: pack a whole node per job
+
+The `rali` QOS is `MaxJobsPU=2 / MaxSubmitPU=4` with **no `MaxTRES`** — it caps
+the number of jobs, not GPUs. Asking for `--gres=gpu:2` on a 4-GPU node therefore
+wastes half of every allocation and serialises a matrix whose cells are fully
+independent (distinct output files, no shared state). Use `p2_pack.sbatch` to
+hold a node and run one cell per GPU:
+
+```bash
+sbatch -J p2_packA1 --export=ALL,LANE=laneA,\
+CELLS=rag_bm25:rag:bm25+rag_e5:rag:e5+scaleseek:scaleseek:bm25 sbatch/p2_pack.sbatch
+```
+
+- `CELLS` = `outname:agent:ret[:sr1]`, separated by **`+`** (not spaces or
+  commas: `--export` splits on commas and the lane queue is word-split).
+- Cells per node are decided at runtime from GPU memory: ≥40 GB (L40S, A6000)
+  runs Qwen3.5-9B at TP=1 → 4 cells; 24 GB (A5000) needs TP=2 → 2 cells. A
+  `qwen3_emb_4b` cell takes one extra GPU for its query encoder.
+- Cells that do not fit are **re-submitted automatically** as a follow-up pack
+  job, which also inherits `LANE` so the queue advances exactly once.
+- A cell whose `.metrics.json` already exists is skipped, so a requeued job
+  resumes the remainder.
+- Per-cell logs: `logs/cell_<job>_<id>_<name>.log`; `sbatch/status.sh` shows
+  each cell's gate verdict and progress.
+
+Packing changes only **how many cells run at once**. Every cell still runs
+`--full-eval` over the complete 14,267-row split — no `-n`, no `--offset`, no
+subsetting. Never pack a cell that another queued job is already writing: the
+skip check fires on `.metrics.json`, which only appears when a run finishes.
+
 ## Frozen official repositories
 
 ```bash
