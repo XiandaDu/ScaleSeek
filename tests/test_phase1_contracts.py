@@ -327,3 +327,63 @@ def test_scaleseek_eval_params_come_from_the_frozen_config():
         assert literal not in scaleseek_block, (
             f"{literal} is hardcoded in the scaleseek dispatch; it must be read "
             "from configs/baselines.yaml or the frozen config is decorative")
+
+
+# ---------------------------------------------------------------------------
+# The 1/10 scope exception (TASK.md "1/10 规模例外"). It is only defensible
+# because the subset is a pure function of the ids -- no seed, no state file --
+# so these tests pin exactly that property.
+# ---------------------------------------------------------------------------
+
+def test_decile_subset_is_deterministic_and_order_independent():
+    from eval.subsets import select, subset_manifest, subset_size
+    ex = [{"id": f"popqa_test_{i}"} for i in range(14267)]
+    assert subset_size(14267) == 1427                     # ceil(N/10)
+
+    a = select(ex, dataset="popqa")
+    shuffled = list(reversed(ex))
+    b = select(shuffled, dataset="popqa")
+    assert {e["id"] for e in a} == {e["id"] for e in b}, \
+        "subset must not depend on the order rows sit in on disk"
+    assert (subset_manifest(a, dataset="popqa", total=14267)["subset_ids_sha256"]
+            == subset_manifest(b, dataset="popqa", total=14267)["subset_ids_sha256"])
+
+
+def test_decile_subset_is_dataset_scoped():
+    """Different datasets must not select 'the same' positional rows."""
+    from eval.subsets import select
+    ex = [{"id": str(i)} for i in range(1000)]
+    a = {e["id"] for e in select(ex, dataset="popqa")}
+    b = {e["id"] for e in select(ex, dataset="hotpotqa")}
+    assert a != b
+
+
+def test_subset_verify_rejects_drift():
+    from eval.subsets import select, subset_manifest, verify
+    ex = [{"id": f"q{i}"} for i in range(500)]
+    sub = select(ex, dataset="popqa")
+    man = subset_manifest(sub, dataset="popqa", total=500)
+    ids = [e["id"] for e in sub]
+    assert verify(ids, man)[0] is True
+    assert verify(ids[:-1], man)[0] is False           # truncated run
+    assert verify(ids + ["extra"], man)[0] is False    # contaminated run
+
+
+def test_only_the_three_call_bound_harnesses_use_the_decile():
+    """Guard the blast radius: no other sbatch may point at the subset file."""
+    allowed = {"p2_dci.sbatch", "p2_dr_dci.sbatch", "p2_rise.sbatch",
+               "p0_assets.sbatch"}
+    for f in sorted((ROOT / "sbatch").glob("*.sbatch")):
+        if "decile1of10" in f.read_text() and f.name not in allowed:
+            pytest.fail(f"{f.name} evaluates the 1/10 subset but TASK.md only "
+                        "sanctions DCI / DR-DCI / RISE")
+
+
+def test_decile_harnesses_enforce_the_id_set():
+    """A subset run must be scope-checked, or the exception loses its guarantee."""
+    for name in ("p2_dci.sbatch", "p2_dr_dci.sbatch", "p2_rise.sbatch"):
+        text = (ROOT / "sbatch" / name).read_text()
+        assert "decile1of10.jsonl" in text, f"{name} should read the subset file"
+        assert "--expect-ids" in text, \
+            f"{name} computes metrics without --expect-ids; a truncated run " \
+            "would be reported as the sanctioned subset"

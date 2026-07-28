@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from eval.metrics import score_example, aggregate                     # noqa: E402
 from eval import retrieval_metrics as rm                               # noqa: E402
 from eval import qrels as Q                                            # noqa: E402
+from eval import subsets                                               # noqa: E402
 
 _DATASETS = [
     "nq", "triviaqa", "popqa", "hotpotqa", "2wikimultihopqa",
@@ -226,6 +227,11 @@ def main():
     ap.add_argument("--c-seg", type=int, default=500,
                     help="Localization segment width (DCI-Agent-Lite §A.3).")
     ap.add_argument("--out", default=None, help="Write the JSON report here too.")
+    ap.add_argument("--expect-ids", default=None, metavar="MANIFEST.json",
+                    help="Subset manifest (eval/subsets.subset_manifest) that this "
+                         "run must match exactly. Required for the 1/10-scope "
+                         "harnesses so a truncated or drifted run cannot be "
+                         "reported as if it were the sanctioned subset.")
     # index-build mode
     ap.add_argument("--build-title-index", action="store_true")
     ap.add_argument("--corpus-path", default=os.environ.get("CORPUS_FILE"))
@@ -251,6 +257,24 @@ def main():
     report: dict = {
         "file": str(path), "dataset": dataset, "agent": agent, "n": len(rows),
     }
+
+    # --- evaluation scope -------------------------------------------------
+    # Every row must be able to say whether it covers the complete split or the
+    # sanctioned 1/10 subset. Without this a results table can silently put a
+    # 1,427-question DCI row next to a 14,267-question RAG row.
+    if args.expect_ids:
+        manifest = subsets.load_manifest(args.expect_ids)
+        ok, msg = subsets.verify((r.get("id") for r in rows), manifest)
+        if not ok:
+            sys.exit(f"SCOPE-FAIL {path}: {msg}")
+        print(f"[scope] {msg}")
+        report["eval_scope"] = manifest["eval_scope"]
+        report["eval_scope_manifest"] = {
+            k: manifest[k] for k in
+            ("subset_n", "source_total", "subset_ids_sha256", "selection")
+        }
+    else:
+        report["eval_scope"] = "full_split"
 
     # --- answer quality ---
     scores = [score_example(r.get("prediction"), r.get("gold_answers", [])) for r in rows]

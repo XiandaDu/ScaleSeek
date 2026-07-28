@@ -86,10 +86,18 @@ echo "== 5. backfill + validate index manifests (bm25, e5) =="
   --index-manifest "$E5_INDEX_DIR/index_manifest.json" \
   --index-manifest "$BM25_INDEX_DIR/index_manifest.json"
 
-echo "== 6. DCI-Lite full PopQA conversion =="
+echo "== 6. DCI-Lite PopQA conversion (full + sanctioned 1/10 subset) =="
 "$PY" scripts/make_dcilite_datasets.py --datasets popqa \
   --out-dir "$DATA/dcilite_datasets"
 wc -l "$DATA/dcilite_datasets/popqa_full.jsonl"
+# DCI / DR-DCI / RISE evaluate the deterministic 1/10 subset (TASK.md
+# "1/10 规模例外"): at 300/300/100 model calls per question the full split is
+# ~32 days per row. All three read this SAME file, so they stay comparable to
+# each other; the manifest fingerprints the id set and compute_metrics refuses
+# a run that does not match it.
+"$PY" scripts/make_dcilite_datasets.py --datasets popqa --fraction 10 \
+  --out-dir "$DATA/dcilite_datasets"
+wc -l "$DATA/dcilite_datasets/popqa_decile1of10.jsonl"
 
 echo "== 7. AgentIR query TSV =="
 "$PY" - <<'PYEOF'

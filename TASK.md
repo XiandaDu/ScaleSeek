@@ -234,23 +234,55 @@ BM25 的 `1.2/0.75` 是本项目统一采用的常见经典设置，不再声称
 - [ ] 为 Wiki-18 完整 corpus 建好 BM25/E5/Qwen3-Embedding-4B/AgentIR 所需索引，并验证 doc_id 对齐。
 - [ ] 正式命令中禁止出现 `-n`、`--n`、`--offset`、sampling、subset 或只跑失败样本后错误汇总。
 
+### 1/10 规模例外（2026-07-28 用户批准，唯一豁免）
+
+**仅 DCI、DR-DCI、RISE 三个方法**在 PopQA 上评测**确定性的 1/10 子集**，其余全部方法一律完整 14,267。
+
+**动机（算术问题，非调参问题）**：这三者分别是 300 / 300 / 100 次模型调用**每题**。
+实测锚点 `dcilite30`：n=500 在并发 2 下耗时 26h53m，外推到 14,267 约 **32 天/行**，
+而 QOS 只有 2 个作业槽且 Phase 3 还要在 6-9 个数据集上重跑同样矩阵。
+
+**子集如何定义（这是本例外能成立的前提）**：
+
+- 选择规则是 **id 的纯函数**，不是随机抽样：
+  `rank = SHA256("{dataset}:{id}")` 排序后取前 `ceil(N/10)` = **1,427** 条。
+- 因此**无需 seed、无需状态文件**，任何人拿到同一份数据都能重建同一子集；
+  与磁盘行序无关，重新下载或重新转换结果不变。
+- 实现：`eval/subsets.py`；生成：`scripts/make_dcilite_datasets.py --datasets popqa --fraction 10`。
+- 产物 `popqa_decile1of10.manifest.json` 记录 `subset_ids_sha256`；
+  `scripts/compute_metrics.py --expect-ids <manifest>` 在算分前强制校验，
+  ID 集合不符即 `SCOPE-FAIL` 退出。三个方法**共用同一个子集文件**，故彼此严格可比。
+
+> 这条例外是对 2026-07-11 之前那套「随机 1500、**seed 不可考**」做法的直接否定
+> （见 `reports/baselines.md` 顶部 legacy 横幅）。允许缩规模的**唯一**理由是子集
+> 可复现、可校验、可审计；任何做不到这三点的缩规模仍然禁止。
+
+**汇报纪律（强制）**：
+
+- 每个 metrics 文件都带 `eval_scope` 字段（`full_split` 或 `decile_1_of_10`），
+  由 `compute_metrics.py` 自动写入，不得手工填。
+- 主表中这三行**必须显式标注 n=1,427**，不得与 14,267 的行并列后不加说明。
+- n=1,427 时 EM 的 95% 置信带约 **±2.6 个点**；跨 scope 的差距小于该带宽时
+  **不得**表述为方法差异。引用 `em_ci95` / `f1_ci95` 字段。
+- 这三行不参与"完整 PopQA"这一措辞；描述时用"1/10 子集"。
+
 ## 必跑矩阵
 
-| 方法 | PopQA 完整运行数 | 配置 |
-|---|---:|---|
-| Direct | 1 | Qwen3.5-9B |
-| RAG | 3 | BM25 / E5 / Qwen3-Embedding-4B |
-| Search-R1 | 6 | 7B、14B各自 × 三检索器 |
-| Search-O1 | 3 | Qwen3.5-9B × 三检索器 |
-| GrepSeek | 1 | 官方 GRPO checkpoint + grep workspace |
-| DCI | 1 | Qwen3.5-9B + 官方 DCI-Agent-Lite |
-| DR-DCI | 1 | Qwen3.5-9B + Wiki-18 官方 E5 pull backend |
-| RISE | 1 | Qwen3.5-9B + BM25 K=1000 + 阶段一验收过的完整 Wiki article TOC interaction space |
-| AgentIR | 1 | AgentIR-4B retriever + Qwen3.5-9B agent/generator |
-| IRCoT | 3 或 0 | 仅当阶段一官方化通过时跑三检索器；否则从项目删除并说明 |
-| ScaleSeek | 1 | Qwen3.5-9B + 主 BM25 方法设置 |
+| 方法 | 运行数 | 评测规模 | 配置 |
+|---|---:|---|---|
+| Direct | 1 | 14,267 | Qwen3.5-9B |
+| RAG | 3 | 14,267 | BM25 / E5 / Qwen3-Embedding-4B |
+| Search-R1 | 6 | 14,267 | 7B、14B各自 × 三检索器 |
+| Search-O1 | 3 | 14,267 | Qwen3.5-9B × 三检索器 |
+| GrepSeek | 1 | 14,267 | 官方 GRPO checkpoint + grep workspace |
+| **DCI** | 1 | **1,427（1/10）** | Qwen3.5-9B + 官方 DCI-Agent-Lite |
+| **DR-DCI** | 1 | **1,427（1/10）** | Qwen3.5-9B + Wiki-18 官方 E5 pull backend |
+| **RISE** | 1 | **1,427（1/10）** | Qwen3.5-9B + BM25 K=1000 + 阶段一验收过的完整 Wiki article TOC interaction space |
+| AgentIR | 1 | 14,267 | AgentIR-4B retriever + Qwen3.5-9B agent/generator |
+| IRCoT | 3 或 0 | 14,267 | 仅当阶段一官方化通过时跑三检索器；否则从项目删除并说明 |
+| ScaleSeek | 1 | 14,267 | Qwen3.5-9B + 主 BM25 方法设置 |
 
-每个配置必须覆盖完整 PopQA。允许因机器故障 resume，但最终输出必须通过集合校验：输出唯一 ID 集合与 dataset manifest 完全相等；临时 API/服务错误必须重试，无法恢复的 method failure要保留并计入失败分布。
+除上表标注 1/10 的三行外，每个配置必须覆盖完整 PopQA。允许因机器故障 resume，但最终输出必须通过集合校验：输出唯一 ID 集合与 dataset manifest 完全相等（1/10 的三行则与 `popqa_decile1of10.manifest.json` 完全相等，由 `--expect-ids` 强制）；临时 API/服务错误必须重试，无法恢复的 method failure要保留并计入失败分布。
 
 ## 第二阶段汇报
 

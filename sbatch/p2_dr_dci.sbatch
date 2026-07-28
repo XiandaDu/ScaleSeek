@@ -51,6 +51,11 @@ export DCI_PULL_BASE_URL="http://127.0.0.1:$PULL_PORT/retrieve"
 export DCI_PULL_DOCUMENT_BASE_URL="http://127.0.0.1:$PULL_PORT/document"
 mkdir -p "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty"
 
+# Scope: the dataset file below IS the sanctioned 1/10 subset (TASK.md
+# "1/10 规模例外"). `--full-eval` here is the official-harness gate -- it forbids
+# any further --limit/-n/--offset and pins the frozen model/revision -- so the
+# two together mean "run the entire decile file, unsliced". compute_metrics then
+# verifies the produced id set against the subset manifest (--expect-ids).
 "$PY" scripts/run_official_baseline.py dr_dci --repo-root "$OFFICIAL_ROOT" \
   --full-eval --model-revision "$GEN_REV" \
   --record results/phase2/popqa_dr_dci.run.json -- \
@@ -66,7 +71,7 @@ mkdir -p "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty"
   --pull-preview-mode ranked --pull-preview-limit 20 \
   --max-concurrency "${CONC:-4}" --skip-judge \
   --pi-thinking-level high --node-max-old-space-size-mb 8192 \
-  --dataset "$DATA/dcilite_datasets/popqa_full.jsonl" \
+  --dataset "$DATA/dcilite_datasets/popqa_decile1of10.jsonl" \
   --corpus-dir "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty" \
   --output-root "$RAW"
 stop_vllm
@@ -80,5 +85,6 @@ INPUT=$(find "$RAW" -name "*.jsonl" | head -1)
   --output results/phase2/popqa_dr_dci.jsonl
 sane results/phase2/popqa_dr_dci.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_dr_dci.jsonl \
-  --dataset popqa --agent dr_dci --out results/phase2/popqa_dr_dci.metrics.json
+  --dataset popqa --agent dr_dci --expect-ids "$DATA/dcilite_datasets/popqa_decile1of10.manifest.json" \
+  --out results/phase2/popqa_dr_dci.metrics.json
 echo "ALL_DONE popqa_dr_dci"
