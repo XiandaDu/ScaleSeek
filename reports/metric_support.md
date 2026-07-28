@@ -1,5 +1,19 @@
 # ScaleSeek Eval — Metric Support & Definitions
 
+> ## ⚠️ 部分 `legacy_invalid_for_main_table`（2026-07-28 标注）
+>
+> - **§0「评测标准集」整节作废。** 那节把 "popqa_full = 随机 1500（seed 不可考）"
+>   定为 stage-1 主对比标准集；`TASK.md:65` 已**明令禁止**正式实验使用随机抽样或
+>   固定 1500 子集。当前口径 = **全量 14,267**
+>   (`eval/datasets.py:EXPECTED_FULL_COUNTS`)。
+> - **§1 表格里 PopQA 的 "Local file" 一列写的 `popqa/popqa_longtail.jsonl` 是错的。**
+>   实际加载的是 `popqa/test`（`eval/datasets.py:27`），并有 SHA256 与 14,267 行数
+>   双重校验；`README` 亦明确 "no popqa_full or long-tail aliases"。
+> - **仍然有效**：§1 的 dataset × metric 支持矩阵（哪个集有 gold/qrel 标注）、
+>   各指标定义与论文出处、以及 "EM/F1 在 BCP 上会低估、需 LLM judge" 这一条。
+>   这些与样本量无关。
+
+
 Which metric each dataset can support (given the labels we actually have on disk),
 the exact definitions with paper sources, and the BM25 sweep design. Generated for
 the stage-1 baseline comparison.

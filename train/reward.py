@@ -14,8 +14,11 @@ Components that are TBD:
     - Curriculum: harder examples / larger corpus as training progresses
     - BM25 parameter bonus (reward good k1/b choices) — or leave to EM signal
 
-Current implementation: EM × f(L) length decay (direct port of GrepSeek's design).
-Workspace stats are logged but not yet included in the training signal.
+Current implementation: EM × f(L) length decay (direct port of GrepSeek's design)
+plus the workspace-efficiency penalty, which `train/config/grpo_trainer.yaml`
+enables (`enable_workspace_penalty: true`). The function default stays False so
+that importing this module without the ScaleSeek config reproduces the plain
+GrepSeek reward.
 """
 from __future__ import annotations
 
@@ -23,6 +26,7 @@ import math
 import re
 from typing import Any
 
+from eval.agent import final_answer, visible_text
 from eval.metrics import normalize, exact_match, f1 as compute_f1
 
 
@@ -54,15 +58,20 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
 def _extract_prediction(text: str) -> str:
-    """Extract final answer from trajectory text."""
-    blocks = _ANSWER_RE.findall(text)
-    if blocks:
-        return blocks[-1].strip()
-    # Fallback: strip tags, take last non-empty line.
-    clean = _TOOL_CALL_RE.sub("", text)
-    clean = _THINK_RE.sub("", clean)
-    lines = [ln.strip() for ln in clean.splitlines() if ln.strip()]
-    return lines[-1] if lines else ""
+    """Extract the final committed answer from trajectory text.
+
+    Delegates to `eval.agent.final_answer` so the reward optimises exactly the
+    string evaluation would score. Previously this searched the *raw* text, so an
+    <answer> rehearsed inside <think> could win — the same defect that broke the
+    evaluation parser (fixed there in 19198ee, missed here).
+
+    No last-line fallback: the format gate already zeroes any rollout without an
+    <answer> outside thinking, so a fabricated prediction could never raise the
+    score — it could only log a bogus reward/em (e.g. trailing prose that happens
+    to contain the gold) and mislabel a non-answer as a scored rollout. Evaluation
+    treats the same rollout as a parse_error; the two now agree.
+    """
+    return final_answer(text) or ""
 
 
 # ---------------------------------------------------------------------------
@@ -74,21 +83,40 @@ _SPLIT_RE = re.compile(r"(</?(?:think|tool_call|answer)>)")
 _TAG_RE = re.compile(r"</?(?:think|tool_call|answer)>")
 
 
+def _normalize_think(text: str) -> str:
+    """Re-attach the opening <think> that the chat template emitted into the prompt.
+
+    verl's `solution_str` is the generated portion only. In thinking mode the Qwen3
+    template has already written `<think>` into the prompt, so the rollout starts
+    mid-block and closes with a bare `</think>`. Re-attach the opener *only when the
+    rollout actually closed a think block* — with `enable_thinking=false` there are no
+    think tags at all, and unconditionally prepending one made the gate see 1 open /
+    0 close, fail every rollout, and hand GRPO an all-zero reward group (zero
+    advantage, zero gradient, silent no-op).
+    """
+    if "</think>" in text and not text.lstrip().startswith("<think>"):
+        return "<think>\n" + text
+    return text
+
+
 def _check_format(text: str) -> tuple[bool, str]:
     """Lightweight structural check.
 
     A valid ScaleSeek trajectory ends in <answer>...</answer> and has balanced tags.
-    Does NOT enforce strict ordering (that can be tightened once SFT format is locked).
+    Thinking is optional: a rollout generated with `enable_thinking=false` carries no
+    <think> tags and is still well-formed. Does NOT enforce strict ordering (that can
+    be tightened once SFT format is locked).
 
     TODO: tighten after SFT cold-start data format is finalized.
     """
+    text = _normalize_think(text)
     for tag in _FORMAT_TAGS:
         n_open = len(re.findall(rf"<{tag}>", text))
         n_close = len(re.findall(rf"</{tag}>", text))
         if n_open != n_close:
             return False, f"unbalanced <{tag}>"
-    if not _ANSWER_RE.search(text):
-        return False, "no <answer> block"
+    if not _ANSWER_RE.search(visible_text(text)):
+        return False, "no <answer> block outside thinking"
     return True, "ok"
 
 
@@ -207,13 +235,8 @@ def scaleseek_reward(
         m["reward/failed_rollout"] = 1.0
         return {"score": failed_rollout_reward, "reward/total": failed_rollout_reward, **m}
 
-    # 3. Format gate.
-    # Qwen3 chat template prepends <think>\n to the generated content; verl's
-    # solution_str is the generated portion only (missing the opening <think>).
-    fmt_input = solution_str
-    if not fmt_input.lstrip().startswith("<think>"):
-        fmt_input = "<think>\n" + fmt_input
-    format_pass, _ = _check_format(fmt_input)
+    # 3. Format gate (thinking-optional; see _normalize_think).
+    format_pass, _ = _check_format(solution_str)
 
     # 4. Compute EM / F1.
     em = 1.0 if (golden_answers and exact_match(prediction, golden_answers)) else 0.0

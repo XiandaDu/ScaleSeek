@@ -61,20 +61,24 @@ else
   # under the exact production decoding mode or every row degenerates to
   # parse_error (2026-07-22: 12h of 100% empty predictions). On failure it
   # prints a mode comparison table for a human decision and the lane moves on.
-  # direct/rag production mode = budget_think (no max_tokens cap + forced
-  # thinking closure); scaleseek production mode = thinking disabled
-  # (enable_thinking=false in baselines.yaml — greedy thinking never closes,
-  # budget forcing corrupts <tool_call>, vllm#44676), gated on greedy_nothink.
+  # Production mode for all three prompt agents = budget_think (no max_tokens cap
+  # + vLLM-native forced thinking closure). The gate probes the agent's OWN prompt
+  # (--agent), so scaleseek is scored on real <tool_call> turns.
+  #
+  # 2026-07-28: scaleseek was previously gated on greedy_nothink because the
+  # 07-23/07-24 tables showed budget_think at 0/16. Those tables predate the
+  # parser fix in 19198ee and are void — re-reading the same logs shows
+  # budget_think emitted 12-15/16 valid closed answers with finish=length never
+  # once triggered. enable_thinking=false is unfrozen pending a clean gate run.
   case "$AGENT" in
-    direct|rag) GATE_MODE=budget_think;;
-    scaleseek)  GATE_MODE=greedy_nothink;;
-    *)          GATE_MODE=;;
+    direct|rag|scaleseek) GATE_MODE=budget_think;;
+    *)                    GATE_MODE=;;
   esac
   if [ -n "$GATE_MODE" ]; then
     if ! "$PY" scripts/probe_thinking_closure.py \
           --base-url "http://127.0.0.1:$PORT/v1" --model Qwen/Qwen3.5-9B \
           --popqa "$POPQA_NORM" --n 16 --max-tokens 28000 \
-          --gate-mode "$GATE_MODE"; then
+          --gate-mode "$GATE_MODE" --agent "$AGENT"; then
       echo "FATAL: thinking-closure gate ($GATE_MODE) failed for $AGENT; config needs a user decision (see mode tables above)"
       exit 3
     fi

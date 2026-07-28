@@ -29,9 +29,14 @@ from eval.agent import parse_assistant  # noqa: E402  (exact production parser)
 from eval import prompts  # noqa: E402  (exact production prompt loader)
 
 
-def probe_one(client, model, question, mode, max_tokens, thinking_budget):
+def probe_one(client, model, question, mode, max_tokens, thinking_budget,
+              agent="direct"):
+    # The gate must exercise the prompt of the agent it gates. It used to hardcode
+    # `direct` for every agent, so the scaleseek gate never loaded the tool schema,
+    # never produced a <tool_call>, and could not have observed the tool-call
+    # behaviour its failure was attributed to.
     messages = [
-        {"role": "system", "content": prompts.load("direct")},
+        {"role": "system", "content": prompts.load(agent)},
         {"role": "user", "content": f"Question: {question}"},
     ]
     kwargs = dict(model=model, messages=messages, max_tokens=max_tokens)
@@ -64,43 +69,56 @@ def probe_one(client, model, question, mode, max_tokens, thinking_budget):
         text = content
         if text and "</think>" in text and "<think>" not in text:
             text = "<think>\n" + text
-    answer = parse_assistant(text or "").answer
+    parsed = parse_assistant(text or "")
     return {
         "finish_reason": choice.finish_reason,
         "completion_tokens": resp.usage.completion_tokens,
-        "answer": answer,
+        # A tool-using agent commits by calling a tool; treat that as a pass too,
+        # otherwise the gate scores a perfectly healthy first turn as a failure.
+        "answer": parsed.answer,
+        "tool_name": parsed.tool_name,
+        "actionable": bool(parsed.answer or parsed.tool_name),
+        "parse_error": parsed.error,
         "content_head": (content or "")[:160],
         "reasoning_tail": (reasoning or "")[-120:],
     }
 
 
-def run_mode(client, model, examples, mode, max_tokens, thinking_budget):
+def run_mode(client, model, examples, mode, max_tokens, thinking_budget,
+             agent="direct"):
     def one(ex):
         try:
             r = probe_one(client, model, ex["question"], mode, max_tokens,
-                          thinking_budget)
+                          thinking_budget, agent=agent)
         except Exception as e:  # a dead server must fail the gate, not hang it
             r = {"finish_reason": f"error:{e}", "completion_tokens": 0,
-                 "answer": None, "content_head": "", "reasoning_tail": ""}
+                 "answer": None, "tool_name": None, "actionable": False,
+                 "parse_error": str(e), "content_head": "", "reasoning_tail": ""}
         r["id"] = ex["id"]
         r["golds"] = ex["golden_answers"][:3]
         return r
     with ThreadPoolExecutor(max_workers=8) as pool:
         rows = list(pool.map(one, examples))
-    answered = sum(1 for r in rows if r["answer"])
+    # Pass = the turn produced a parseable commitment (an answer, or a tool call
+    # for tool-using agents). Scoring only <answer> made every healthy scaleseek
+    # first turn look like a failure.
+    ok = sum(1 for r in rows if r["actionable"])
+    n_tool = sum(1 for r in rows if r["tool_name"])
     toks = sorted(r["completion_tokens"] for r in rows)
-    print(f"\n== mode {mode} (max_tokens={max_tokens}, "
+    print(f"\n== mode {mode} on agent={agent} (max_tokens={max_tokens}, "
           f"thinking_budget={thinking_budget}) ==")
     for r in rows:
+        commit = r["tool_name"] and f"tool:{r['tool_name']}" or str(r["answer"])[:40]
         print(f"  {r['id']:16s} finish={str(r['finish_reason']):10s} "
-              f"tokens={r['completion_tokens']:6d} answer={str(r['answer'])[:40]!r} "
+              f"tokens={r['completion_tokens']:6d} commit={commit!r} "
               f"golds={r['golds']}")
-        if not r["answer"]:  # show what came out instead of an <answer> block
+        if not r["actionable"]:  # show what came out instead
+            print(f"      parse_error={r['parse_error']!r}")
             print(f"      content_head={r['content_head']!r}")
             print(f"      reasoning_tail={r['reasoning_tail']!r}")
-    print(f"  -> answered {answered}/{len(rows)}, completion_tokens "
-          f"median={toks[len(toks)//2]} max={toks[-1]}")
-    return answered, len(rows)
+    print(f"  -> actionable {ok}/{len(rows)} (of which {n_tool} tool_call), "
+          f"completion_tokens median={toks[len(toks)//2]} max={toks[-1]}")
+    return ok, len(rows)
 
 
 def main() -> None:
@@ -117,11 +135,18 @@ def main() -> None:
                              "sampling_think", "budget_think"])
     ap.add_argument("--thinking-budget", type=int, default=None,
                     help="default: the frozen value from configs/baselines.yaml "
-                         "(direct entry), so the gate always tests production")
+                         "for --agent, so the gate always tests production")
+    ap.add_argument("--agent", default="direct",
+                    choices=["direct", "rag", "scaleseek"],
+                    help="which agent's system prompt to probe (must match the "
+                         "agent being gated; the gate hardcoded 'direct' before "
+                         "2026-07-28, so it never exercised scaleseek's tools)")
     args = ap.parse_args()
     if args.thinking_budget is None:
         from eval.config import resolved_method
-        args.thinking_budget = resolved_method("direct")["method"]["thinking_token_budget"]
+        budget_source = "direct" if args.agent == "scaleseek" else args.agent
+        args.thinking_budget = resolved_method(budget_source)["method"].get(
+            "thinking_token_budget", 4096)
 
     from openai import OpenAI
     client = OpenAI(base_url=args.base_url, api_key="EMPTY", timeout=1800)
@@ -134,21 +159,31 @@ def main() -> None:
             if len(examples) >= args.n:
                 break
 
-    answered, n = run_mode(client, args.model, examples, args.gate_mode,
-                           args.max_tokens, args.thinking_budget)
-    if answered / n >= args.threshold:
-        print(f"GATE-PASS: mode {args.gate_mode} answered {answered}/{n}; "
-              f"config is runnable.")
+    ok, n = run_mode(client, args.model, examples, args.gate_mode,
+                     args.max_tokens, args.thinking_budget, agent=args.agent)
+    if ok / n >= args.threshold:
+        print(f"GATE-PASS: mode {args.gate_mode} on agent {args.agent} produced "
+              f"{ok}/{n} actionable turns; config is runnable.")
         return
-    print(f"\nGATE-FAIL: only {answered}/{n} answered under gate mode "
-          f"{args.gate_mode}. Collecting evidence from the other modes:")
+    print(f"\nGATE-FAIL: only {ok}/{n} actionable under gate mode "
+          f"{args.gate_mode} on agent {args.agent}. "
+          f"Collecting evidence from the other modes:")
+    scores = {args.gate_mode: (ok, n)}
     for mode in ("greedy_think", "greedy_nothink", "sampling_think",
                  "budget_think"):
         if mode != args.gate_mode:
-            run_mode(client, args.model, examples, mode, args.max_tokens,
-                     args.thinking_budget)
-    print(f"\nGATE-FAIL summary: gate mode {args.gate_mode} cannot produce "
-          "answers; a config decision is needed. See the mode tables above.")
+            scores[mode] = run_mode(client, args.model, examples, mode,
+                                    args.max_tokens, args.thinking_budget,
+                                    agent=args.agent)
+    print(f"\nGATE-FAIL summary for agent={args.agent} "
+          f"(threshold {args.threshold:.0%}):")
+    for mode, (o, tot) in scores.items():
+        verdict = "would PASS" if o / tot >= args.threshold else "fails"
+        print(f"  {mode:16s} {o:2d}/{tot}  {verdict}")
+    print("A config decision is needed. Before concluding that a mode cannot "
+          "work, check that this run postdates the parser fix in 19198ee — the "
+          "07-23/07-24 gate tables scored 0/16 for modes that were in fact "
+          "emitting valid answers.")
     sys.exit(3)
 
 

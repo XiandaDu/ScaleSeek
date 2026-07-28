@@ -203,5 +203,50 @@ def test_no_gold_is_skipped():
     assert traj.status == "skipped"
 
 
+# ---------------------------------------------------------------------------
+# Teacher-only knowledge must not reach the student's imitation target
+# ---------------------------------------------------------------------------
+
+def test_unsupported_answer_is_rejected_not_pinned_silently():
+    """Workspace never contains the gold -> pinning it would teach hallucination."""
+    ex = {"id": "t4", "question": "What is the capital of France?", "golden_answers": ["Paris"]}
+    empty = FakeRetriever(text="An unrelated passage about geology.")
+    traj = build_trajectory(ex, _single_hop_teacher(), empty, cfg=ColdStartConfig(max_refine=1))
+    assert traj.meta.get("answer_supported") is False
+    assert traj.status == "unsupported_answer", traj.meta
+    # and a supported one still passes
+    ok = build_trajectory(ex, _single_hop_teacher(), FakeRetriever(),
+                          cfg=ColdStartConfig(max_refine=1))
+    assert ok.meta.get("answer_supported") is True and ok.status == "ok"
+
+
+def test_grep_pattern_may_not_contain_the_answer():
+    from train.sft.coldstart import _call_leaks_answer
+    cfg = ColdStartConfig()
+    grep_gold = {"name": "grep_workspace", "arguments": {"pattern": "Tatsumi"}}
+    grep_safe = {"name": "grep_workspace", "arguments": {"pattern": "occupation"}}
+    bm25_gold = {"name": "bm25_retrieve", "arguments": {"query": "Tatsumi biography"}}
+    assert _call_leaks_answer(grep_gold, ["Tatsumi"], cfg) is True
+    assert _call_leaks_answer(grep_safe, ["Tatsumi"], cfg) is False
+    assert _call_leaks_answer(bm25_gold, ["Tatsumi"], cfg) is True
+    # opt-out restores the old teacher-only behaviour, explicitly
+    assert _call_leaks_answer(grep_gold, ["Tatsumi"],
+                              ColdStartConfig(grep_may_leak_answer=True)) is False
+
+
+def test_search_rationale_never_quotes_the_golds_rank():
+    """The student cannot observe a gold rank, so it must not be asked to say one."""
+    from train.sft.coldstart import _search_params
+
+    class GoldAt5:
+        def retrieve(self, q, top_k=3, k1=1.2, b=0.75):
+            return ([{"text": "filler"}] * 4 + [{"text": "contains Canberra"}])[:top_k]
+
+    _, why = _search_params(GoldAt5(), "q", ["Canberra"], 0)
+    assert why, "a widened top_k should still be justified to the student"
+    for banned in ("position", "rank", "off the list"):
+        assert banned not in why.lower(), f"rationale leaks retrieval oracle: {why!r}"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -27,14 +27,26 @@ ScaleSeek's thesis is a *trained* policy that adaptively controls BM25
    `--param-policy {teacher,heuristic,search}` in `train/sft/coldstart.py`) on a
    parameter-sensitive corpus (`make_smoke_corpus.py --hard`):
 
-   | policy | recall (gold in workspace) | mean workspace | notes |
+   | policy | coverage (gold in workspace) | mean workspace | notes |
    |---|---|---|---|
    | omit (teacher-native) | 0.31 | 3.0 | `top_k=3` default misses buried gold |
    | heuristic (query-length rule) | 0.75 | 9.7 | brute-force widens `top_k`, no ranking gain |
-   | **search-then-teach** | **1.00** | **9.1** | tunes `k1/b` when it helps, else default |
+   | search-then-teach | *1.00 — see below* | 9.1 | tunes `k1/b` when it helps, else default |
 
-   **search wins**: it grid-searches the real index and teaches the params that
-   rank the target passage best (e.g. `k1=2.0,b=0.9` moves a gold from rank 13→3).
+   > **⚠️ 2026-07-28 correction — the `search` row is not a comparable result.**
+   > `_search_params` grid-searches using the gold answer (`targets =
+   > [hop.expected] + hop.forms`) and stops when the gold is ranked best, then
+   > picks the smallest `top_k` that includes it. "Gold in workspace" **is its
+   > objective function**, so 1.00 is guaranteed whenever *any* (k1,b) surfaces
+   > the gold — it is bounded at 1.00 by construction. Read it as an **upper
+   > bound on what any parameter policy could achieve on this corpus**, not as
+   > evidence that this policy beats the other two. Using an oracle teacher to
+   > distil is legitimate; reporting the oracle's own objective as a policy
+   > comparison is not. The row that actually answers "did anything transfer" is
+   > the student's held-out behaviour in §4 — and there the answer is *`top_k`
+   > only*. The column is renamed `coverage` in
+   > `scripts/compare_param_policies.py` and the `search` row is now printed with
+   > an explicit "oracle objective, upper bound" marker.
 
 4. **Student level.** Training a student per policy and reading the params it
    *emits*: omit → none; heuristic → a single constant `1.5/0.75/5`; search →
@@ -57,6 +69,28 @@ ScaleSeek's thesis is a *trained* policy that adaptively controls BM25
      retry-and-lower-b behaviour — not even on the **training** puzzles
      (retry rate 0/12, EM 3/12 = only the easy controls), and identically on
      held-out puzzles (all three students: EM 3/6, retry 0, no `b` emitted).
+
+## Competing explanation (not ruled out)
+
+The report attributes the failure to a missing *observable* signal. A second
+mechanism is equally consistent with the same evidence and was not separated:
+
+Until 2026-07-28 the `search` policy appended a **fixed template** to the
+trajectory's reasoning that quoted the gold's retrieval rank — "A default search
+ranks the most on-topic passage around position {n}; with k1=… it moves to
+position {m}". No student can produce that sentence at inference time, so the
+data taught a phrasing rather than a policy, and the natural failure mode is to
+memorise the surface form and emit constants — exactly what §4 observed. The
+template is now replaced by query-shape justifications the student can actually
+reach (`_search_params`), and the same leak existed on `grep_workspace` patterns
+(now blocked by default; `ColdStartConfig.grep_may_leak_answer`).
+
+**These two explanations are distinguishable and the experiment has not been
+re-run since the fix.** Re-running §5 on the repaired generator is the minimum
+needed before "`k1/b` are unlearnable by cold-start" can be stated as a finding
+rather than a hypothesis. A third confound also stands: backward tracing only
+ever emits *verified-successful* calls, so the corpus contains almost no
+failure→repair pairs to imitate regardless of observability.
 
 ## Why it fails
 

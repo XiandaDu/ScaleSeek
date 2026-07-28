@@ -91,8 +91,13 @@ data:
   # Sized for 4×A5000-24GB (lower than GrepSeek's A100 config).
   # TBD: tune once SFT checkpoint is ready.
   train_batch_size: 128
-  max_prompt_length: 1024       # system prompt + question
-  max_response_length: 12288    # 1024 + 12288 = 13312 total context
+  # ScaleSeek's system prompt alone is 1015 Qwen3.5 tokens (measured 2026-07-28).
+  # At the old 1024 the prompt fitted only for very short questions and silently
+  # truncated for longer ones — i.e. exactly the multi-hop examples this policy is
+  # for, and the truncated tail is the output-format/tool section. 2048 leaves
+  # ~1000 tokens of headroom; re-measure if the prompt grows.
+  max_prompt_length: 2048       # system prompt (1015) + question + template
+  max_response_length: 12288    # 2048 + 12288 = 14336 total context
 
   return_raw_chat: true
   prompt_key: prompt
@@ -108,8 +113,16 @@ actor_rollout_ref:
   hybrid_engine: true
 
   model:
-    # TBD: replace with SFT checkpoint path once cold-start data is built.
-    path: ${oc.env:SCALESEEK_MODEL_PATH,Qwen/Qwen3-8B}
+    # Normally the SFT checkpoint (export SCALESEEK_MODEL_PATH). The fallback is
+    # the FROZEN evaluation generator, not a near neighbour: ScaleSeek is compared
+    # against prompt baselines run on Qwen3.5-9B, so a policy trained from
+    # Qwen3-8B would differ from them by base model as well as by method, and no
+    # row of that table would be attributable. Overriding to a smaller base is a
+    # legitimate compute decision — but it must then be stated in the results
+    # table, not inherited silently from a default.
+    # Memory note: 9B + FSDP full offload is tight on 4×A5000-24GB; if it OOMs,
+    # drop to Qwen3-8B *and* record the deviation.
+    path: ${oc.env:SCALESEEK_MODEL_PATH,Qwen/Qwen3.5-9B}
     trust_remote_code: true
     enable_gradient_checkpointing: true
 
@@ -125,22 +138,23 @@ actor_rollout_ref:
     top_p: 1.0
     top_k: -1
 
-    max_model_len: 13312
-    prompt_length: 1024
+    max_model_len: 14336          # = prompt_length + response_length
+    prompt_length: 2048
     response_length: 12288
 
     max_num_seqs: 16
     max_num_batched_tokens: 16384
     log_prob_micro_batch_size_per_gpu: 1
     log_prob_use_dynamic_bsz: false
-    log_prob_max_token_len_per_gpu: 13312
+    log_prob_max_token_len_per_gpu: 14336
 
     multi_turn:
       enable: true
-      # Max turns: 1 BM25 + up to 4 DCI turns + 1 answer turn.
-      # TBD: tune once we see prompt-baseline trajectory lengths.
-      max_user_turns: 5
-      max_assistant_turns: 6
+      # Must match the evaluation loop, else the policy is trained under a
+      # tighter budget than it is scored under. baselines.yaml scaleseek:
+      # max_assistant_turns 8 = up to 7 tool calls + 1 answer turn.
+      max_user_turns: 7
+      max_assistant_turns: 8
       max_parallel_calls: 1
       format: hermes              # <tool_call>...</tool_call> XML format (matches eval)
       tool_config_path: null      # ScaleSeekAgentLoop handles dispatch internally
@@ -165,7 +179,7 @@ actor_rollout_ref:
       load_contents: ['model', 'optimizer', 'extra']
     ppo_mini_batch_size: 16
     ppo_micro_batch_size_per_gpu: 1
-    ppo_max_token_len_per_gpu: 13312
+    ppo_max_token_len_per_gpu: 14336
     use_dynamic_bsz: true
     use_kl_loss: false
     kl_loss_coef: 0.0
@@ -198,7 +212,7 @@ actor_rollout_ref:
   ref:
     strategy: fsdp
     log_prob_micro_batch_size_per_gpu: 2
-    log_prob_max_token_len_per_gpu: 13312
+    log_prob_max_token_len_per_gpu: 14336
     fsdp_config:
       full_determinism: true
       seed: 42

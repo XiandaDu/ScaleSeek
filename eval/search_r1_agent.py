@@ -25,7 +25,7 @@ import time
 from typing import Any, Optional
 
 from .retrievers import Retriever
-from .agent import AgentRecord
+from .agent import AgentRecord, seed_kwargs
 
 _SEARCH_RE = re.compile(r"<search>(.*?)(?:</search>|$)", re.DOTALL)
 _ANSWER_RE = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
@@ -106,6 +106,7 @@ def run_search_r1(
                       "</search>\n\n", " </search>\n\n"],
                 temperature=temperature,
                 top_p=1.0,
+                **seed_kwargs(),
             )
         except Exception as e:
             record.finish_reason = "api_error"

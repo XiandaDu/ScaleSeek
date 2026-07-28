@@ -1,5 +1,31 @@
 # ScaleSeek Baseline 实现与复刻对照（详细版）
 
+> ## ⛔ `legacy_invalid_for_main_table`（2026-07-28 标注）
+>
+> **本文件所有数字都不能进主表，也不能与 Phase-2 结果同表比较。** 四项体制冲突：
+>
+> | 项 | 本文件 | Phase-2 冻结协议 |
+> |---|---|---|
+> | prompt 型 baseline 底座 | Qwen3-**4B** | Qwen3.5-**9B** |
+> | Search-R1 checkpoint | **3B** | **7B / 14B** |
+> | popqa 样本量 | 随机 **1500**（**seed 不可考**）| 全量 **14,267** |
+> | 抽样协议 | 固定随机子集 | `TASK.md:65` **明令禁止**随机抽样与固定 1500 子集 |
+>
+> 底层数据已按 `cleanup_manifest.json` 删除（`results/` 下只剩 n=14,267 的
+> Phase-2 产物），抽样代码亦不存在——`tests/test_phase1_contracts.py` 断言
+> `"popqa_full" not in FLASHRAG_DATASETS`。**只有这份叙述留了下来**，
+> 因为 cleanup 的 policy 是"保留历史结果、标记 legacy"，而当时只给
+> `ablations.md` 加了横幅，漏了本文件和 `metric_support.md`。
+>
+> **命名警告**：本文件里的 `popqa_full` 指那个已删除的 1500 抽样；
+> 而 `sbatch/*.sbatch` 与 `$DATA/dcilite_datasets/popqa_full.jsonl` 里的
+> `popqa_full` 指**全量 14,267**（由 `p0_assets.sbatch` 从
+> `test.normalized.jsonl` 生成）。同名反义，引用前务必确认来源。
+>
+> 保留价值：忠实度分级、官方资产 pin、§9i/§10f/§10g/§10j 的诊断与自我更正，
+> 这些是方法论记录，不依赖具体数值体制。
+
+
 每个 baseline：对标论文与官方资产（精确到 HF snapshot 哈希）、我们的完整参数、
 与论文 setup 的逐项差异、论文数字 vs 我们的数字、忠实度分级与升级计划。
 
@@ -52,7 +78,7 @@ C=官方机制复刻但有明确记录的替换（如换模型/检索器）；D=
 | 官方模型 | [`PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo`](https://huggingface.co/PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-3b-em-grpo)（snapshot `d4d2f71e...`，[Qwen2.5-3B](https://huggingface.co/Qwen/Qwen2.5-3B) GRPO）|
 | 服务方式 | 独立 vLLM :8001，**max-model-len 必须 32768**（8192 → 31% 上下文溢出）|
 | Prompt/循环 | user prompt 逐字官方 infer.py；completions 原文续写：stop `</search>` → 检索注入 `<information>` → 续写至 `<answer>`；Qwen2.5 ChatML 硬编码 |
-| 我们参数 | temperature 0.0（贪心）、top_p 1.0、top-3、≤8 轮 |
+| 我们参数 | ~~temperature 0.0（贪心）~~ **0.7**（官方 infer.py，见 configs/baselines.yaml:96）、top_p 1.0、top-3、≤8 轮 |
 | 论文 setup | **E5 检索器 top-3**、wiki-18、action 预算 **B=4**、（训练 rollout temp 1.0；评测未明说，推断贪心）|
 | **差异** | ①检索器 BM25 vs 论文 E5（**主差异**）；②轮上限 8 vs 4（宽松侧，理论无害）|
 | 论文数字 | PopQA **EM 0.413**（3B GRPO + E5 top3），7 集平均 0.365 |
@@ -67,7 +93,7 @@ C=官方机制复刻但有明确记录的替换（如换模型/检索器）；D=
 | 官方原版 setup | **QwQ-32B-Preview + Bing Web API + Reason-in-Documents** |
 | Prompt | `get_multiqa_search_o1_instruction` / `get_task_instruction_openqa` / **Reason-in-Documents 蒸馏 prompt** 三段全部逐字官方 |
 | 机制 | **单条连续 completions 流**（我们曾用 chat 多轮注入——不忠实，已重写废弃）：stop `<|end_search_query|>` → 检索 → RiD 蒸馏调用 → `<|begin_search_result|>` 内联续写 → 取最后 `\boxed{}`（平衡括号+LaTeX 清洗）。搜索超限注入官方拒绝文案 |
-| 我们参数 | temp 0.0、top_p 1.0、BM25 top-5、搜索上限 5、≤10 段续写、每页截 1500 字符 |
+| 我们参数 | ~~temp 0.0~~ **0.7 / top_p 0.8 / top_k 20**（官方采样，configs/baselines.yaml:109）、BM25 top-5、搜索上限 5、≤10 段续写、每页截 1500 字符 |
 | **差异** | ①底座 QwQ-32B→Qwen3-4B；②Bing→BM25 wiki-18（论文本地化改法用 E5）；③官方逐页 fetch 网页，我们直接用检索段落 |
 | 论文数字 | 原论文不测 PopQA（其 QA 集为 NQ/HotpotQA 等 + Bing），无直接对标数字 |
 | GrepSeek 论文复刻版（**不可直接对标**）| Table 1 "Search-O1+BM25" PopQA F1 **.4003**——底座是 **Qwen3.5-9B**（我们 4B）；见文末附录 A |

@@ -208,13 +208,21 @@ methods:
     retrievers: [bm25]
     max_assistant_turns: 8
     max_tool_calls: 7
-    max_new_tokens: 8192
     tool_response_tokens: 2048
-    # Thinking disabled (user decision 2026-07-26): greedy thinking never
-    # closes within any usable budget (probe 07-23), and vLLM's
-    # thinking_token_budget forced closure corrupts <tool_call> blocks
-    # (vllm#44676), leaving enable_thinking=false as the only working mode.
-    enable_thinking: false
+    # 2026-07-28: enable_thinking=false (frozen 07-26) is WITHDRAWN. Its two
+    # stated grounds do not survive audit:
+    #   1. "greedy thinking never closes" — true only in part: the 07-23 probe
+    #      shows 9-12/16 hitting the 28k cap, not 16/16.
+    #   2. "thinking_token_budget corrupts <tool_call>" — no evidence exists in
+    #      this repo, and it could not: the probe cited as its source hardcoded
+    #      the `direct` prompt, which emits no tool calls at all.
+    # The 0/16 that drove the decision came from the answer parser fixed in
+    # 19198ee, which landed AFTER all four gate runs. Re-reading those same logs,
+    # budget_think produced 12-15/16 valid closed answers and never once hit the
+    # token cap. Production is budget_think, as for direct/rag; re-run the gate
+    # (now agent-aware) before changing this again.
+    max_new_tokens: null
+    thinking_token_budget: 4096
     bm25_default:
       k1: 1.2
       b: 0.75

@@ -9,10 +9,19 @@ that varies is how each policy sets top_k/k1/b:
   search : grid-search the index, keep params that best rank the target passage
            (train.sft.coldstart._search_params)
 
-It reports, per policy: recall (target pulled into the bounded workspace), mean
+It reports, per policy: coverage (target pulled into the bounded workspace), mean
 workspace size (top_k), and mean rank of the target in the full ranking. This
 isolates the retrieval value of each policy before any SFT/RL — meaningful only on
 a parameter-sensitive corpus (build one with make_smoke_corpus.py --hard N).
+
+*** How to read the `search` row ***
+`search` grid-searches using the gold answer and stops when the gold is ranked
+best, so "target in workspace" IS its objective function. Its coverage is
+therefore bounded at 1.00 by construction and is NOT comparable to the other
+rows — it measures how often *some* (k1,b) can surface the gold, i.e. an upper
+bound on what any parameter policy could achieve on this corpus. The row that
+answers "did the policy learn anything" is the *student's* held-out behaviour
+(scripts/analyze_student_params.py), not this table.
 
     python scripts/compare_param_policies.py --index-dir .smoke_hard/bm25_index \
         --questions .smoke_hard/questions.jsonl
@@ -80,13 +89,14 @@ def main() -> None:
 
     n = len(qs)
     print("\n=== aggregate over", n, "questions ===")
-    print(f"{'policy':<12}{'recall(gold in workspace)':<27}{'mean workspace':<16}{'mean gold rank'}")
+    print(f"{'policy':<12}{'coverage(gold in workspace)':<29}{'mean workspace':<16}{'mean gold rank'}")
     for nm in names:
         a = agg[nm]
-        recall = a["hit"] / max(n, 1)
+        coverage = a["hit"] / max(n, 1)
         mws = a["ws"] / max(n, 1)
         mrank = a["rank_sum"] / max(a["rank_n"], 1)
-        print(f"{nm:<12}{recall:<27.2f}{mws:<16.1f}{mrank:.1f}")
+        note = "  <- oracle objective, upper bound" if nm == "search" else ""
+        print(f"{nm:<12}{coverage:<29.2f}{mws:<16.1f}{mrank:<8.1f}{note}")
 
 
 if __name__ == "__main__":

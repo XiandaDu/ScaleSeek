@@ -275,3 +275,55 @@ def test_resume_and_full_id_guards():
     validate_exact_id_set(["a", "b"], {"a", "b"})
     with pytest.raises(ValueError, match="exactly"):
         validate_exact_id_set(["a", "a"], {"a", "b"})
+
+
+# ---------------------------------------------------------------------------
+# RL <-> eval contract. These two configs describe the same agent; when they
+# drift, the policy is trained under different rules than it is scored under and
+# no result row is attributable. (2026-07-28: turn budget was 6 vs 8, base model
+# Qwen3-8B vs the frozen Qwen3.5-9B, and the RL prompt budget was 1024 against a
+# 1015-token system prompt.)
+# ---------------------------------------------------------------------------
+
+def _grpo_cfg():
+    return yaml.safe_load((ROOT / "train/config/grpo_trainer.yaml").read_text())
+
+
+def test_rl_and_eval_agree_on_turn_budget():
+    rl = _grpo_cfg()["actor_rollout_ref"]["rollout"]["multi_turn"]["max_assistant_turns"]
+    ev = resolved_method("scaleseek")["method"]["max_assistant_turns"]
+    assert rl == ev, f"RL trains with {rl} assistant turns but eval scores with {ev}"
+
+
+def test_rl_context_budget_is_self_consistent_and_fits_the_prompt():
+    r = _grpo_cfg()["actor_rollout_ref"]["rollout"]
+    assert r["max_model_len"] == r["prompt_length"] + r["response_length"]
+    # The system prompt must fit with real headroom for the question + template.
+    # 4 chars/token is a deliberate over-estimate of Qwen3.5 on English prose
+    # (measured: 4630 chars -> 1015 tokens, i.e. 4.56), so this stays a lower
+    # bound on the true budget and cannot pass a genuinely too-small setting.
+    n_chars = len(prompt_registry.load("scaleseek"))
+    assert r["prompt_length"] >= n_chars / 4 + 256, (
+        f"prompt_length={r['prompt_length']} leaves no room for the "
+        f"{n_chars}-char ScaleSeek system prompt plus a question")
+
+
+def test_rl_base_model_defaults_to_the_frozen_generator():
+    path = _grpo_cfg()["actor_rollout_ref"]["model"]["path"]
+    frozen = load_baselines()["global"]["generator"]["repo_id"]
+    assert frozen in path, (
+        f"RL falls back to {path!r}, but prompt baselines run on {frozen!r}; "
+        "a different base makes the comparison unattributable")
+
+
+def test_scaleseek_eval_params_come_from_the_frozen_config():
+    """run_eval must not hardcode scaleseek's loop/decoding budgets."""
+    import inspect as _inspect
+    from eval import run_eval as _re
+    src = _inspect.getsource(_re.run_eval)
+    head, _, _ = src.partition('elif args.agent == "rag"')
+    _, _, scaleseek_block = head.partition('if args.agent == "scaleseek"')
+    for literal in ("max_turns=8", "max_tokens=8192"):
+        assert literal not in scaleseek_block, (
+            f"{literal} is hardcoded in the scaleseek dispatch; it must be read "
+            "from configs/baselines.yaml or the frozen config is decorative")

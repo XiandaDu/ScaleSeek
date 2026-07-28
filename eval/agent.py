@@ -232,6 +232,43 @@ def execute_tool(
 # LLM call
 # ---------------------------------------------------------------------------
 
+# Decode seed, set once per run from --seed. Every sampling site in eval/ reads it
+# through `seed_kwargs()`, so a run is reproducible and the seed lands in
+# provenance. None = unseeded (the pre-2026-07-28 behaviour); the completed
+# search_r1/search_o1 phase-2 runs were all unseeded at temperature 0.7.
+_DECODE_SEED: Optional[int] = None
+
+
+def set_decode_seed(seed: Optional[int]) -> None:
+    global _DECODE_SEED
+    _DECODE_SEED = seed
+
+
+def decode_seed() -> Optional[int]:
+    return _DECODE_SEED
+
+
+def seed_kwargs() -> dict:
+    """`{"seed": N}` when a decode seed is set, else `{}` (server default)."""
+    return {} if _DECODE_SEED is None else {"seed": _DECODE_SEED}
+
+
+def _thinking_extra_body(enable_thinking: bool,
+                         thinking_token_budget: Optional[int]) -> Optional[dict]:
+    """extra_body for the two mutually exclusive thinking controls.
+
+    `enable_thinking=False` turns thinking off via the chat template; otherwise a
+    `thinking_token_budget` asks vLLM to force closure after N reasoning tokens
+    (Qwen3 "thinking budget"). Passing both is meaningless, so the template flag
+    wins and the budget is ignored.
+    """
+    if not enable_thinking:
+        return {"chat_template_kwargs": {"enable_thinking": False}}
+    if thinking_token_budget:
+        return {"thinking_token_budget": thinking_token_budget}
+    return None
+
+
 def _chat_completion(
     client: Any,
     *,
@@ -247,6 +284,7 @@ def _chat_completion(
     _extra = {"stop": stop} if stop else {}
     if extra_body:
         _extra["extra_body"] = extra_body
+    _extra.update(seed_kwargs())
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -314,6 +352,38 @@ class ParseResult:
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
+def visible_text(text: str) -> str:
+    """Drop everything the model wrote inside its thinking from `text`.
+
+    Shared by evaluation (`parse_assistant`, one assistant turn) and RL
+    (`train.reward`, a whole trajectory). The two callers legitimately differ in
+    *which* block they then take — a single turn commits to its first
+    action/answer, a trajectory commits to its last answer — but both must obey
+    the same invariant: **no block inside <think> is ever actionable**. Violating
+    it is what produced 4 dead jobs on 2026-07-24 (the model rehearses the format
+    instruction's literal empty "<answer></answer>" while reasoning).
+    """
+    out = _THINK_BLOCK_RE.sub("", text)
+    if "</think>" in out:  # unclosed opener: keep only what follows the last close
+        out = out.rsplit("</think>", 1)[-1]
+    return out
+
+
+def final_answer(text: str) -> Optional[str]:
+    """Last committed <answer> in a (possibly multi-turn) trajectory, or None.
+
+    Trajectory-level counterpart of `parse_assistant`: a rollout is
+    `<think>…</think><tool_call>…` × N then a final `<think>…</think><answer>…`,
+    so the *last* answer outside thinking is the commitment. Do not use
+    `parse_assistant` here — it would return the first turn's `<tool_call>` and
+    report `answer=None` for every successful multi-turn rollout.
+    """
+    blocks = _ANSWER_RE.findall(visible_text(text))
+    if not blocks:
+        return None
+    return clean_answer(blocks[-1])
+
+
 def clean_answer(s: str) -> str:
     """Strip reasoning leakage from an extracted answer.
 
@@ -336,16 +406,10 @@ def parse_assistant(text: str) -> ParseResult:
     if not text:
         return ParseResult(raw="", error="empty response")
 
-    # Only the text outside <think> blocks is actionable. Thinking models
-    # quote the format instruction verbatim (a literal empty
-    # "<answer></answer>") and rehearse candidate blocks while reasoning, so
-    # the first tag match in the full text is usually not the commitment
-    # (2026-07-24: budget-forced direct emitted a valid <answer> in content
-    # on 16/16 probes, yet the instruction quote inside thinking matched
-    # first and every prediction came out empty).
-    visible = _THINK_BLOCK_RE.sub("", text)
-    if "</think>" in visible:
-        visible = visible.rsplit("</think>", 1)[-1]
+    # Only the text outside <think> blocks is actionable (see `visible_text`).
+    # Within one assistant turn the *first* block is the commitment: the turn
+    # either calls a tool or answers.
+    visible = visible_text(text)
 
     tool_m = _TOOL_CALL_RE.search(visible)
     ans_m = _ANSWER_RE.search(visible)
@@ -448,6 +512,7 @@ def run_agent(
     tokenizer: Any = None,
     max_tool_response_tokens: Optional[int] = DEFAULT_MAX_RESPONSE_TOKENS,
     enable_thinking: bool = True,
+    thinking_token_budget: Optional[int] = None,
 ) -> AgentRecord:
     """Run ScaleSeek prompt agent on one example.
 
@@ -481,8 +546,7 @@ def run_agent(
         text, err = _chat_completion(
             client, model=model, messages=messages,
             temperature=temperature, top_p=top_p, max_tokens=max_tokens,
-            extra_body=(None if enable_thinking else
-                        {"chat_template_kwargs": {"enable_thinking": False}}),
+            extra_body=_thinking_extra_body(enable_thinking, thinking_token_budget),
         )
         record.llm_time_s += time.perf_counter() - t_llm
 

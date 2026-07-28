@@ -90,5 +90,18 @@ bash scripts/run_rl.sh
   combination that conflicts with this desktop's generation/eval env, so the local
   smoke uses `run_sft_local.py`. Both emit the same HF checkpoint; the cluster uses the
   vendored, version-matched verl via `run_sft.sh`.
-- **Answer-leak rule** is enforced both in the prompt and programmatically: a
-  `bm25_retrieve` query never contains the expected answer; `grep_workspace` may.
+- **Answer-leak rule** is enforced both in the prompt and programmatically:
+  neither a `bm25_retrieve` query nor a `grep_workspace` pattern may contain the
+  expected answer. A trajectory that greps for the gold string teaches the student
+  a call it cannot form at inference time; set
+  `ColdStartConfig.grep_may_leak_answer=True` to restore the old behaviour, which
+  costs hop-verification yield but was measurably teaching unattainable behaviour
+  (`reports/param_policy_findings.md`).
+- **`strict=True` is the default** (changed 2026-07-28). An unverified hop means
+  retrieval never confirmed the expected answer, yet the forward pass still pins
+  `<answer>` to gold — the trajectory would assert a fact its own workspace does
+  not support. Trajectories whose final workspace contains no gold string are
+  emitted with `status="unsupported_answer"` and excluded from SFT (only
+  `status="ok"` is eligible). Watch the status histogram that
+  `generate_sft_data.py` prints: a large `unsupported_answer` / `skipped` share
+  means the teacher or the retriever, not the filter, needs attention.

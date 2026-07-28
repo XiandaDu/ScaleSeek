@@ -28,7 +28,7 @@ Status: **Phase 1 implementation complete; final execution tests are assigned to
 
 ## Verification performed
 
-- `20 passed` offline tests (prompt snapshots, prompt-placement contracts,
+- `47 passed` offline tests (prompt snapshots, prompt-placement contracts,
   shared train/eval prompt registry,
   parsers, fake loops, pooling,
   full-data guards, resume, retrieval merge and harness invariants).

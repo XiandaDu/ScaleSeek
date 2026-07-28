@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import sys
 from pathlib import Path
 
@@ -65,11 +66,40 @@ def _load_rows(path: Path) -> list[dict]:
     return rows
 
 
+def _bootstrap_ci(values: list[float], n_boot: int = 1000,
+                  seed: int = 0) -> dict:
+    """Percentile bootstrap 95% CI for the mean of a per-example metric."""
+    n = len(values)
+    if n == 0:
+        return {"lo": 0.0, "hi": 0.0, "n_boot": 0}
+    rng = random.Random(seed)
+    means = []
+    for _ in range(n_boot):
+        s = 0.0
+        for _ in range(n):
+            s += values[rng.randrange(n)]
+        means.append(s / n)
+    means.sort()
+    return {"lo": means[int(0.025 * n_boot)],
+            "hi": means[min(int(0.975 * n_boot), n_boot - 1)],
+            "n_boot": n_boot}
+
+
 def _latency_report(rows: list[dict]) -> dict:
     n = len(rows) or 1
     def col(k): return [r.get(k) or 0.0 for r in rows]
     total = col("total_time_s")
     fr = [r.get("finish_reason", "") for r in rows]
+    # Every finish_reason, not just the four we happened to name. The fixed list
+    # let 376/14267 search_o1 rows (no_answer + max_turns) hide behind
+    # "parse_error_rate": 0.0.
+    breakdown = {}
+    for f in fr:
+        breakdown[f or "(none)"] = breakdown.get(f or "(none)", 0) + 1
+    # Concurrency is a property of the run, not of a row; if rows disagree the
+    # file was merged from runs at different settings and latency is meaningless.
+    concs = sorted({r.get("concurrency") for r in rows if r.get("concurrency")})
+    seeds = sorted({r.get("decode_seed") for r in rows if r.get("decode_seed") is not None})
     return {
         "sec_per_query": sum(total) / n,
         "llm_time_s_mean": sum(col("llm_time_s")) / n,
@@ -79,7 +109,19 @@ def _latency_report(rows: list[dict]) -> dict:
         "max_turns_rate": sum(f == "max_turns" for f in fr) / n,
         "api_error_rate": sum(f == "api_error" for f in fr) / n,
         "parse_error_rate": sum(f == "parse_error" for f in fr) / n,
+        "no_answer_rate": sum(f == "no_answer" for f in fr) / n,
         "answer_rate": sum(f == "answer" for f in fr) / n,
+        "finish_reason_counts": breakdown,
+        "concurrency": concs[0] if len(concs) == 1 else (concs or None),
+        "decode_seed": seeds[0] if len(seeds) == 1 else (seeds or None),
+        "latency_comparable": len(concs) == 1 and concs[0] == 1,
+        "latency_note": (
+            "sec_per_query/llm_time_s/tool_time_s are wall-clock under "
+            f"concurrency={concs[0] if len(concs) == 1 else concs}; they include "
+            "queueing and are NOT per-query latency unless concurrency == 1."
+            if concs else
+            "concurrency not recorded (run predates 2026-07-28); latency columns "
+            "are wall-clock under an unknown batch load and are not comparable."),
     }
 
 
@@ -213,6 +255,11 @@ def main():
     # --- answer quality ---
     scores = [score_example(r.get("prediction"), r.get("gold_answers", [])) for r in rows]
     report["answer_quality"] = aggregate(scores)
+    # Bootstrap CIs so a method-vs-method gap can be read against its own noise.
+    # NB this covers example-level variance only; at temperature > 0 (search_r1,
+    # search_o1) decoding variance needs repeated seeds and is NOT in this band.
+    report["answer_quality"]["em_ci95"] = _bootstrap_ci([s["em"] for s in scores])
+    report["answer_quality"]["f1_ci95"] = _bootstrap_ci([s["f1"] for s in scores])
 
     # --- latency ---
     report["latency"] = _latency_report(rows)

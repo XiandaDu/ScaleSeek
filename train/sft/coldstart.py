@@ -14,7 +14,8 @@ Pipeline (uses the prompt constants in ``prompts/sft_prompts.py`` verbatim):
          (execute)          run it against the real retriever
          JUDGE              does the retrieval confirm expected[i]?  refine if not
          BRIDGE_EXTRACT     read the passage -> bridge entity = expected[i-1]
-       (ANSWER-LEAK rule: the bm25 query may never contain expected[i].)
+       (ANSWER-LEAK rule: neither a bm25 query nor a grep pattern may contain
+        expected[i] — the student cannot form either at inference time.)
 
   Forward pass — Planner + Tutor, respects the information frontier
     3. for each verified tool call, in question order:
@@ -54,7 +55,15 @@ class ColdStartConfig:
     max_refine: int = 2               # backward-discovery retries per hop
     top_k_default: int = 5
     tool_response_tokens: int = 512   # per-response budget in forward execution
-    strict: bool = False              # skip examples whose hops fail to verify
+    # Default True: an unverified hop means retrieval never confirmed the expected
+    # answer, yet the forward pass still pins <answer> to gold — i.e. the trajectory
+    # asserts a fact its own workspace does not support, which is exactly the
+    # hallucination behaviour SFT would teach. Set False only for pipeline smokes.
+    strict: bool = True               # skip examples whose hops fail to verify
+    # False: a grep pattern may not contain the expected answer either. The old
+    # behaviour (grep may leak) put teacher-only knowledge into the student's
+    # imitation target; see _call_leaks_answer.
+    grep_may_leak_answer: bool = False
     run_quality_judge: bool = True
     teacher_max_tokens: int = 768
     preview_chars: int = 700
@@ -193,6 +202,40 @@ def _query_leaks_answer(query: str, forbidden: list[str]) -> bool:
     return False
 
 
+def _call_leaks_answer(tc: dict, forbidden: list[str], cfg: "ColdStartConfig") -> bool:
+    """Would this tool call require knowing the answer the student is looking for?
+
+    The backward tracer knows the gold, so it happily writes
+    `grep_workspace(pattern="Tatsumi")`. That call is replayed verbatim into the
+    forward trajectory, where it teaches the student to grep for a string it has no
+    way to produce at inference — the same unattainable-behaviour problem as quoting
+    the gold's retrieval rank. Excluding leaky greps costs some hop-verification
+    yield (the teacher gets `max_refine` more attempts) and buys trajectories the
+    student can actually reproduce.
+    """
+    if tc["name"] == "bm25_retrieve":
+        return _query_leaks_answer(str(tc["arguments"].get("query", "")), forbidden)
+    if tc["name"] == "grep_workspace" and not cfg.grep_may_leak_answer:
+        return _query_leaks_answer(str(tc["arguments"].get("pattern", "")), forbidden)
+    return False
+
+
+def _workspace_supports(workspace, golds: list[str]) -> bool:
+    """Does any passage currently in the workspace contain a gold answer string?
+
+    Guards the gold-pinned <answer> turn: if nothing in the workspace supports it,
+    the trajectory would demonstrate asserting an unretrieved fact.
+    """
+    norm_golds = [normalize(g) for g in golds if str(g).strip()]
+    if not norm_golds:
+        return False
+    for doc in workspace.docs:
+        text = normalize(doc.get("text", ""))
+        if any(ng and ng in text for ng in norm_golds):
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Teacher-call wrappers (one per prompt-suite phase)
 # ---------------------------------------------------------------------------
@@ -300,7 +343,7 @@ class Trajectory:
     golden_answers: list[str]
     messages: list[dict] = field(default_factory=list)  # {role, content}
     loss_mask: list[int] = field(default_factory=list)  # 1 on assistant turns
-    status: str = "ok"                                   # ok | skipped | quality_fail
+    status: str = "ok"           # ok | skipped | quality_fail | unsupported_answer
     meta: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -419,12 +462,29 @@ def _search_params(retriever, query: str, targets: list[str], bm25_idx: int) -> 
     rank, _, k1, b = best
     top_k = next((t for t in _TOPK_LADDER if t >= rank), top_probe)
     params = {"top_k": top_k, "k1": round(k1, 2), "b": round(b, 2), "mode": mode}
+    # The rationale must stay *inference-reachable*: the student never knows the
+    # gold's rank, so a sentence quoting default_rank/rank teaches it to assert an
+    # observation it cannot make (and, being a fixed template, to memorise the
+    # phrasing rather than the policy). Justify the knobs by the query's own
+    # shape — which the student can see — and let the reward supply the
+    # did-it-work signal at RL time.
     if default_rank and default_rank <= 3 and rank >= default_rank:
         why = ""  # default already retrieves it well; no need to justify a tweak
+    elif params["b"] < 0.75:
+        why = (f"This looks like it turns on a detail that a longer passage would bury, "
+               f"so I'll lower b to {params['b']} to stop favouring short passages and "
+               f"widen top_k to {top_k}.")
+    elif params["b"] > 0.75:
+        why = (f"The query is broad enough that sprawling articles would match it loosely, "
+               f"so I'll raise b to {params['b']} to penalise length and widen top_k to {top_k}.")
+    elif params["k1"] > 1.2:
+        why = (f"The distinguishing term here should dominate the match, so I'll raise "
+               f"k1 to {params['k1']} and set top_k={top_k}.")
+    elif params["k1"] < 1.2:
+        why = (f"One mention of the key term is as good as several here, so I'll lower "
+               f"k1 to {params['k1']} and set top_k={top_k}.")
     else:
-        why = (f"A default search ranks the most on-topic passage around position "
-               f"{default_rank or 'off the list'}; with k1={params['k1']} and b={params['b']} it moves to "
-               f"position {rank}, so I'll use those and set top_k={top_k} to pull it into the workspace.")
+        why = f"I'll widen top_k to {top_k} to pull more candidates into the workspace."
     if bm25_idx > 0:
         why = (why + " " if why else "") + "I'll merge it with the earlier evidence."
     return params, why.strip()
@@ -485,10 +545,8 @@ def _discover_hop(teacher, hop: Hop, downstream_docs: str, retriever, tokenizer,
                                temperature=0.0, enable_thinking=False)
         raw_trace = _extract_json_array(_extract_tag(out, "tool_trace") or out) or []
         trace = [t for t in (_normalize_tool_call(x, cfg) for x in raw_trace) if t]
-        # enforce ANSWER-LEAK rule on bm25 queries
-        trace = [t for t in trace
-                 if not (t["name"] == "bm25_retrieve"
-                         and _query_leaks_answer(t["arguments"]["query"], forbidden))]
+        # enforce ANSWER-LEAK rule (see cfg.grep_may_leak_answer)
+        trace = [t for t in trace if not _call_leaks_answer(t, forbidden, cfg)]
         if not trace or trace[0]["name"] != "bm25_retrieve":
             prior_attempts.append(f"attempt {attempt}: no valid bm25_retrieve produced")
             continue
@@ -586,6 +644,12 @@ def _forward_pass(teacher, question: str, golds: list[str], hops: list[Hop],
             n_tool_calls += 1
 
     # Final answer turn — reasoning synthesized by the planner, <answer> pinned to gold.
+    # Pinning is only legitimate when the workspace actually supports the answer;
+    # otherwise the trajectory teaches "answer from nowhere". This is a programmatic
+    # check on the real workspace, deliberately NOT delegated to the quality judge —
+    # a same-family LLM judge is the wrong instrument here (reports/baselines.md
+    # §10j measured 11-13% self-contradictory verdicts on this model class).
+    answer_supported = _workspace_supports(workspace, golds)
     final_reason = _final_reasoning(teacher, question, history, cfg)
     answer_turn = _fmt_answer_turn(final_reason, golds[0])
     messages.append({"role": "assistant", "content": answer_turn}); mask.append(1)
@@ -597,7 +661,10 @@ def _forward_pass(teacher, question: str, golds: list[str], hops: list[Hop],
         "n_tool_calls": n_tool_calls,
         "all_hops_verified": all(h.verified for h in hops),
         "final_workspace_size": workspace.size,
+        "answer_supported": answer_supported,
     }
+    if not answer_supported:
+        traj.status = "unsupported_answer"
     return traj
 
 
@@ -643,7 +710,9 @@ def build_trajectory(example: dict, teacher, retriever, *, tokenizer=None,
         try:
             ok, reason = _quality_pass(teacher, question, _trajectory_text(traj.messages))
             traj.meta["quality_reason"] = reason
-            if not ok:
+            if not ok and traj.status == "ok":
+                # Don't mask a programmatic rejection (unsupported_answer) with the
+                # weaker LLM verdict — the former is the more reliable signal.
                 traj.status = "quality_fail"
         except Exception as e:
             logger.warning("quality judge failed for %s: %s", ex_id, e)

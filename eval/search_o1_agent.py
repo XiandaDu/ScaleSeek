@@ -29,7 +29,7 @@ import time
 from typing import Any, Optional
 
 from .retrievers import Retriever
-from .agent import AgentRecord
+from .agent import AgentRecord, seed_kwargs
 
 BEGIN_SEARCH_QUERY = "<|begin_search_query|>"
 END_SEARCH_QUERY = "<|end_search_query|>"
@@ -214,7 +214,7 @@ def _completion(client: Any, *, model: str, prompt: str, max_tokens: int,
         return client.completions.create(
             model=model, prompt=prompt, max_tokens=mt,
             temperature=temperature, top_p=top_p, stop=stop,
-            extra_body={"top_k": sampling_top_k},
+            extra_body={"top_k": sampling_top_k}, **seed_kwargs(),
         )
     try:
         resp = _create(max_tokens)
@@ -248,7 +248,7 @@ def _reason_in_documents(client: Any, *, model: str, prompt: str,
         response = client.chat.completions.create(
             model=model, messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens, temperature=0.7, top_p=0.8,
-            extra_body={"top_k": 20, "repetition_penalty": 1.05})
+            extra_body={"top_k": 20, "repetition_penalty": 1.05}, **seed_kwargs())
     except Exception as exc:  # noqa: BLE001
         return None, str(exc)
     if not response.choices:

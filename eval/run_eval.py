@@ -252,16 +252,20 @@ def run_eval(args: argparse.Namespace) -> None:
     def _dispatch(ex):
         if args.agent == "scaleseek":
             from .agent import run_agent
-            # enable_thinking=false is the frozen production mode (2026-07-26):
-            # greedy thinking provably never closes (probe 07-23) and vLLM's
-            # thinking_token_budget corrupts <tool_call> output (vllm#44676),
-            # so scaleseek runs with the chat template's thinking disabled.
+            # All decoding/loop values come from the frozen baselines.yaml entry,
+            # like direct/rag. They used to be hardcoded here, which silently made
+            # the config file decorative for the project's own method: editing
+            # max_assistant_turns or max_new_tokens changed nothing.
+            mcfg = method_cfg["method"]
             return run_agent(
                 ex, client=client, model=model, retriever=retriever,
-                max_turns=8, max_tokens=8192,
-                temperature=0.0, tokenizer=tokenizer,
+                max_turns=mcfg["max_assistant_turns"],
+                max_tokens=mcfg["max_new_tokens"],
+                thinking_token_budget=mcfg.get("thinking_token_budget"),
+                temperature=mcfg.get("temperature", 0.0),
+                top_p=mcfg.get("top_p", 1.0), tokenizer=tokenizer,
                 max_tool_response_tokens=args.max_tool_response_tokens,
-                enable_thinking=method_cfg["method"].get("enable_thinking", True))
+                enable_thinking=mcfg.get("enable_thinking", True))
         elif args.agent == "rag":
             from .agent import run_rag
             # All decoding values come from the frozen baselines.yaml entry
@@ -307,6 +311,12 @@ def run_eval(args: argparse.Namespace) -> None:
         row["generator_revision"] = model_revision
         row["prompt_sha256"] = method_prompt_hash
         row["retriever_manifest"] = retriever_manifest
+        # Latency provenance. llm_time_s/tool_time_s are wall-clock around a
+        # blocking call inside a ThreadPoolExecutor, so they include queueing and
+        # scale with concurrency: a run at 16 is NOT latency-comparable to one at
+        # 6. Recording it is what makes the timing columns interpretable at all.
+        row["concurrency"] = conc
+        row["decode_seed"] = args.seed
         row.update(method_harness)
         sc = score_example(record.prediction, record.gold_answers)
         row["em"], row["f1"] = sc["em"], sc["f1"]
@@ -335,7 +345,17 @@ def run_eval(args: argparse.Namespace) -> None:
     results = [None] * n
     scores = [None] * n
     conc = max(1, args.concurrency)
-    print(f"\nRunning agent={args.agent!r} on {n} examples (concurrency={conc}) ...\n")
+    from .agent import set_decode_seed
+    set_decode_seed(args.seed)
+    print(f"\nRunning agent={args.agent!r} on {n} examples "
+          f"(concurrency={conc}, seed={args.seed}) ...\n")
+    if conc > 1:
+        print("  NOTE: latency columns include queueing at this concurrency and "
+              "are not comparable across runs with different --concurrency.")
+    _stochastic = args.agent in ("search_r1", "search_o1")
+    if _stochastic and args.seed is None:
+        print(f"  WARNING: {args.agent} samples at temperature > 0 and no --seed "
+              "was given; this run is not reproducible.")
 
     def _record_result(i, record):
         row, sc = _finalize(record, examples[i])
@@ -455,7 +475,13 @@ def main():
                         help="Required in --full-eval; must match frozen config")
     parser.add_argument("--concurrency", type=int, default=1,
                         help="Number of examples to run in parallel against the vLLM "
-                             "server (the server batches them). 1 = sequential.")
+                             "server (the server batches them). 1 = sequential. "
+                             "NOTE: llm_time_s/tool_time_s are wall-clock and include "
+                             "queueing, so any latency claim needs --concurrency 1.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Decode seed passed to vLLM and recorded per row. "
+                             "Required for a reproducible run at temperature > 0 "
+                             "(search_r1 and search_o1 sample at 0.7).")
     parser.add_argument("--retries", type=int, default=2,
                         help="Retries per example after transient API errors")
 

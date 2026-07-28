@@ -7,7 +7,7 @@ workspace and then use `grep_workspace` / `read_doc` for fine-grained search.
 
 ScaleSeek is one two-stage pipeline. Every stage — evaluation, SFT generation,
 RL — shares the **same system prompt, the same three tools, and the same output
-format**, so a trajectory is interchangeable across them:
+format**:
 
 - system prompt: `prompts/scaleseek_prompt.py:PROMPT` (single canonical constant)
 - tools (`eval.agent.execute_tool` + `Workspace` + `BM25Retriever`):
@@ -51,12 +51,19 @@ format**, so a trajectory is interchangeable across them:
                eval/run_eval.py --agent scaleseek
 ```
 
+Shared format does **not** mean the stages are interchangeable in practice — they
+still differ in base model (eval runs the frozen Qwen3.5-9B; the SFT smoke uses a
+1.7B student) and in what counts as the committed answer at each granularity (one
+assistant turn in eval, a whole trajectory in RL). The invariant that *is*
+enforced, by `eval.agent.visible_text` on both sides, is that nothing inside
+`<think>` is ever actionable.
+
 | Stage | Entry points | Status |
 |---|---|---|
-| 1. Evaluation | `eval/run_eval.py`, official launchers (`RUNBOOK.md`) | implemented |
-| 2a. SFT cold-start generation | `scripts/generate_sft_data.py`, `train/sft/` | implemented (`train/sft/README.md`) |
-| 2b. SFT training | `scripts/run_sft.sh` (verl) / `scripts/run_sft_local.py` (local) | implemented |
-| 2c. RL (GRPO) | `scripts/run_rl.sh`, `train/config/grpo_trainer.yaml` | implemented; SFT→RL handoff not yet run end-to-end |
+| 1. Evaluation | `eval/run_eval.py`, official launchers (`RUNBOOK.md`) | implemented; **phase-2 results exist only for search_r1 (7B/14B × bm25/e5) and search_o1** — direct / rag / scaleseek have not produced a run under the frozen protocol |
+| 2a. SFT cold-start generation | `scripts/generate_sft_data.py`, `train/sft/` | implemented (`train/sft/README.md`); exercised on smoke/puzzle corpora only |
+| 2b. SFT training | `scripts/run_sft.sh` (verl) / `scripts/run_sft_local.py` (local) | implemented; local smoke only |
+| 2c. RL (GRPO) | `scripts/run_rl.sh`, `train/config/grpo_trainer.yaml` | scaffolded, **never run**; SFT→RL handoff not yet exercised end-to-end |
 
 The SFT stage runs in two environments from one codebase: a single-GPU **local
 smoke** (tiny corpus, `hf:` teacher, `run_sft_local.py`) proves the plumbing, and
