@@ -229,7 +229,7 @@ def main():
     ap.add_argument("--out", default=None, help="Write the JSON report here too.")
     ap.add_argument("--expect-ids", default=None, metavar="MANIFEST.json",
                     help="Subset manifest (eval/subsets.subset_manifest) that this "
-                         "run must match exactly. Required for the 1/10-scope "
+                         "run must match exactly. Required for the capped-scope "
                          "harnesses so a truncated or drifted run cannot be "
                          "reported as if it were the sanctioned subset.")
     # index-build mode
@@ -260,8 +260,8 @@ def main():
 
     # --- evaluation scope -------------------------------------------------
     # Every row must be able to say whether it covers the complete split or the
-    # sanctioned 1/10 subset. Without this a results table can silently put a
-    # 1,427-question DCI row next to a 14,267-question RAG row.
+    # sanctioned <=1500-question subset. Without this a results table can
+    # silently put a 1,500-question DCI row next to a 14,267-question RAG row.
     if args.expect_ids:
         manifest = subsets.load_manifest(args.expect_ids)
         ok, msg = subsets.verify((r.get("id") for r in rows), manifest)

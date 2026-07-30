@@ -38,7 +38,7 @@ CAND=$ART/candidates.txt
 if [ ! -f "$CAND" ]; then
   echo "== select candidate articles reachable from the evaluated questions =="
   "$PY" scripts/build_rise_candidate_set.py \
-    --questions "$DATA/dcilite_datasets/popqa_decile1of10.jsonl" \
+    --questions "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
     --index-dir "$BM25_INDEX_DIR" \
     --mapping "$ART/passage_article_mapping.jsonl" \
     --top-k "${RISE_CAND_TOPK:-100}" --out "$CAND" \

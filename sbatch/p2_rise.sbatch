@@ -42,17 +42,17 @@ export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"
 export OPENAI_API_KEY=dummy
 unset XIAOMI_API_KEY DEEPSEEK_API_KEY 2>/dev/null || true
 
-# Scope: the dataset file below IS the sanctioned 1/10 subset (TASK.md
-# "1/10 规模例外"). `--full-eval` here is the official-harness gate -- it forbids
+# Scope: the dataset file below IS the sanctioned <=1500-question subset (TASK.md
+# "评测规模上限"). `--full-eval` here is the official-harness gate -- it forbids
 # any further --limit/-n/--offset and pins the frozen model/revision -- so the
-# two together mean "run the entire decile file, unsliced". compute_metrics then
+# two together mean "run the entire capped file, unsliced". compute_metrics then
 # verifies the produced id set against the subset manifest (--expect-ids).
 "$PY" scripts/run_official_baseline.py rise --repo-root "$OFFICIAL_ROOT" \
   --full-eval --model-revision "$GEN_REV" \
   --dataset-manifest "$POPQA_MANIFEST" \
   --record results/phase2/popqa_rise.run.json -- \
   --model Qwen/Qwen3.5-9B \
-  --mini-dev "$DATA/dcilite_datasets/popqa_decile1of10.jsonl" \
+  --mini-dev "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
   --bm25-k 1000 --bm25-top-n-preview 10 --max-turns 100 \
   --bash-truncate-chars 4000 --read-default-limit 2000 \
   --structured-docs --index-dir "$RISE_INDEX" \
@@ -70,6 +70,6 @@ INPUT=$(find "$RAW" -name '*.jsonl' -printf '%T@ %p\n' | sort -rn | head -1 | cu
   --output results/phase2/popqa_rise.jsonl
 sane results/phase2/popqa_rise.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_rise.jsonl \
-  --dataset popqa --agent rise --expect-ids "$DATA/dcilite_datasets/popqa_decile1of10.manifest.json" \
+  --dataset popqa --agent rise --expect-ids "$DATA/dcilite_datasets/popqa_cap1500.manifest.json" \
   --out results/phase2/popqa_rise.metrics.json
 echo "ALL_DONE popqa_rise"

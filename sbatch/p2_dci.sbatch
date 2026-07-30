@@ -26,10 +26,10 @@ waitp "$PORT" 3600
 export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"
 export OPENAI_API_KEY=dummy
 
-# Scope: the dataset file below IS the sanctioned 1/10 subset (TASK.md
-# "1/10 规模例外"). `--full-eval` here is the official-harness gate -- it forbids
+# Scope: the dataset file below IS the sanctioned <=1500-question subset (TASK.md
+# "评测规模上限"). `--full-eval` here is the official-harness gate -- it forbids
 # any further --limit/-n/--offset and pins the frozen model/revision -- so the
-# two together mean "run the entire decile file, unsliced". compute_metrics then
+# two together mean "run the entire capped file, unsliced". compute_metrics then
 # verifies the produced id set against the subset manifest (--expect-ids).
 "$PY" scripts/run_official_baseline.py dci --repo-root "$OFFICIAL_ROOT" \
   --full-eval --model-revision "$GEN_REV" \
@@ -38,7 +38,7 @@ export OPENAI_API_KEY=dummy
   --max-turns 300 --runtime-context-level level3 \
   --tools read,bash --max-concurrency "${CONC:-2}" \
   --judge-model Qwen/Qwen3.5-9B \
-  --dataset "$DATA/dcilite_datasets/popqa_decile1of10.jsonl" \
+  --dataset "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
   --corpus-dir "$DATA/dci_wiki_corpus" \
   --output-root "$RAW"
 stop_vllm
@@ -53,6 +53,6 @@ INPUT=$(find "$RAW" -name "*.jsonl" -newer results/phase2/popqa_dci.run.json | h
   --output results/phase2/popqa_dci.jsonl
 sane results/phase2/popqa_dci.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_dci.jsonl \
-  --dataset popqa --agent dci --expect-ids "$DATA/dcilite_datasets/popqa_decile1of10.manifest.json" \
+  --dataset popqa --agent dci --expect-ids "$DATA/dcilite_datasets/popqa_cap1500.manifest.json" \
   --out results/phase2/popqa_dci.metrics.json
 echo "ALL_DONE popqa_dci"

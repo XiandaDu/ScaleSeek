@@ -24,7 +24,7 @@ Selection rule
 An article is a candidate if it contains any of the top-K BM25 passages for any
 evaluated question:
 
-    decile questions -> wiki-18 passage BM25 (the index already built for every
+    evaluated questions -> wiki-18 passage BM25 (the index already built for every
     other method) -> doc_id -> article_file via passage_article_mapping.jsonl
 
 This reuses existing assets (no second index build) and targets the documents the
@@ -42,7 +42,7 @@ it after the run rather than assuming it away: the audit log records
 recoverable and belongs in the RISE row's limitations.
 
     python scripts/build_rise_candidate_set.py \
-        --questions $DATA/dcilite_datasets/popqa_decile1of10.jsonl \
+        --questions $DATA/dcilite_datasets/popqa_cap1500.jsonl \
         --index-dir $BM25_INDEX_DIR --mapping $DATA/rise_wiki_articles/passage_article_mapping.jsonl \
         --top-k 100 --out $DATA/rise_wiki_articles/candidates.txt
 """

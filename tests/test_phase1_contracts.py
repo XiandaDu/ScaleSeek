@@ -330,15 +330,15 @@ def test_scaleseek_eval_params_come_from_the_frozen_config():
 
 
 # ---------------------------------------------------------------------------
-# The 1/10 scope exception (TASK.md "1/10 规模例外"). It is only defensible
+# The 1/10 scope exception (TASK.md "评测规模上限"). It is only defensible
 # because the subset is a pure function of the ids -- no seed, no state file --
 # so these tests pin exactly that property.
 # ---------------------------------------------------------------------------
 
-def test_decile_subset_is_deterministic_and_order_independent():
+def test_capped_subset_is_deterministic_and_order_independent():
     from eval.subsets import select, subset_manifest, subset_size
     ex = [{"id": f"popqa_test_{i}"} for i in range(14267)]
-    assert subset_size(14267) == 1427                     # ceil(N/10)
+    assert subset_size(14267) == 1500                     # min(N, cap)
 
     a = select(ex, dataset="popqa")
     shuffled = list(reversed(ex))
@@ -349,27 +349,45 @@ def test_decile_subset_is_deterministic_and_order_independent():
             == subset_manifest(b, dataset="popqa", total=14267)["subset_ids_sha256"])
 
 
-def test_decile_subset_is_dataset_scoped():
+def test_small_datasets_run_complete_under_the_cap():
+    """A cap, not a ratio: 1/10 of Bamboogle would be 13 questions."""
+    from eval.subsets import select, subset_manifest, subset_size, is_capped
+    for total, name in ((125, "bamboogle"), (830, "browsecomp_plus"), (1500, "edge")):
+        ex = [{"id": f"{name}_{i}"} for i in range(total)]
+        sub = select(ex, dataset=name)
+        assert len(sub) == total == subset_size(total), f"{name} must run complete"
+        assert not is_capped(total)
+        man = subset_manifest(sub, dataset=name, total=total)
+        assert man["eval_scope"] == "full_split", (
+            f"{name} ran every question; calling it a subset row would understate it")
+    # one over the cap and it binds
+    ex = [{"id": f"x_{i}"} for i in range(1501)]
+    assert len(select(ex, dataset="x")) == 1500
+    assert subset_manifest(select(ex, dataset="x"), dataset="x",
+                           total=1501)["eval_scope"] == "capped_1500"
+
+
+def test_capped_subset_is_dataset_scoped():
     """Different datasets must not select 'the same' positional rows."""
     from eval.subsets import select
     ex = [{"id": str(i)} for i in range(1000)]
-    a = {e["id"] for e in select(ex, dataset="popqa")}
-    b = {e["id"] for e in select(ex, dataset="hotpotqa")}
+    a = {e["id"] for e in select(ex, dataset="popqa", cap=100)}
+    b = {e["id"] for e in select(ex, dataset="hotpotqa", cap=100)}
     assert a != b
 
 
 def test_subset_verify_rejects_drift():
     from eval.subsets import select, subset_manifest, verify
-    ex = [{"id": f"q{i}"} for i in range(500)]
+    ex = [{"id": f"q{i}"} for i in range(5000)]
     sub = select(ex, dataset="popqa")
-    man = subset_manifest(sub, dataset="popqa", total=500)
+    man = subset_manifest(sub, dataset="popqa", total=5000)
     ids = [e["id"] for e in sub]
     assert verify(ids, man)[0] is True
     assert verify(ids[:-1], man)[0] is False           # truncated run
     assert verify(ids + ["extra"], man)[0] is False    # contaminated run
 
 
-def test_only_the_three_call_bound_harnesses_evaluate_on_the_decile():
+def test_only_the_three_call_bound_harnesses_evaluate_on_the_capped_set():
     """Guard the blast radius of the scope exception.
 
     Two distinct uses of the subset file must not be conflated:
@@ -384,7 +402,7 @@ def test_only_the_three_call_bound_harnesses_evaluate_on_the_decile():
                       "p1_rise_toc.sbatch"}    # picks articles to section
     for f in sorted((ROOT / "sbatch").glob("*.sbatch")):
         text = f.read_text()
-        if "decile1of10" not in text:
+        if "cap1500" not in text:
             continue
         if f.name in non_evaluating:
             assert "compute_metrics.py" not in text, (
@@ -392,15 +410,15 @@ def test_only_the_three_call_bound_harnesses_evaluate_on_the_decile():
                 "if it now produces a matrix row it needs TASK.md sanction")
             continue
         assert f.name in evaluators, (
-            f"{f.name} evaluates the 1/10 subset but TASK.md only sanctions "
+            f"{f.name} evaluates the capped subset but TASK.md only sanctions "
             "DCI / DR-DCI / RISE")
 
 
-def test_decile_harnesses_enforce_the_id_set():
+def test_capped_harnesses_enforce_the_id_set():
     """A subset run must be scope-checked, or the exception loses its guarantee."""
     for name in ("p2_dci.sbatch", "p2_dr_dci.sbatch", "p2_rise.sbatch"):
         text = (ROOT / "sbatch" / name).read_text()
-        assert "decile1of10.jsonl" in text, f"{name} should read the subset file"
+        assert "cap1500.jsonl" in text, f"{name} should read the subset file"
         assert "--expect-ids" in text, \
             f"{name} computes metrics without --expect-ids; a truncated run " \
             "would be reported as the sanctioned subset"
