@@ -369,14 +369,31 @@ def test_subset_verify_rejects_drift():
     assert verify(ids + ["extra"], man)[0] is False    # contaminated run
 
 
-def test_only_the_three_call_bound_harnesses_use_the_decile():
-    """Guard the blast radius: no other sbatch may point at the subset file."""
-    allowed = {"p2_dci.sbatch", "p2_dr_dci.sbatch", "p2_rise.sbatch",
-               "p0_assets.sbatch"}
+def test_only_the_three_call_bound_harnesses_evaluate_on_the_decile():
+    """Guard the blast radius of the scope exception.
+
+    Two distinct uses of the subset file must not be conflated:
+      * EVALUATING on it -- scoring a matrix row at n=1,427. TASK.md sanctions
+        exactly three methods, and each must scope-check with --expect-ids.
+      * merely READING the question list to build an asset (p1_rise_toc selects
+        which articles to section from it). That produces no result row, so it
+        does not widen the exception.
+    """
+    evaluators = {"p2_dci.sbatch", "p2_dr_dci.sbatch", "p2_rise.sbatch"}
+    non_evaluating = {"p0_assets.sbatch",      # generates the subset
+                      "p1_rise_toc.sbatch"}    # picks articles to section
     for f in sorted((ROOT / "sbatch").glob("*.sbatch")):
-        if "decile1of10" in f.read_text() and f.name not in allowed:
-            pytest.fail(f"{f.name} evaluates the 1/10 subset but TASK.md only "
-                        "sanctions DCI / DR-DCI / RISE")
+        text = f.read_text()
+        if "decile1of10" not in text:
+            continue
+        if f.name in non_evaluating:
+            assert "compute_metrics.py" not in text, (
+                f"{f.name} is registered as non-evaluating yet scores a run; "
+                "if it now produces a matrix row it needs TASK.md sanction")
+            continue
+        assert f.name in evaluators, (
+            f"{f.name} evaluates the 1/10 subset but TASK.md only sanctions "
+            "DCI / DR-DCI / RISE")
 
 
 def test_decile_harnesses_enforce_the_id_set():

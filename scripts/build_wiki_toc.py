@@ -31,6 +31,13 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=96)
     parser.add_argument("--limit", type=int, default=None,
                         help="Probe mode: only process this many pending articles")
+    parser.add_argument("--candidates", type=Path, default=None,
+                        help="File of article filenames (one per line) that get an "
+                             "LLM-built TOC. Every OTHER article is still emitted, "
+                             "with the official empty-TOC form, so the BM25 corpus "
+                             "stays the full 3.2M and the retrieval boundary is "
+                             "unchanged. Without this flag the whole corpus is "
+                             "sectioned: ~3.2M LLM calls, 24-72 days.")
     parser.add_argument("--audit", type=Path, default=None)
     args = parser.parse_args()
 
@@ -52,7 +59,16 @@ def main() -> None:
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
-    pending = []
+    candidates: set[str] | None = None
+    if args.candidates:
+        candidates = {ln.strip() for ln in
+                      args.candidates.read_text(encoding="utf-8").splitlines()
+                      if ln.strip()}
+        header["candidate_set"] = str(args.candidates)
+        header["n_candidates"] = len(candidates)
+
+    pending = []       # LLM-sectioned
+    passthrough = []   # emitted with an empty TOC, no model call
     done = 0
     with os.scandir(args.articles_dir) as it:
         for entry in it:
@@ -61,15 +77,22 @@ def main() -> None:
             if (args.out_dir / entry.name).exists():
                 done += 1
                 continue
-            pending.append(entry.name)
+            if candidates is not None and entry.name not in candidates:
+                passthrough.append(entry.name)
+            else:
+                pending.append(entry.name)
     pending.sort()
+    passthrough.sort()
     if args.limit is not None:
         pending = pending[: args.limit]
-    print(f"[toc] {done:,} already structured; {len(pending):,} to do "
+        passthrough = []          # probe mode measures the LLM path only
+    print(f"[toc] {done:,} already structured; {len(pending):,} to section "
+          f"via LLM; {len(passthrough):,} passthrough (empty TOC) "
           f"(workers={args.workers}, model={model})", flush=True)
 
     lock = threading.Lock()
-    stats = {"ok": 0, "fail": 0, "sections": 0, "located": 0, "skipped": 0}
+    stats = {"ok": 0, "fail": 0, "sections": 0, "located": 0, "skipped": 0,
+             "passthrough": 0}
     t0 = time.time()
 
     def work(name: str) -> dict:
@@ -94,8 +117,36 @@ def main() -> None:
             row.update(ok=False, error=f"{type(exc).__name__}: {exc}"[:400])
         return row
 
+    def passthrough_one(name: str) -> dict:
+        """Emit an out-of-candidate article with the official empty-TOC form.
+
+        Uses the same S.build_final the LLM path uses, so every file in the
+        structured corpus has one shape; only the TOC is absent. This is what
+        keeps the BM25 corpus complete -- omitting these files would silently
+        shrink RISE's retrieval space and make the task easier.
+        """
+        text = (args.articles_dir / name).read_text(encoding="utf-8")
+        final = S.build_final(text, [], empty_reason="outside-candidate-set")
+        tmp = args.out_dir / (name + ".tmp")
+        tmp.write_text(final, encoding="utf-8")
+        tmp.rename(args.out_dir / name)
+        return {"file": name, "ok": True, "passthrough": True,
+                "n_proposed": 0, "n_located": 0, "n_skipped": 0}
+
     with audit_path.open("a", encoding="utf-8") as audit:
         audit.write(json.dumps(header, ensure_ascii=False) + "\n")
+        if passthrough:
+            t_pt = time.time()
+            with ThreadPoolExecutor(max_workers=args.workers) as pool:
+                for i, row in enumerate(pool.map(passthrough_one, passthrough), 1):
+                    audit.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    stats["passthrough"] += 1
+                    if i % 100_000 == 0:
+                        print(f"[toc] passthrough {i:,}/{len(passthrough):,} "
+                              f"({i/(time.time()-t_pt):.0f}/s)", flush=True)
+            audit.flush()
+            print(f"[toc] passthrough done: {len(passthrough):,} in "
+                  f"{time.time()-t_pt:.0f}s", flush=True)
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             futures = {pool.submit(work, n): n for n in pending}
             for i, fut in enumerate(as_completed(futures), 1):
@@ -118,8 +169,9 @@ def main() -> None:
 
     proposed = stats["located"] + stats["skipped"]
     print(json.dumps({
-        "processed": stats["ok"] + stats["fail"],
+        "sectioned_via_llm": stats["ok"] + stats["fail"],
         "ok": stats["ok"], "failed_docs": stats["fail"],
+        "passthrough_empty_toc": stats["passthrough"],
         "anchor_validation_rate": round(stats["located"] / proposed, 4) if proposed else None,
         "rate_per_s": round((stats["ok"] + stats["fail"]) / (time.time() - t0), 2),
     }, indent=2), flush=True)

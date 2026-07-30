@@ -29,11 +29,31 @@ export OPENAI_API_KEY=dummy
 export SECTION_MODEL=Qwen/Qwen3.5-9B
 unset XIAOMI_API_KEY DEEPSEEK_API_KEY 2>/dev/null || true
 
-echo "== probe: 500 articles for rate + anchor validation =="
+# Sectioning the whole article corpus is ~3.2M LLM calls = 24-72 days on this
+# server, so only articles reachable from the evaluated questions get an
+# LLM-built TOC. Every other article is still emitted (empty TOC), so the BM25
+# corpus stays the full 3.2M and RISE's retrieval boundary is unchanged --
+# structuring a subset must never become evaluating against a smaller corpus.
+CAND=$ART/candidates.txt
+if [ ! -f "$CAND" ]; then
+  echo "== select candidate articles reachable from the evaluated questions =="
+  "$PY" scripts/build_rise_candidate_set.py \
+    --questions "$DATA/dcilite_datasets/popqa_decile1of10.jsonl" \
+    --index-dir "$BM25_INDEX_DIR" \
+    --mapping "$ART/passage_article_mapping.jsonl" \
+    --top-k "${RISE_CAND_TOPK:-100}" --out "$CAND" \
+    --max-articles "${RISE_MAX_CAND:-250000}" || {
+      echo "FATAL: candidate selection refused (see the projected hours above)."
+      echo "       Lower RISE_CAND_TOPK, or raise RISE_MAX_CAND only after"
+      echo "       deciding that much sectioning time is acceptable."
+      exit 4; }
+fi
+
+echo "== probe: 500 candidate articles for rate + anchor validation =="
 "$PY" scripts/build_wiki_toc.py --articles-dir "$ART" --out-dir "$OUT" \
-  --workers 96 --limit 500
-echo "== full pass (resumes past the probe) =="
+  --candidates "$CAND" --workers 96 --limit 500
+echo "== full pass (LLM for candidates, empty-TOC passthrough for the rest) =="
 "$PY" scripts/build_wiki_toc.py --articles-dir "$ART" --out-dir "$OUT" \
-  --workers 96
+  --candidates "$CAND" --workers 96
 stop_vllm
 echo "ALL_P1_RISE_TOC_DONE"
