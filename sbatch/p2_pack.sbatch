@@ -35,6 +35,15 @@
 #     ret     -> none | bm25 | e5 | qwen3_emb_4b
 #     sr1     -> 7b | 14b        (search_r1 only)
 #
+# Concurrency defaults to 48, not 16. Measured on 7267 (Qwen3.5-9B, 2x L40S):
+# KV cache is 1,770,464 tokens and sat at 12.9% across 19,889 samples with
+# "Waiting: 0 reqs" every time and zero preemption -- i.e. the server was never
+# the bottleneck, the client's 16-way fan-out was. Decode is memory-bandwidth
+# bound, so a larger batch amortises the weight read and raises aggregate
+# tokens/s. Headroom at 48 is still ~3x. Raise CONC further only while watching
+# "GPU KV cache usage" in the vLLM log: past ~80% vLLM starts preempting, which
+# silently costs more than the extra batch wins.
+#
 # A cell whose .metrics.json already exists is skipped (same convention as the
 # manual GPU2 helper in ab35cde), so a requeued job resumes the remaining work.
 # One cell failing does not abort its siblings; the job exit code is non-zero if
@@ -166,7 +175,7 @@ run_cell() {
       "$PY" -m eval.run_eval --dataset popqa --full-eval --agent "$agent" \
         "${RETARGS[@]}" "${EXTRA[@]}" \
         --host 127.0.0.1 --port "$port" --model Qwen/Qwen3.5-9B \
-        --generator-revision "$GEN_REV" --concurrency "${CONC:-16}" --retries 3 \
+        --generator-revision "$GEN_REV" --concurrency "${CONC:-48}" --retries 3 \
         --seed "${DECODE_SEED:-12345}" \
         --output "$out" "${RESUME[@]}" || return 1
     fi

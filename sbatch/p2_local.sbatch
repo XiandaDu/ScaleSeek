@@ -90,7 +90,7 @@ else
   "$PY" -m eval.run_eval --dataset popqa --full-eval --agent "$AGENT" \
     "${RETARGS[@]}" "${EXTRA[@]}" \
     --host 127.0.0.1 --port "$PORT" --model Qwen/Qwen3.5-9B \
-    --generator-revision "$GEN_REV" --concurrency "${CONC:-16}" --retries 3 \
+    --generator-revision "$GEN_REV" --concurrency "${CONC:-48}" --retries 3 \
     --output "$OUT" "${RESUME[@]}"
 fi
 stop_vllm
