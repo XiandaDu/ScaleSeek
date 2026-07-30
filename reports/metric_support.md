@@ -9,6 +9,10 @@
 > - **§1 表格里 PopQA 的 "Local file" 一列写的 `popqa/popqa_longtail.jsonl` 是错的。**
 >   实际加载的是 `popqa/test`（`eval/datasets.py:27`），并有 SHA256 与 14,267 行数
 >   双重校验；`README` 亦明确 "no popqa_full or long-tail aliases"。
+>   **该 longtail 文件已于 2026-07-30 按 `TASK.md:70` 删除**，连同
+>   `popqa_longtail_w_gs.jsonl`、`popqa_full/`、`popqa_full14267/`。因此那一行的
+>   `ctxs` / `s_wiki_title` 标注同时失效——规范的 `popqa/test.jsonl` 只有答案标注，
+>   PopQA 不支持 Gold R@W。
 > - **仍然有效**：§1 的 dataset × metric 支持矩阵（哪个集有 gold/qrel 标注）、
 >   各指标定义与论文出处、以及 "EM/F1 在 BCP 上会低估、需 LLM judge" 这一条。
 >   这些与样本量无关。
@@ -34,7 +38,7 @@ n=1500 时 EM/F1 95% 置信带约 **±2.3 点**——同集内**方法间排序*
 |---|---|---|:--:|:--:|:--:|:--:|:--:|
 | NQ | `nq/test.jsonl` | answers only | ✅ | ❌ | ❌ | ❌ | ✅ |
 | TriviaQA | `trivialqa/trivialqa_test.jsonl` | answers only | ✅ | ❌ | ❌ | ❌ | ✅ |
-| PopQA | `popqa/popqa_longtail.jsonl` | answers (+`ctxs`,`s_wiki_title`) | ✅ | ⚠️ subject-title only | ❌ | ❌ | ✅ |
+| PopQA | ~~`popqa/popqa_longtail.jsonl`~~ → `popqa/test.jsonl` | answers only | ✅ | ❌ | ❌ | ❌ | ✅ |
 | **HotpotQA** | `hotpotqa/hotpot_dev.jsonl` (+distractor json) | 2 gold passages → **titles** | ✅ | ✅ (title-level) | ≡ Gold R@W | ⚠️ optional | ✅ |
 | **2Wiki** | `2wiki/2wiki_dev.jsonl` | `supporting_facts.title` (+10 ctx paras) | ✅ | ✅ (title-level) | ≡ Gold R@W | ⚠️ optional | ✅ |
 | MuSiQue | `musique/dev.jsonl` | **answers only** (support paras stripped) | ✅ | ❌ | ❌ | ❌ | ✅ |
