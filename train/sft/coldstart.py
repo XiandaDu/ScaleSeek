@@ -39,11 +39,29 @@ from typing import Any, Optional
 from eval.agent import Workspace, execute_tool
 from eval.metrics import normalize
 from prompts import sft_prompts as P
+from train.sft import bm25_race as R
 from prompts.scaleseek_prompt import PROMPT as SCALESEEK_SYSTEM
 
 logger = logging.getLogger(__name__)
 
 _VALID_TOOLS = {"bm25_retrieve", "grep_workspace", "read_doc"}
+
+# BM25 grids for the search-then-teach mentor. TWO grids, because parameter
+# sensitivity is a corpus-length regime (measured on wiki-18 + Pi-Serini's
+# Table 3 on BCP — same mechanism, two ends):
+#   short — uniform passage corpora (wiki-18: 102±5 words). High k1 is harmful
+#           there (k1=12 dropped gold from rank 1 to 8-9), so the grid stays in
+#           the classical range; probing 16/25 would be dead retrievals the
+#           tie-break can never select.
+#   long  — document corpora (BCP: median ~2k tokens, p90 ~14k). Pi-Serini's
+#           grid-search optimum is near (k1=16, b=1.0), runs use (25, 1);
+#           default-range grids cannot reach that region at all.
+# The caller picks per corpus (see generate_sft_data --param-grid auto).
+_K1_GRID = (0.4, 0.6, 0.9, 1.2, 1.6, 2.0, 2.5)
+_B_GRID = (0.3, 0.5, 0.75, 0.9)
+_K1_GRID_LONG = (0.9, 1.2, 2.0, 4.0, 8.0, 16.0, 25.0)
+_B_GRID_LONG = (0.4, 0.75, 1.0)
+_TOPK_LADDER = (3, 5, 10, 20)
 
 
 # ---------------------------------------------------------------------------
@@ -73,8 +91,24 @@ class ColdStartConfig:
     #                 setting that ranks the target passage best (empirically grounded).
     #   "teacher"   — keep exactly what the teacher emitted (often omitted -> runtime
     #                 defaults; no adaptation shown).
-    # heuristic/search annotate the turn's reasoning with the rationale.
+    #   "race"      — race a fixed (k1,b) grid (train/sft/bm25_race.py): every
+    #                 config retrieves, the most promising arms each continue a
+    #                 full trajectory, the best-scoring one is the SFT positive
+    #                 and the rest become preference data. Also rescues backward
+    #                 hops whose default-param retrieval missed the evidence.
+    # heuristic/search/race annotate the turn's reasoning with the rationale.
     param_policy: str = "heuristic"
+    # race mode only:
+    race_width: int = 4          # forward arms incl. the default baseline arm
+    race_judge_budget: int = 3   # max extra judge calls per backward rescue
+    # search policy: (k1, b) grid, selected per corpus-length regime
+    # (generate_sft_data --param-grid). Defaults = short-passage grid (wiki-18).
+    k1_grid: tuple = _K1_GRID
+    b_grid: tuple = _B_GRID
+    # Replay each hop's real failed first attempt before the verified call, so
+    # trajectories demonstrate observe-failure -> reformulate (-> replace when
+    # the workspace holds only the junk). See _forward_pass.
+    inject_failures: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -345,14 +379,21 @@ class Trajectory:
     loss_mask: list[int] = field(default_factory=list)  # 1 on assistant turns
     status: str = "ok"           # ok | skipped | quality_fail | unsupported_answer
     meta: dict = field(default_factory=dict)
+    # race mode: losing arms, kept for preference/failure data. Each entry is a
+    # full {config, score, messages, loss_mask, meta} record. Never enters SFT —
+    # load_ok_trajectories keys on status of the *main* record only.
+    siblings: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "id": self.id, "question": self.question,
             "golden_answers": self.golden_answers,
             "messages": self.messages, "loss_mask": self.loss_mask,
             "status": self.status, "meta": self.meta,
         }
+        if self.siblings:
+            d["siblings"] = self.siblings
+        return d
 
 
 _STRUCT_TAGS = ("<think>", "</think>", "<tool_call>", "</tool_call>", "<answer>", "</answer>")
@@ -426,9 +467,8 @@ def _param_policy(query: str, bm25_idx: int) -> tuple[dict, str]:
 
 # Search-then-teach mentor: try BM25 settings, keep the one that actually ranks the
 # target passage best, and teach THOSE parameters (empirically grounded, not a rule).
-_K1_GRID = (0.4, 0.6, 0.9, 1.2, 1.6, 2.0, 2.5)
-_B_GRID = (0.3, 0.5, 0.75, 0.9)
-_TOPK_LADDER = (3, 5, 10, 20)
+# Grids (_K1_GRID/_B_GRID and the _LONG variants) are defined at the top of the
+# module, before ColdStartConfig, whose fields default to them.
 
 
 def _gold_rank(hits: list[dict], targets: list[str]) -> Optional[int]:
@@ -441,15 +481,16 @@ def _gold_rank(hits: list[dict], targets: list[str]) -> Optional[int]:
     return None
 
 
-def _search_params(retriever, query: str, targets: list[str], bm25_idx: int) -> tuple[dict, str]:
+def _search_params(retriever, query: str, targets: list[str], bm25_idx: int,
+                   k1_grid: tuple = _K1_GRID, b_grid: tuple = _B_GRID) -> tuple[dict, str]:
     """Grid-search (k1, b); pick the setting that ranks the target passage highest,
     then the smallest top_k that includes it. Returns (params, rationale).
-    Falls back to a bare replace/merge if no setting surfaces the target."""
+    Falls back to explicit default params if no setting surfaces the target."""
     top_probe = max(_TOPK_LADDER)
     default_rank = _gold_rank(retriever.retrieve(query, top_k=top_probe, k1=1.2, b=0.75), targets)
     best = None  # (rank, closeness_to_default, k1, b)
-    for k1 in _K1_GRID:
-        for b in _B_GRID:
+    for k1 in k1_grid:
+        for b in b_grid:
             rank = _gold_rank(retriever.retrieve(query, top_k=top_probe, k1=k1, b=b), targets)
             if rank is None:
                 continue
@@ -458,7 +499,13 @@ def _search_params(retriever, query: str, targets: list[str], bm25_idx: int) -> 
                 best = cand
     mode = "replace" if bm25_idx == 0 else "merge"
     if best is None:
-        return {"mode": mode}, ""
+        # No grid point surfaces the target in top-20 (possible when the judge
+        # verified semantically but no target form substring-matches). Emit the
+        # DEFAULT params rather than a bare {mode}: "no signal -> stay default"
+        # is the honest action, and a paramless call would teach the student
+        # that the knobs are optional (and previously tripped the zero-tolerance
+        # param gate on a single edge case at the end of a 24h run).
+        return {"top_k": 5, "k1": 1.2, "b": 0.75, "mode": mode}, ""
     rank, _, k1, b = best
     top_k = next((t for t in _TOPK_LADDER if t >= rank), top_probe)
     params = {"top_k": top_k, "k1": round(k1, 2), "b": round(b, 2), "mode": mode}
@@ -502,6 +549,15 @@ class Hop:
     trace: list[dict] = field(default_factory=list)
     best_docs: list[dict] = field(default_factory=list)
     verified: bool = False
+    # race mode: (k1,b) that rescued this hop's verification when the default
+    # parameters missed the evidence; None if default worked or no rescue ran.
+    rescue_params: Optional[dict] = None
+    # failure->recovery injection: the first FAILED backward attempt's trace,
+    # kept when a later refined attempt verified. This is the raw material for
+    # teaching observable failure handling (2026-07-30): strict success-filtering
+    # + outcome-grounded params collapsed every knob to a constant, because the
+    # when-to-adapt signal lives precisely in the attempts that filtering drops.
+    failed_trace: Optional[list] = None
 
 
 def _run_trace_isolated(trace: list[dict], retriever, tokenizer, cfg: ColdStartConfig) -> tuple[str, list[dict]]:
@@ -528,6 +584,7 @@ def _discover_hop(teacher, hop: Hop, downstream_docs: str, retriever, tokenizer,
     last_trace: list[dict] = []
     last_output = ""
     last_judge = ""
+    _first_failed: Optional[list] = None   # attempt-0 trace, kept if a refine succeeds
 
     for attempt in range(cfg.max_refine + 1):
         if attempt == 0:
@@ -557,7 +614,41 @@ def _discover_hop(teacher, hop: Hop, downstream_docs: str, retriever, tokenizer,
         prior_attempts.append(f"attempt {attempt}: query={trace[0]['arguments']['query']!r} -> {'YES' if ok else 'NO'}")
         if ok:
             hop.trace, hop.best_docs, hop.verified = trace, docs, True
+            if attempt > 0 and _first_failed is not None:
+                hop.failed_trace = _first_failed
             return hop
+        if attempt == 0 and trace:
+            _first_failed = trace
+
+        # Race-mode rescue: the teacher never varies k1/b on refine (it only
+        # rewrites the query — see reports/param_policy_findings.md), so a hop
+        # whose evidence is rank-buried under default params burns every refine
+        # attempt on the wrong knob. Before the next query rewrite, replay the
+        # SAME trace under the config grid; judge only mechanically-promising
+        # configs (gold form visible in output), bounded by race_judge_budget.
+        # This is where the 72% strict-verification failure rate gets attacked.
+        if cfg.param_policy == "race":
+            judged = 0
+            for config in R.BM25_CONFIGS[1:]:  # skip default: just failed above
+                if judged >= cfg.race_judge_budget:
+                    break
+                cand = [dict(t, arguments=dict(t["arguments"])) for t in trace]
+                for t in cand:
+                    if t["name"] == "bm25_retrieve":
+                        t["arguments"].update({"k1": config["k1"], "b": config["b"]})
+                c_out, c_docs = _run_trace_isolated(cand, retriever, tokenizer, cfg)
+                if not R._contains_any(c_out, [hop.expected] + hop.forms):
+                    continue
+                judged += 1
+                c_ok, c_reason = _judge(teacher, hop.sub_question, hop.expected,
+                                        hop.forms, c_out, cfg)
+                prior_attempts.append(
+                    f"attempt {attempt} [rescue {config['name']}]: -> {'YES' if c_ok else 'NO'}")
+                if c_ok:
+                    hop.trace, hop.best_docs, hop.verified = cand, c_docs, True
+                    hop.rescue_params = {"k1": config["k1"], "b": config["b"],
+                                         "name": config["name"]}
+                    return hop
 
     # Not verified within budget: keep the last candidate for lenient mode.
     hop.trace, hop.best_docs, hop.verified = last_trace, [], False
@@ -601,7 +692,16 @@ def _backward_pass(teacher, question: str, golds: list[str], retriever, tokenize
 # ---------------------------------------------------------------------------
 
 def _forward_pass(teacher, question: str, golds: list[str], hops: list[Hop],
-                  retriever, tokenizer, cfg: ColdStartConfig) -> Trajectory:
+                  retriever, tokenizer, cfg: ColdStartConfig,
+                  force_config: Optional[dict] = None) -> Trajectory:
+    """Assemble the forward trajectory.
+
+    force_config (race mode): a BM25_CONFIGS entry applied to every
+    bm25_retrieve call in this arm, overriding the per-call param policy. The
+    turn's reasoning gets the config's inference-reachable rationale — never
+    oracle facts like the gold's rank (see the 2026-07-28 leak fix note above
+    _search_params).
+    """
     traj = Trajectory(id="", question=question, golden_answers=golds)
     messages: list[dict] = [
         {"role": "system", "content": SCALESEEK_SYSTEM},
@@ -612,22 +712,77 @@ def _forward_pass(teacher, question: str, golds: list[str], hops: list[Hop],
     history = ""
     n_tool_calls = 0
     bm25_idx = 0
+    n_failure_turns = 0
 
     for hop in hops:
-        for target_tc in hop.trace:
+        # ── failure -> recovery injection ────────────────────────────────────
+        # Replay the hop's REAL failed first attempt (backward judge rejected it,
+        # a refined query then verified), so the trajectory demonstrates the one
+        # adaptation signal that is actually observable to the student: results
+        # that do not contain what was needed -> reformulate. Without this,
+        # strict success-filtering + outcome-grounded params collapse every knob
+        # to a constant (2026-07-30 probe: top_k=3 on 13/13 calls) and the
+        # discarded failures are precisely where when-to-adapt lives. Also the
+        # only content-driven `replace` demonstration in the data: when the
+        # workspace holds nothing but the junk of a failed first search, the
+        # recovery call REPLACES instead of merging.
+        failed_tc = None
+        if cfg.inject_failures and hop.failed_trace:
+            cand = hop.failed_trace[0]
+            if cand.get("name") == "bm25_retrieve":
+                failed_tc = {"name": cand["name"], "arguments": dict(cand["arguments"])}
+        if failed_tc is not None:
+            draft_think, _ = _planner_draft(teacher, question, history, cfg)
+            was_first = bm25_idx == 0
+            failed_tc["arguments"].setdefault("top_k", cfg.top_k_default)
+            failed_tc["arguments"].setdefault("k1", 1.2)
+            failed_tc["arguments"].setdefault("b", 0.75)
+            failed_tc["arguments"]["mode"] = "replace" if was_first else "merge"
+            result = execute_tool(failed_tc["name"], failed_tc["arguments"], workspace,
+                                  retriever, tokenizer=tokenizer,
+                                  max_response_tokens=cfg.tool_response_tokens)
+            result_json = json.dumps(result, ensure_ascii=False)
+            reasoning = _tutor_edit(teacher, question, history, draft_think, None,
+                                    failed_tc, result_json[: cfg.preview_chars], cfg)
+            assistant = _fmt_tool_turn(reasoning, failed_tc)
+            messages.append({"role": "assistant", "content": assistant}); mask.append(1)
+            messages.append({"role": "tool", "content": result_json}); mask.append(0)
+            history = _history_append(history, assistant, result_json)
+            n_tool_calls += 1
+            bm25_idx += 1
+            n_failure_turns += 1
+
+        for tc_i, target_tc in enumerate(hop.trace):
             draft_think, draft_tc = _planner_draft(teacher, question, history, cfg)
             # Apply the cold-start parameter policy so the trajectory demonstrates
             # adaptive k1/b/top_k/mode control instead of a constant or all-omitted set.
             param_note = ""
-            if cfg.param_policy in ("heuristic", "search") and target_tc["name"] == "bm25_retrieve":
+            if target_tc["name"] == "bm25_retrieve" and force_config is not None:
+                target_tc["arguments"].update(
+                    {"k1": force_config["k1"], "b": force_config["b"]})
+                param_note = force_config["rationale"]
+                bm25_idx += 1
+            elif cfg.param_policy in ("heuristic", "search") and target_tc["name"] == "bm25_retrieve":
                 query = str(target_tc["arguments"].get("query", ""))
                 if cfg.param_policy == "heuristic":
                     params, param_note = _param_policy(query, bm25_idx)
                 else:
                     targets = [hop.expected] + list(hop.forms)
-                    params, param_note = _search_params(retriever, query, targets, bm25_idx)
+                    params, param_note = _search_params(retriever, query, targets, bm25_idx,
+                                                        k1_grid=cfg.k1_grid, b_grid=cfg.b_grid)
                 target_tc["arguments"].update(params)
                 bm25_idx += 1
+            # Recovery semantics for the verified call right after an injected
+            # failure. The note references only what is observable in history.
+            if failed_tc is not None and tc_i == 0 and target_tc["name"] == "bm25_retrieve":
+                if was_first:
+                    target_tc["arguments"]["mode"] = "replace"
+                    extra = ("The results so far don't contain what I'm looking for, "
+                             "so I'll replace the workspace with a reformulated search.")
+                else:
+                    extra = ("That search didn't surface what I need; I'll reformulate "
+                             "and merge a better query's results.")
+                param_note = f"{param_note} {extra}".strip() if param_note else extra
             result = execute_tool(target_tc["name"], target_tc["arguments"], workspace,
                                   retriever, tokenizer=tokenizer,
                                   max_response_tokens=cfg.tool_response_tokens)
@@ -650,6 +805,11 @@ def _forward_pass(teacher, question: str, golds: list[str], hops: list[Hop],
     # a same-family LLM judge is the wrong instrument here (reports/baselines.md
     # §10j measured 11-13% self-contradictory verdicts on this model class).
     answer_supported = _workspace_supports(workspace, golds)
+    # Per-hop evidence coverage: fraction of hops whose expected answer (any
+    # form) survives into the FINAL workspace. This — not answer EM, which is
+    # pinned to gold by construction — is what discriminates race arms.
+    n_covered = sum(
+        1 for h in hops if _workspace_supports(workspace, [h.expected] + list(h.forms)))
     final_reason = _final_reasoning(teacher, question, history, cfg)
     answer_turn = _fmt_answer_turn(final_reason, golds[0])
     messages.append({"role": "assistant", "content": answer_turn}); mask.append(1)
@@ -662,7 +822,11 @@ def _forward_pass(teacher, question: str, golds: list[str], hops: list[Hop],
         "all_hops_verified": all(h.verified for h in hops),
         "final_workspace_size": workspace.size,
         "answer_supported": answer_supported,
+        "hop_coverage": n_covered / max(len(hops), 1),
+        "n_failure_turns": n_failure_turns,
     }
+    if force_config is not None:
+        traj.meta["race_config"] = force_config["name"]
     if not answer_supported:
         traj.status = "unsupported_answer"
     return traj
@@ -703,7 +867,51 @@ def build_trajectory(example: dict, teacher, retriever, *, tokenizer=None,
         return Trajectory(id=ex_id, question=question, golden_answers=golds,
                           status="skipped", meta={"reason": "strict verification failed"})
 
-    traj = _forward_pass(teacher, question, golds, hops, retriever, tokenizer, cfg)
+    if cfg.param_policy == "race":
+        # User-specified config race (2026-07-30): the backward pass ran ONCE
+        # (shared across arms — decompose/verify is the expensive teacher work);
+        # only the forward assembly forks per config.
+        arms = R.select_race_configs(retriever, hops, cfg.race_width)
+        # A hop rescued by a specific config is direct evidence that config
+        # matters for this question — force its arm into the race.
+        for h in hops:
+            if h.rescue_params and not any(a["name"] == h.rescue_params["name"] for a in arms):
+                arms.append(next(c for c in R.BM25_CONFIGS
+                                 if c["name"] == h.rescue_params["name"]))
+        scored: list[tuple[float, Trajectory, dict]] = []
+        for config in arms:
+            t = _forward_pass(teacher, question, golds, hops, retriever, tokenizer,
+                              cfg, force_config=config)
+            scored.append((R.score_trajectory(t.meta), t, config))
+        # Winner: highest score; ties break toward default (teach deviation
+        # only when it demonstrably pays — s3's gain-over-baseline logic),
+        # then toward the smaller workspace.
+        scored.sort(key=lambda s: (-s[0],
+                                   0 if s[2]["name"] == "default" else 1,
+                                   s[1].meta.get("final_workspace_size", 0)))
+        best_score, traj, best_cfg = scored[0]
+        default_score = next((s for s, _, c in scored if c["name"] == "default"), None)
+        traj.meta["race"] = {
+            "winner": best_cfg["name"], "score": round(best_score, 4),
+            "gain_over_default": (round(best_score - default_score, 4)
+                                  if default_score is not None else None),
+            "arms": [{"config": c["name"], "score": round(s, 4)} for s, _, c in scored],
+            # Which hops only verified under a non-default config. Without this
+            # the rescue mechanism is invisible in the output (2026-07-30 probe:
+            # had to guess whether 36->35 skips was rescue or variance).
+            "rescues": [h.rescue_params["name"] for h in hops if h.rescue_params],
+        }
+        # Losers become preference/failure data. Full messages are kept only
+        # when the winner is decisively better (margin >= 0.5 == one hop of
+        # coverage) — near-ties are noise, not preference signal.
+        for s, t, c in scored[1:]:
+            rec = {"config": c["name"], "score": round(s, 4), "meta": t.meta}
+            if best_score - s >= 0.5:
+                rec["messages"] = t.messages
+                rec["loss_mask"] = t.loss_mask
+            traj.siblings.append(rec)
+    else:
+        traj = _forward_pass(teacher, question, golds, hops, retriever, tokenizer, cfg)
     traj.id = ex_id
 
     if cfg.run_quality_judge:

@@ -69,8 +69,8 @@ fi
 export SCALESEEK_TRAIN_FILES SCALESEEK_VAL_FILES
 
 # --- model / output / GPUs ---
-export SCALESEEK_MODEL_PATH="${SCALESEEK_MODEL_PATH:-Qwen/Qwen3-8B}"
-[[ "${SCALESEEK_MODEL_PATH}" == "Qwen/Qwen3-8B" ]] && \
+export SCALESEEK_MODEL_PATH="${SCALESEEK_MODEL_PATH:-Qwen/Qwen3.5-9B}"
+[[ "${SCALESEEK_MODEL_PATH}" == "Qwen/Qwen3.5-9B" ]] && \
     echo "note: SCALESEEK_MODEL_PATH unset — initializing RL from BASE model (no SFT warm-start)"
 
 NPROC="${NPROC:-$(nvidia-smi -L 2>/dev/null | wc -l)}"; NPROC="${NPROC:-4}"

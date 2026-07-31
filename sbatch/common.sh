@@ -1,44 +1,33 @@
 #!/usr/bin/env bash
-# Shared guards and helpers for every ScaleSeek sbatch job. `source sbatch/common.sh`.
-# Encodes the hard operational lessons:
-#   1. never run heavy work on a jump host (arcade*),
-#   2. octal40/41 have no /usr/local/cuda -> unset CUDA_HOME kills vLLM silently,
-#   3. /tmp on octal30 is tmpfs -> route TMPDIR to /var/tmp and clean it up,
-#   4. a dead vLLM must abort the lane instead of producing 100% api_error rows.
+# 每个 ScaleSeek sbatch 作业共用的守卫与工具函数。用法：`source sbatch/common.sh`
+#
+# Nibi (Alliance Canada / SHARCNET) 版本。沿用旧集群踩出来的教训：
+#   1. 绝不在登录节点跑重活（Nibi 登录节点是 l1.nibi）；
+#   2. CUDA_HOME 未设会让 vLLM 静默失败 —— 从 module 推导；
+#   3. TMPDIR 必须指向节点本地 NVMe（$SLURM_TMPDIR），不是 /tmp 也不是 home；
+#   4. vLLM 起不来要让整条 lane 中止，而不是写出 100% api_error 的结果。
+# Nibi 特有：
+#   5. 不设 NCCL_P2P_DISABLE —— 那是 A5000/3090 的绕行方案，H100 有 NVLink，
+#      禁掉会让多卡训练慢数倍；
+#   6. MIG 切片（g30-g37）只有 1 个逻辑设备且无卡间通信，多卡作业要拒绝启动。
 set -euo pipefail
 
-case "$(hostname)" in
-  octal*|ilar*|abaque*|blg*) ;;
-  *) echo "FATAL: refusing to run on $(hostname) (jump host?)"; exit 1;;
+case "$(hostname -s)" in
+  l[0-9]*) echo "FATAL: 拒绝在登录节点 $(hostname -s) 上运行"; exit 1;;
+  c[0-9]*|g[0-9]*|o[0-9]*|u[0-9]*|m[0-9]*) ;;
+  *) echo "FATAL: 未知主机 $(hostname -s)"; exit 1;;
 esac
 
-source /u/mofengra/miniconda3/etc/profile.d/conda.sh
-source /data/rech/mofengra/ScaleSeek/setup_env.sh
-PY=/u/mofengra/miniconda3/envs/scaleseek/bin/python
+# shellcheck disable=SC1091
+source /home/a32du/ScaleSeek/setup_env.sh
 
-export E5_INDEX_DIR=$DATA/e5_index
-export QWEN3_EMB_INDEX_DIR=$DATA/qwen3_embedding_4b_index
-export LLM_TOKENIZER=Qwen/Qwen3.5-9B
-export OFFICIAL_ROOT=/data/rech/mofengra/official-baselines
-export GEN_REV=c202236235762e1c871ad0ccb60c8ee5ba337b9a
-export SR1_7B=PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-7b-em-grpo-v0.3
-export SR1_7B_REV=395b18f1fecee52f1b51fb22f898c220f0a08ec3
-export SR1_14B=PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-14b-em-grpo-v0.3
-export SR1_14B_REV=d65f11c88d3c129a01466f0c154aaad7d9b09225
-export GREPSEEK_MODEL=alireza7/GrepSeek-Qwen3.5-9B-GRPO
-export GREPSEEK_REV=a79563970cfdd2ced3cc5fde481737d0ebea6fa4
-export CORPUS_MANIFEST=$CORPUS_DIR/corpus_manifest.json
-export POPQA_RAW=$DATASETS/popqa/test.jsonl
-export POPQA_NORM=$DATASETS/popqa/test.normalized.jsonl
-export POPQA_MANIFEST=$DATASETS/popqa/manifest.json
-
+# --- CUDA ---
 if [ -z "${CUDA_HOME:-}" ]; then
-  for c in /usr/local/cuda /opt/cuda; do
-    [ -x "$c/bin/nvcc" ] && export CUDA_HOME=$c && break
-  done
-fi
-if [ -z "${CUDA_HOME:-}" ] && command -v nvcc >/dev/null 2>&1; then
-  CUDA_HOME=$(dirname "$(dirname "$(command -v nvcc)")"); export CUDA_HOME
+  if [ -n "${EBROOTCUDA:-}" ]; then
+    export CUDA_HOME="$EBROOTCUDA"
+  elif command -v nvcc >/dev/null 2>&1; then
+    CUDA_HOME=$(dirname "$(dirname "$(command -v nvcc)")"); export CUDA_HOME
+  fi
 fi
 # octal40/41 have no /usr/local/cuda and no nvcc on PATH, so both probes above
 # miss and vLLM dies silently -> a whole run of 100% api_error rows. The pip
@@ -63,39 +52,65 @@ if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qiE "l4
   echo "[common] L40S detected -> VLLM_USE_FLASHINFER_SAMPLER=0"
 fi
 
-export TMPDIR=/var/tmp/mofengra/${SLURM_JOB_ID:-manual}
+# --- TMPDIR：节点本地 NVMe，作业结束由 Slurm 自动清理 ---
+export TMPDIR="${SLURM_TMPDIR:-/tmp/$USER/${SLURM_JOB_ID:-manual}}"
 mkdir -p "$TMPDIR"
-cleanup_tmpdir() { rm -rf "$TMPDIR" 2>/dev/null || true; }
+cleanup_tmpdir() { [ -n "${SLURM_TMPDIR:-}" ] || rm -rf "$TMPDIR" 2>/dev/null || true; }
 
-# A5000/3090 have no P2P; the flag is a small perf cost elsewhere but never wrong.
-export NCCL_P2P_DISABLE=1
+# --- MIG 上的 CUDA_VISIBLE_DEVICES 修正 ---
+# Slurm 在 MIG 切片上把 CUDA_VISIBLE_DEVICES 设成 MIG UUID
+# （CUDA_VISIBLE_DEVICES=MIG-df5d2c22-...）。torch 认这个格式，但 vLLM 0.23 会
+# 拿它去 int() 解析，启动时直接崩：
+#     ValueError: invalid literal for int() with base 10: 'MIG-df5d2c22-...'
+# Slurm 的 device cgroup 已经把可见设备限制成那一个 MIG 实例，所以改写成序号
+# 是安全的（torch 两种写法都报同一个 MIG 3g.40gb 设备）。
+if [ "${SCALESEEK_ON_MIG:-0}" = "1" ] && [[ "${CUDA_VISIBLE_DEVICES:-}" == MIG-* ]]; then
+  echo "[mig] CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES -> 0 (vLLM 无法解析 MIG UUID)"
+  export CUDA_VISIBLE_DEVICES=0
+fi
+
+# --- GPU 数与 MIG 守卫 ---
+detect_gpus() {  # detect_gpus -> 回显可用 GPU 数
+  nvidia-smi -L 2>/dev/null | grep -c . || echo 0
+}
+require_full_gpus() {  # require_full_gpus <n> -- 多卡作业跑在 MIG 上必然失败，早点死
+  local want=$1 have; have=$(detect_gpus)
+  if [ "${SCALESEEK_ON_MIG:-0}" = "1" ] && [ "$want" -gt 1 ]; then
+    echo "FATAL: 当前是 MIG 切片，无法做 $want 卡训练。请申请 --gres=gpu:h100:$want"
+    exit 1
+  fi
+  if [ "$have" -lt "$want" ]; then
+    echo "FATAL: 需要 $want 张 GPU，实际只有 $have"
+    exit 1
+  fi
+  echo "[gpu] $have 张可用；本作业使用 $want"
+}
 
 VLLM_PID=""
-start_vllm() {  # start_vllm <model> <revision> <port> <tp> <served-name> [extra vllm args...]
+start_vllm() {  # start_vllm <model> <revision> <port> <tp> <served-name> [额外 vllm 参数...]
   local model=$1 rev=$2 port=$3 tp=$4 name=$5; shift 5
   local log=$REPO/logs/vllm_${SLURM_JOB_NAME:-manual}_${SLURM_JOB_ID:-0}_$port.log
   echo "[vllm] serving $model@$rev on :$port tp=$tp as '$name' (log: $log)"
-  CUDA_VISIBLE_DEVICES="${VLLM_GPUS:-${CUDA_VISIBLE_DEVICES:-0,1}}" \
+  CUDA_VISIBLE_DEVICES="${VLLM_GPUS:-${CUDA_VISIBLE_DEVICES:-0}}" \
   "$PY" -m vllm.entrypoints.openai.api_server \
       --model "$model" --revision "$rev" --dtype bfloat16 \
       --host 127.0.0.1 --port "$port" --tensor-parallel-size "$tp" \
       --served-model-name "$name" \
       --max-model-len "${VLLM_MAX_LEN:-32768}" \
       --gpu-memory-utilization "${VLLM_MEM_UTIL:-0.90}" \
-      --disable-custom-all-reduce \
       "$@" > "$log" 2>&1 &
   VLLM_PID=$!
 }
 
-waitp() {  # waitp <port> [timeout_s] -- abandon the lane rather than write garbage
+waitp() {  # waitp <port> [timeout_s] -- 宁可中止 lane，也不要写垃圾结果
   local port=$1 timeout=${2:-2400} t=0
   until curl -sf "http://127.0.0.1:$port/v1/models" >/dev/null 2>&1; do
     if [ -n "$VLLM_PID" ] && ! kill -0 "$VLLM_PID" 2>/dev/null; then
-      echo "FATAL: vLLM exited before :$port opened"; return 1
+      echo "FATAL: vLLM 在 :$port 打开前就退出了"; return 1
     fi
     t=$((t+5))
     if [ "$t" -ge "$timeout" ]; then
-      echo "FATAL: vLLM :$port not up after ${timeout}s"; return 1
+      echo "FATAL: vLLM :$port ${timeout}s 后仍未就绪"; return 1
     fi
     sleep 5
   done
@@ -259,8 +274,8 @@ frac = err / total
 print(f"[sane] {path}: {total} rows, api_error rows {err} ({frac:.1%})")
 if frac > 0.2:
     sys.exit(f"SANE-FAIL {path}: api_error fraction {frac:.1%} > 20%")
-# Parrot guard: a template placeholder echoed as the "answer" makes most
-# predictions identical (2026-07-22: direct/rag returned 'your answer here').
+# 复读守卫：模板占位符被当成答案输出会让预测高度重复（2026-07-22:
+# direct/rag 曾整批返回 'your answer here'）。
 if total >= 8:
     top, top_n = preds.most_common(1)[0]
     if top_n / total > 0.8:
@@ -335,5 +350,6 @@ advance_lane() {  # advance_lane -- pop the next job off this lane's queue file
   fi
 }
 
-echo "[common] host=$(hostname) job=${SLURM_JOB_NAME:-manual}/${SLURM_JOB_ID:-0}" \
-     "gpus=${CUDA_VISIBLE_DEVICES:-none} CUDA_HOME=${CUDA_HOME:-unset} TMPDIR=$TMPDIR"
+echo "[common] host=$(hostname -s) job=${SLURM_JOB_NAME:-manual}/${SLURM_JOB_ID:-0}" \
+     "gpus=${CUDA_VISIBLE_DEVICES:-none} mig=${SCALESEEK_ON_MIG:-?}" \
+     "CUDA_HOME=${CUDA_HOME:-unset} TMPDIR=$TMPDIR"

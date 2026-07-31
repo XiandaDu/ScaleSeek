@@ -72,10 +72,19 @@ def main() -> None:
     ap.add_argument("--tool-response-tokens", type=int, default=512)
     ap.add_argument("--strict", action="store_true", help="skip examples whose hops don't verify")
     ap.add_argument("--no-quality-judge", action="store_true")
-    ap.add_argument("--param-policy", choices=["heuristic", "search", "teacher"], default="heuristic",
+    ap.add_argument("--param-policy", choices=["heuristic", "search", "teacher", "race"], default="heuristic",
                     help="'heuristic': assign k1/b/top_k/mode from query features; "
                          "'search': grid-search BM25 params and teach the ones that best rank the "
-                         "target passage (empirically grounded); 'teacher': keep what the teacher emitted")
+                         "target passage (empirically grounded); 'teacher': keep what the teacher emitted; "
+                         "'race': race a (k1,b) config grid, keep the best-scoring trajectory as the "
+                         "SFT positive and the losers as preference data (train/sft/bm25_race.py)")
+    ap.add_argument("--race-width", type=int, default=4,
+                    help="race mode: forward arms per question incl. the default baseline")
+    ap.add_argument("--param-grid", choices=["auto", "short", "long"], default="auto",
+                    help="search policy (k1,b) grid. short: classical range for uniform "
+                         "passage corpora (wiki-18); long: extends to k1=25, b=1.0 "
+                         "(Pi-Serini's tuned region for ~2k-token documents); auto: "
+                         "sample $CORPUS_FILE and pick by median length (fallback: short)")
     args = ap.parse_args()
 
     if not args.index_dir:
@@ -88,12 +97,36 @@ def main() -> None:
     if tokenizer is None:
         tokenizer = getattr(teacher, "tokenizer", None)
 
+    from train.sft.coldstart import _K1_GRID, _B_GRID, _K1_GRID_LONG, _B_GRID_LONG
+
+    grid = args.param_grid
+    if grid == "auto":
+        # Regime detection by measurement, not assumption: sample the corpus and
+        # look at the median document length. 300 words sits between wiki-18's
+        # uniform ~102-word chunks and BCP's ~2k-token documents.
+        grid = "short"
+        corpus = os.environ.get("CORPUS_FILE")
+        if corpus and os.path.isfile(corpus):
+            import itertools
+            with open(corpus, encoding="utf-8") as fh:
+                lens = sorted(len(json.loads(l).get("contents", "").split())
+                              for l in itertools.islice(fh, 500))
+            if lens and lens[len(lens) // 2] > 300:
+                grid = "long"
+            print(f"[generate_sft_data] param-grid auto: median doc {lens[len(lens)//2] if lens else '?'} "
+                  f"words -> {grid} grid")
+    k1_grid, b_grid = ((_K1_GRID_LONG, _B_GRID_LONG) if grid == "long"
+                       else (_K1_GRID, _B_GRID))
+
     cfg = ColdStartConfig(
         max_refine=args.max_refine,
         tool_response_tokens=args.tool_response_tokens,
         strict=args.strict,
         run_quality_judge=not args.no_quality_judge,
         param_policy=args.param_policy,
+        race_width=args.race_width,
+        k1_grid=k1_grid,
+        b_grid=b_grid,
     )
 
     questions = _load_questions(args.questions, args.limit)

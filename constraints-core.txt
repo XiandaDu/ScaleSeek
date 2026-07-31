@@ -1,0 +1,9 @@
+# 保护核心 pin：追加安装 verl 依赖时，禁止解析器顺手升/降这几个包。
+# 装错一个 torch 就要重下 3GB，且会和已编译的 CUDA 栈错配。
+torch==2.11.0
+torchvision==0.26.0
+torchaudio==2.11.0
+transformers==5.12.1
+datasets==5.0.0
+vllm==0.23.0
+triton==3.6.0

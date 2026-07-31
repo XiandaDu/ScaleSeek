@@ -146,3 +146,55 @@ done
 python scripts/analyze_puzzle_eval.py omit=.puzzles/eval_teacher.jsonl \
     heuristic=.puzzles/eval_heuristic.jsonl search=.puzzles/eval_search.jsonl
 ```
+
+## Addendum (2026-07-30): outcome-level config race on the real corpus
+
+The report above measured whether students *learn* k1/b adaptation. A stronger
+test is whether k1/b variation even *changes outcomes* on wiki-18 — implemented
+as `--param-policy race` (`train/sft/bm25_race.py`): backward pass shared, the
+(k1,b) grid races full forward trajectories, evidence support picks the winner,
+and hops whose default-param retrieval fails the judge get a config-rescue pass.
+
+50-question probe (35B-A3B teacher, full 21M-passage index, job 18787433),
+against the strict baseline (job 18771352, same questions):
+
+| | strict/heuristic | race (width 4) |
+|---|---|---|
+| ok | 7 (14%) | 9 (18%) |
+| skipped | 36 | 35 |
+| non-default winners | — | **0 of 9** |
+| gain_over_default | — | **0.0 on every arm** |
+| preference pairs (margin ≥ 0.5) | — | 0 |
+| cost per usable trajectory | 63.1 s | 61.9 s |
+
+**Every race was won by the default config with zero gain.** The +2 ok is
+within run-to-run variance (vLLM batching; no arm showed any gain to attribute
+it to). This is the third independent confirmation that k1/b are dead levers on
+wiki-18, and the first at the outcome level: ~100-word passages saturate TF so
+fast that (k1,b) reordering does not change whether the gold form lands in a
+top-5 workspace.
+
+It also localizes the 70% skip wall: rescue can only reorder candidates for the
+*same query*, so if the teacher's query lacks the right terms, no parameter
+setting injects the missing recall. The wall is a query/decomposition problem.
+
+Consequences:
+- **wiki-18 production SFT data: use strict + heuristic.** The race costs the
+  same per usable trajectory but its selection adds nothing here.
+- **The race machinery stays** as dormant capability for long-document corpora
+  (e.g. BrowseComp-Plus, should the experiment plan point the training track
+  there — no such step is currently scheduled): full web pages
+  are exactly the long-document regime where TF saturation matters. Correction
+  (later same day): the teens-k1 recollection DID verify — against Pi-Serini
+  (arXiv:2605.10848), not RISE. Pi-Serini runs BCP with tuned k1=25, b=1
+  (grid-search optimum near k1=16, b=1.0; Anserini's default sits in a
+  low-performing region; +18.0% answer accuracy from tuning alone, §6). The
+  grid's long-document arms are now (16, 1.0) and (25, 1.0) accordingly —
+  note high k1 pairs with HIGH b there. RISE, for contrast, uses bm25s
+  defaults k1=1.5, b=0.75. Both wiki-18's parameter deadness (measured here)
+  and BCP's parameter sensitivity (Pi-Serini's Table 3) are the same
+  mechanism read off two corpus regimes: uniform ~102-word chunks leave b
+  nothing to normalize and k1 nothing to saturate; ~2k-token documents make
+  both levers live.
+- Raising wiki-18 yield means improving backward queries/decomposition or
+  question selection, not retrieval parameters.

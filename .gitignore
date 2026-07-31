@@ -229,3 +229,6 @@ sbatch/queue_lane*.txt
 .smoke_hard/
 .smoke_hard2/
 .puzzles/
+
+# hydra run dirs (verl sft_trainer)
+outputs/

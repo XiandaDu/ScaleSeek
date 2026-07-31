@@ -35,7 +35,16 @@ def _build_system_prompt() -> str:
     return load("scaleseek_prompt")
 
 
-class ScaleSeekDataset:
+# Actually inherit from torch's Dataset rather than just duck-typing __len__ /
+# __getitem__: verl resolves a custom dataset with
+# `issubclass(dataset_cls, Dataset)` (verl/utils/dataset/rl_dataset.py:496) and
+# raises TypeError otherwise, so a structurally-compatible class is not enough.
+# The conditional keeps torch optional — the branch is only evaluated when the
+# import above succeeded.
+_DatasetBase = Dataset if _TORCH_AVAILABLE else object
+
+
+class ScaleSeekDataset(_DatasetBase):
     """Dataset for ScaleSeek GRPO training (torch Dataset when torch is available).
 
     Reads JSONL files already in ScaleSeek canonical format:

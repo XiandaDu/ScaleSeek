@@ -17,6 +17,7 @@ This is a smoke harness; its numbers must never enter a result table (TASK.md).
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import os
 import sys
@@ -99,6 +100,10 @@ def main() -> None:
     ap.add_argument("--max-turns", type=int, default=8)
     ap.add_argument("--max-tokens", type=int, default=1024)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--min-format-pass", type=float, default=None, metavar="FRAC",
+                    help="Exit non-zero if the fraction of rollouts emitting a "
+                         "non-empty <answer> falls below FRAC. Use this as a gate "
+                         "before committing GPUs to an RL run.")
     args = ap.parse_args()
 
     if not args.index_dir:
@@ -129,13 +134,30 @@ def main() -> None:
         records.append({**rec.to_dict(), "em": em, "f1": f1v})
 
     n = len(questions)
+    # Format adherence: an empty prediction means the model never emitted
+    # <answer>...</answer>. This is tracked separately from EM because the two
+    # fail for different reasons and only one of them blocks RL: train/reward.py
+    # scores "no answer" and "wrong answer" both 0, so a model that reasons well
+    # but forgets the tag gives GRPO an all-zero reward group -> zero advantage
+    # -> zero gradient. The 2026-07-30 smoke saw exactly this (3 of 4 rollouts
+    # ended in prose, pg_loss and grad_norm both 0.0).
+    n_fmt = sum(1 for r in records if (r.get("prediction") or "").strip())
+    fmt_pass = n_fmt / max(n, 1)
+    finish = collections.Counter(r.get("finish_reason") for r in records)
     print(f"\n[smoke_eval] EM={n_em}/{n} ({100*n_em/max(n,1):.0f}%)  meanF1={f1_sum/max(n,1):.3f}")
+    print(f"[smoke_eval] format_pass={n_fmt}/{n} ({100*fmt_pass:.0f}%)  "
+          f"finish_reason={dict(finish)}")
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as f:
             for r in records:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
         print(f"[smoke_eval] wrote records -> {args.out}")
+
+    if args.min_format_pass is not None and fmt_pass < args.min_format_pass:
+        sys.exit(f"[smoke_eval] GATE FAILED: format_pass {fmt_pass:.2f} < "
+                 f"{args.min_format_pass:.2f}. RL would train on an all-zero "
+                 f"reward signal; fix SFT format adherence first.")
 
 
 if __name__ == "__main__":

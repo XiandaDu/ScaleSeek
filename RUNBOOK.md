@@ -12,15 +12,35 @@ repository setup script. Do this first on each new compute-node shell or tmux
 pane; do not replace it with a partial set of hand-written exports:
 
 ```bash
-cd /data/rech/mofengra/ScaleSeek
+cd /home/a32du/ScaleSeek
 source setup_env.sh
 ```
 
 `source` is required (not `bash setup_env.sh`) so `REPO`, `DATA`, `DATASETS`,
-`CORPUS_DIR`, `CORPUS_FILE`, `BM25_INDEX_DIR`, the LLM endpoint variables, and
-the `scaleseek` conda environment remain active in the current shell. The setup
-script also changes directory to `$REPO`; all relative commands below rely on
-that behavior.
+`CORPUS_DIR`, `CORPUS_FILE`, `BM25_INDEX_DIR`, the LLM endpoint variables, the
+loaded Lmod modules, and the `scaleseek` virtualenv remain active in the current
+shell. The setup script also changes directory to `$REPO`; all relative commands
+below rely on that behavior.
+
+The cluster is Nibi (Alliance Canada / SHARCNET). Storage is split by role and
+the setup script is the only place these paths are defined:
+
+| Variable | Path | Holds |
+|---|---|---|
+| `$REPO` | `/home` (50 GB, 500K files) | code only |
+| `$DATA` | `/scratch` (1 TB) | corpora, indexes, HF cache, RL data |
+| `$CKPT` | `/scratch` | SFT and RL checkpoints |
+| `$RESULTS` | `/project` (931 GB, backed up) | evaluation results and reports |
+| `$TMPDIR` | `$SLURM_TMPDIR` (node-local NVMe, 11 TB) | all in-job scratch I/O |
+
+Never put the HF cache or the virtualenv under `$REPO` — a torch+vLLM tree has
+enough small files to exhaust the home file-count quota on its own.
+
+Jobs are submitted with `--account=def-amirhk_gpu` (GPU) or `def-amirhk_cpu`
+(CPU-only) and **never** with `--partition`; Nibi routes on `--time`. The
+balanced per-H100 ratio is 14 cores and 250 GB, and billing takes the max across
+CPU/memory/GPU, so over-requesting cores silently multiplies the fairshare cost
+without buying anything.
 
 The existing corpus-I/O observation remains relevant when choosing server
 parallelism: start DCI-Agent-Lite with `--max-concurrency 2` or lower because
@@ -56,14 +76,37 @@ documented protocol.
 
 ## Environment
 
-`setup_env.sh` owns the core paths. Define only the additional Phase-1 index
-and tokenizer locations after sourcing it:
+`setup_env.sh` owns every core path, including the Phase-1 index and tokenizer
+locations (`E5_INDEX_DIR`, `QWEN3_EMB_INDEX_DIR`, `LLM_TOKENIZER`) — sourcing it
+is sufficient, no follow-up exports are needed.
 
-```bash
-export E5_INDEX_DIR=$DATA/e5_index
-export QWEN3_EMB_INDEX_DIR=$DATA/qwen3_embedding_4b_index
-export LLM_TOKENIZER=Qwen/Qwen3.5-9B
+Build the Python environment once with `bash scripts/setup_venv.sh`; it lives at
+`/scratch/a32du/venvs/scaleseek` and `setup_env.sh` activates it automatically.
+
+The build uses **uv with its own standalone CPython 3.12**, not `module load
+python`. This is not a preference — Alliance's gentoo-built Python accepts no
+manylinux wheels at all (`pip debug --verbose` lists 42 compatible tags, none of
+them manylinux), so almost every binary package on PyPI is unreachable from it:
+
 ```
+faiss-cpu==1.14.3     -> ERROR: (from versions: 1.12.0)
+cuda-bindings==13.3.1 -> ERROR: (from versions: none)
+```
+
+Alliance maintains its own wheelhouse for this reason, but it carries torch 1.9.1
+and no vLLM, faiss, or flash-attn, so it cannot host this stack. uv's CPython is
+an ordinary glibc build, accepts manylinux, and installs `requirements.txt`
+verbatim. Keep the uv cache and the venv both on `/scratch` — same filesystem
+means uv hardlinks instead of copying, which matters for a 9 GB tree.
+
+Dependencies come in two files. `requirements.txt` is the frozen eval stack from
+the original machine (torch 2.11.0+cu130, vLLM 0.23.0, transformers 5.12.1,
+pyserini 1.6.0, faiss 1.14.3). `requirements-verl.txt` adds the training stack
+(ray, peft, tensordict, liger-kernel, …) that the freeze lacks because that
+machine only ran evaluation; it installs under `constraints-core.txt` so the
+resolver cannot quietly move torch or vLLM. flash-attn is deliberately absent —
+no wheel matches torch 2.11 and the current SFT config runs with
+`use_remove_padding=false`, which does not need it.
 
 Serve Qwen3.5-9B for prompt methods, each selected Search-R1 checkpoint on its
 own endpoint, and the official GrepSeek checkpoint on its own endpoint. The
@@ -183,6 +226,48 @@ python scripts/judge_browsecomp_plus.py --input "$AGENT_OUTPUT" \
   --model Qwen/Qwen3.5-9B \
   --model-revision c202236235762e1c871ad0ccb60c8ee5ba337b9a
 ```
+
+## ScaleSeek training pipeline (SFT → RL)
+
+Three Slurm stages, all under `sbatch/`. Each one refuses to start if its inputs
+are missing, so a broken prerequisite fails in seconds instead of after hours of
+GPU time.
+
+| Stage | Script | GPUs | Produces |
+|---|---|---|---|
+| 1. SFT data | `sbatch/sft_data.sbatch` | 1 | `$SFT_TRAJ_DIR/{trajectories.jsonl,sft_train.parquet}` |
+| 2. SFT train | `sbatch/sft_train.sbatch` | 4 | `$SFT_CKPT_DIR/<jobid>/**/huggingface` |
+| 3. GRPO RL | `sbatch/rl_train.sbatch` | 4 | `$RL_CKPT_DIR/<jobid>/` |
+
+Prerequisites for stage 1 are a normalized question file and a built BM25 index:
+
+```bash
+source setup_env.sh
+$PY scripts/download_data.py
+$PY scripts/build_bm25_index.py
+$PY scripts/prepare_rl_data.py --out_dir $RL_DATA_DIR   # needed by stage 3
+```
+
+Submit the whole chain (`afterok`, so a failed stage stops the rest):
+
+```bash
+bash sbatch/submit_training.sh              # full chain
+bash sbatch/submit_training.sh --smoke      # 200 trajectories, 1 epoch
+bash sbatch/submit_training.sh --from rl    # RL only
+```
+
+RL warm-starts from the SFT checkpoint via `SCALESEEK_MODEL_PATH`. Leaving it
+unset trains from the base model and only prints a warning — check the log line
+`[rl] model=` before assuming a run is warm-started.
+
+verl is not on PyPI here: it comes from the pinned GrepSeek checkout at
+`$GREPSEEK_VERL_DIR` (`scripts/bootstrap_official_repos.py --repo grepseek`).
+
+Interactive debugging uses a MIG slice to conserve fairshare; note that
+`nvidia-smi --query-gpu` reports the parent card's 80 GB on a MIG device, while
+the slice actually caps at its own size (40 GB on `3g.40gb`). Trust
+`torch.cuda.get_device_properties(0).total_memory`. Multi-GPU training cannot run
+on MIG at all — `require_full_gpus` in `sbatch/common.sh` aborts such jobs.
 
 ## Phase gates
 

@@ -22,9 +22,15 @@
 #   NPROC                   GPUs                           [1]
 #   PYBIN                   python interpreter            [.venv/bin/python or python]
 #
-# Single-GPU / no-flash-attn friendly: pad_mode=right, use_remove_padding=false,
-# engine.use_torch_compile=false. On the cluster, source setup_env.sh and point
-# SCALESEEK_SFT_* at $DATA/$CKPT; raise NPROC and batch size.
+# NOTE: pad_mode must be `no_padding`. The vendored verl's FSDP engine hard-asserts
+# it (verl/workers/engine/fsdp/transformer_impl.py:883 —
+# `assert pad_mode == DatasetPadMode.NO_PADDING`), so the older
+# "single-GPU friendly" combination of pad_mode=right + use_remove_padding=false
+# fails at the first training step with `AssertionError: pad_mode right not supported`.
+# no_padding packs variable-length sequences, which needs flash-attn's varlen
+# kernels — flash-attn is therefore a hard requirement here, not an optimization.
+# On the cluster, source setup_env.sh and point SCALESEEK_SFT_* at $DATA/$CKPT;
+# raise NPROC and batch size.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,7 +64,7 @@ echo "[run_sft] output=${OUTPUT}  epochs=${EPOCHS}  maxlen=${MAXLEN}  bsz=${BSZ}
   data.train_files="${TRAIN}" \
   data.val_files="${VAL}" \
   data.messages_key=messages \
-  data.pad_mode=right \
+  data.pad_mode=no_padding \
   data.use_dynamic_bsz=false \
   data.train_batch_size="${BSZ}" \
   data.micro_batch_size_per_gpu=2 \
@@ -67,7 +73,7 @@ echo "[run_sft] output=${OUTPUT}  epochs=${EPOCHS}  maxlen=${MAXLEN}  bsz=${BSZ}
   data.ignore_input_ids_mismatch=true \
   model.path="${BASE}" \
   model.trust_remote_code=true \
-  model.use_remove_padding=false \
+  model.use_remove_padding=true \
   model.enable_gradient_checkpointing=true \
   engine.use_torch_compile=false \
   optim.lr=1e-5 \

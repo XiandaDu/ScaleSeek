@@ -183,11 +183,13 @@ def test_gold_rank_and_search_params():
     assert _gold_rank(hits, ["Paris"]) == 2
     assert _gold_rank(hits, ["Berlin"]) is None
 
-    class NoTarget:  # target never retrieved -> search falls back to a bare replace
+    class NoTarget:  # target never retrieved -> fall back to explicit DEFAULT params.
+        # A bare {mode} (old behaviour) emitted a paramless bm25 call, teaching the
+        # student the knobs are optional — and tripped the param gate on one edge case.
         def retrieve(self, q, top_k=3, k1=1.2, b=0.75):
             return [{"text": "unrelated"} for _ in range(top_k)]
     params, why = _search_params(NoTarget(), "q", ["Zzz"], 0)
-    assert params == {"mode": "replace"} and why == ""
+    assert params == {"top_k": 5, "k1": 1.2, "b": 0.75, "mode": "replace"} and why == ""
 
     class GoldAt5:  # target sits at rank 5 -> search must widen top_k to include it
         def retrieve(self, q, top_k=3, k1=1.2, b=0.75):
@@ -250,3 +252,182 @@ def test_search_rationale_never_quotes_the_golds_rank():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# BM25 config race (param_policy="race")
+# ---------------------------------------------------------------------------
+
+def test_race_tie_prefers_default_and_keeps_siblings():
+    """When every config retrieves the same doc, all arms tie — the winner must
+    be `default` (deviation is only taught when it pays) and losers must be
+    recorded WITHOUT full messages (a near-tie is noise, not preference)."""
+    ex = {"id": "r1", "question": "What is the capital of France?", "golden_answers": ["Paris"]}
+    cfg = ColdStartConfig(max_refine=1, param_policy="race", race_width=3)
+    traj = build_trajectory(ex, _single_hop_teacher(), FakeRetriever(), tokenizer=None, cfg=cfg)
+
+    assert traj.status == "ok", traj.meta
+    race = traj.meta["race"]
+    assert race["winner"] == "default"
+    assert race["gain_over_default"] == 0.0
+    assert len(race["arms"]) == 3
+    assert len(traj.siblings) == 2
+    for sib in traj.siblings:
+        assert "messages" not in sib  # margin < 0.5 -> summary only
+
+
+class ParamSensitiveRetriever:
+    """Gold passage surfaces ONLY at b<=0.25; default params see a distractor.
+    Models the report's 'long gold buried unless length normalization is
+    relaxed' scenario — the case the race exists to rescue."""
+
+    def retrieve(self, query, top_k=3, k1=1.2, b=0.75):
+        if b <= 0.25:
+            return [{"doc_id": "gold", "score": 5.0, "text": "Paris is the capital of France."}]
+        return [{"doc_id": "noise", "score": 4.0, "text": "France is a country in Europe."}]
+
+
+def _param_sensitive_teacher():
+    from train.sft.teacher import FakeTeacher
+
+    def respond(messages):
+        last = messages[-1]["content"]
+        if "decomposing a multi-hop question" in last:
+            return '[{"sub_question": "What is the capital of France?"}]'
+        if "Sub-question to find supporting evidence for" in last or "propose a different bm25_retrieve" in last:
+            return ('<reasoning>Search with question terms.</reasoning>\n'
+                    '<tool_trace>[{"name": "bm25_retrieve", "arguments": '
+                    '{"query": "capital city of France", "top_k": 5, "mode": "replace"}}]</tool_trace>')
+        if "judging whether a BM25 retrieval result" in last:
+            # Honest judge: YES only if the evidence is actually in the output.
+            if "Paris is the capital" in last:
+                return '{"verdict": "YES", "reasoning": "passage states the capital"}'
+            return '{"verdict": "NO", "reasoning": "no supporting passage"}'
+        if "Produce the next step" in last:
+            return ('Searching for the capital.\n<tool_call>\n'
+                    '{"name": "bm25_retrieve", "arguments": {"query": "capital France"}}\n</tool_call>')
+        if "editing a research agent's draft reasoning" in last:
+            return '<edited_reasoning>I will retrieve with those terms.</edited_reasoning>'
+        if "You now have enough information" in last:
+            return 'The passage names the capital.\n<answer>\nParis\n</answer>'
+        if "expert reviewer of multi-hop QA trajectories" in last:
+            return '{"verdict": "PASS", "failing_check": null, "first_failing_turn": null, "reasoning": "coherent"}'
+        return ""
+
+    return FakeTeacher(respond)
+
+
+def test_race_rescues_param_sensitive_hop_and_picks_low_b():
+    ex = {"id": "r2", "question": "What is the capital of France?", "golden_answers": ["Paris"]}
+
+    # Without the race, strict mode must skip: default-param retrieval never
+    # satisfies the judge, and the teacher only ever rewrites the query.
+    base = build_trajectory(ex, _param_sensitive_teacher(), ParamSensitiveRetriever(),
+                            tokenizer=None, cfg=ColdStartConfig(max_refine=1))
+    assert base.status == "skipped", base.meta
+
+    cfg = ColdStartConfig(max_refine=1, param_policy="race", race_width=4)
+    traj = build_trajectory(ex, _param_sensitive_teacher(), ParamSensitiveRetriever(),
+                            tokenizer=None, cfg=cfg)
+    assert traj.status == "ok", traj.meta
+
+    winner = traj.meta["race"]["winner"]
+    winner_cfg = next(c for c in __import__("train.sft.bm25_race", fromlist=["BM25_CONFIGS"]).BM25_CONFIGS
+                      if c["name"] == winner)
+    assert winner_cfg["b"] <= 0.25, traj.meta["race"]
+    assert traj.meta["answer_supported"] is True
+    assert traj.meta["hop_coverage"] == 1.0
+    assert traj.meta["race"]["gain_over_default"] and traj.meta["race"]["gain_over_default"] > 0
+
+    # The winning turn must carry the config's params and its reachable rationale.
+    tool_turns = [m["content"] for m in traj.messages
+                  if m["role"] == "assistant" and "bm25_retrieve" in m["content"]]
+    assert any('"b": 0.25' in t for t in tool_turns), tool_turns
+    # Decisive margin (default arm lacks the evidence) -> losers keep messages.
+    assert any("messages" in s for s in traj.siblings)
+
+
+# ---------------------------------------------------------------------------
+# Failure -> recovery injection (inject_failures)
+# ---------------------------------------------------------------------------
+
+class QuerySensitiveRetriever:
+    """First query wording retrieves junk; the refined wording finds the gold.
+    Models the real backward-pass pattern: judge rejects attempt 0, the teacher
+    rewrites the query, attempt 1 verifies."""
+
+    def retrieve(self, query, top_k=3, k1=1.2, b=0.75):
+        if "capital city" in query:
+            return [{"doc_id": "gold", "score": 5.0, "text": "Paris is the capital of France."}]
+        return [{"doc_id": "junk", "score": 4.0, "text": "France exports wine and cheese."}]
+
+
+def _refining_teacher():
+    from train.sft.teacher import FakeTeacher
+    state = {"backward_attempts": 0}
+
+    def respond(messages):
+        last = messages[-1]["content"]
+        if "decomposing a multi-hop question" in last:
+            return '[{"sub_question": "What is the capital of France?"}]'
+        if "Your previous tool trace did not retrieve" in last:  # refine prompt
+            return ('<reasoning>Ask for the capital directly.</reasoning>\n'
+                    '<tool_trace>[{"name": "bm25_retrieve", "arguments": '
+                    '{"query": "capital city of France", "top_k": 5, "mode": "replace"}}]</tool_trace>')
+        if "Sub-question to find supporting evidence for" in last:
+            state["backward_attempts"] += 1
+            return ('<reasoning>Try economy terms.</reasoning>\n'
+                    '<tool_trace>[{"name": "bm25_retrieve", "arguments": '
+                    '{"query": "France main products", "top_k": 5, "mode": "replace"}}]</tool_trace>')
+        if "judging whether a BM25 retrieval result" in last:
+            if "Paris is the capital" in last:
+                return '{"verdict": "YES", "reasoning": "states the capital"}'
+            return '{"verdict": "NO", "reasoning": "irrelevant"}'
+        if "Produce the next step" in last:
+            return ('Searching.\n<tool_call>\n'
+                    '{"name": "bm25_retrieve", "arguments": {"query": "France"}}\n</tool_call>')
+        if "editing a research agent's draft reasoning" in last:
+            return '<edited_reasoning>I will search for this.</edited_reasoning>'
+        if "You now have enough information" in last:
+            return 'The passage names it.\n<answer>\nParis\n</answer>'
+        if "expert reviewer of multi-hop QA trajectories" in last:
+            return '{"verdict": "PASS", "failing_check": null, "first_failing_turn": null, "reasoning": "ok"}'
+        return ""
+
+    return FakeTeacher(respond)
+
+
+def test_failure_recovery_injection():
+    ex = {"id": "f1", "question": "What is the capital of France?", "golden_answers": ["Paris"]}
+    cfg = ColdStartConfig(max_refine=1, param_policy="search")
+    traj = build_trajectory(ex, _refining_teacher(), QuerySensitiveRetriever(),
+                            tokenizer=None, cfg=cfg)
+    assert traj.status == "ok", traj.meta
+    assert traj.meta["n_failure_turns"] == 1, traj.meta
+
+    calls = []
+    for m in traj.messages:
+        if m["role"] == "assistant" and "bm25_retrieve" in m["content"]:
+            seg = m["content"].split("<tool_call>", 1)[-1].split("</tool_call>", 1)[0]
+            calls.append(json.loads(seg)["arguments"])
+    # failed attempt first (junk query), then the verified recovery
+    assert len(calls) == 2, calls
+    assert "products" in calls[0]["query"]
+    assert "capital city" in calls[1]["query"]
+    # recovery REPLACES the junk-only workspace (content-driven replace)
+    assert calls[0]["mode"] == "replace" and calls[1]["mode"] == "replace"
+    # the recovery turn's reasoning references the observed failure
+    recovery_turn = [m["content"] for m in traj.messages
+                     if m["role"] == "assistant" and "capital city" in m["content"]][0]
+    think = recovery_turn.split("<think>", 1)[-1].split("</think>", 1)[0]
+    assert "replace the workspace" in think
+    # evidence still lands: workspace supports the answer
+    assert traj.meta["answer_supported"] is True
+
+
+def test_no_injection_when_first_attempt_succeeds():
+    ex = {"id": "f2", "question": "What is the capital of France?", "golden_answers": ["Paris"]}
+    cfg = ColdStartConfig(max_refine=1, param_policy="search")
+    traj = build_trajectory(ex, _single_hop_teacher(), FakeRetriever(), tokenizer=None, cfg=cfg)
+    assert traj.status == "ok"
+    assert traj.meta["n_failure_turns"] == 0
