@@ -69,6 +69,15 @@ if [ "${SCALESEEK_ON_MIG:-0}" = "1" ] && [[ "${CUDA_VISIBLE_DEVICES:-}" == MIG-*
   export CUDA_VISIBLE_DEVICES=0
 fi
 
+# --- ROCm 环境变量清理 ---
+# Nibi 混布 NVIDIA(H100) 与 AMD(MI300A) 节点，Slurm 的 gres 插件在所有 GPU 作业
+# 上同时导出 CUDA_VISIBLE_DEVICES 和 ROCR_VISIBLE_DEVICES。torch 2.11 检测到两者
+# 并存会直接抛
+#   ValueError: Please don't set ROCR_VISIBLE_DEVICES when HIP/CUDA_VISIBLE_DEVICES is set.
+# （2026-07-31 作业 18799125：4 卡 sft_train 四个 rank 66 秒内全灭）。
+# 我们只跑 CUDA 节点，ROCm 变量一律清掉。
+unset ROCR_VISIBLE_DEVICES HIP_VISIBLE_DEVICES 2>/dev/null || true
+
 # --- GPU 数与 MIG 守卫 ---
 detect_gpus() {  # detect_gpus -> 回显可用 GPU 数
   nvidia-smi -L 2>/dev/null | grep -c . || echo 0
