@@ -40,12 +40,20 @@ cd "${ROOT}"
 PYBIN="${PYBIN:-$( [ -x "${ROOT}/.venv/bin/python" ] && echo "${ROOT}/.venv/bin/python" || echo python )}"
 BASE="${SCALESEEK_SFT_BASE:-Qwen/Qwen3-1.7B}"
 TRAIN="${SCALESEEK_SFT_TRAIN:-.smoke/sft_train.parquet}"
-VAL="${SCALESEEK_SFT_VAL:-${TRAIN}}"
+# 默认不做验证（null）：Qwen3.5 的 4 行 position_ids 只有 dynamic-bsz 打包路径
+# 处理正确，验证走的静态路径会踩同一个 rope 崩溃；test_freq 本来就是 -1。
+VAL="${SCALESEEK_SFT_VAL:-null}"
 OUTPUT="${SCALESEEK_SFT_OUTPUT:-.smoke/sft_ckpt}"
 EPOCHS="${SCALESEEK_SFT_EPOCHS:-3}"
-MAXLEN="${SCALESEEK_SFT_MAXLEN:-4096}"
-BSZ="${SCALESEEK_SFT_BSZ:-8}"
+# 8192 而非 4096：2026-07-31 生产数据实测 p95≈4.6k / max≈6.3k token，
+# 4096 + truncation=right 会把近半数轨迹的最终答案回合切掉。
+MAXLEN="${SCALESEEK_SFT_MAXLEN:-8192}"
+# 每 GPU 的动态打包 token 预算（详见下方 use_dynamic_bsz 注释）
+MAXTOK="${SCALESEEK_SFT_MAXTOK:-16384}"
+BSZ="${SCALESEEK_SFT_BSZ:-32}"
 NPROC="${NPROC:-1}"
+# 序列并行度。grepseek 跑通 Qwen3.5-9B 用的是 SP=NPROC；须整除 NPROC。
+ULYSSES_SP="${ULYSSES_SP:-${NPROC}}"
 
 if [[ ! -f "${TRAIN}" ]]; then
   echo "error: train parquet not found: ${TRAIN}" >&2
@@ -59,15 +67,25 @@ echo "[run_sft] output=${OUTPUT}  epochs=${EPOCHS}  maxlen=${MAXLEN}  bsz=${BSZ}
 # verl multi-turn SFT over the `messages` column (MultiTurnSFTDataset is the default
 # when data.custom_cls.path is null). ignore_input_ids_mismatch handles the Qwen3
 # per-turn <think> template mismatch documented in verl's sft_trainer_engine.yaml.
+#
+# use_dynamic_bsz=true is LOAD-BEARING for Qwen3.5, not a throughput knob: the
+# model's interleaved RoPE needs the dataset's 4-row position_ids
+# (text + 3 vision rows, built whenever the processor is Qwen2VL-family), and
+# only the dynamic-bsz token-packing path collates that shape correctly. The
+# static path stacks (bs, 4, seq) and feeds the rope 8 rows where it expects 3:
+#   RuntimeError: The size of tensor a (3) must match the size of tensor b (8)
+# (jobs 18885490; grepseek's own run_sft.sh — same trainer, same student —
+# runs dynamic-bsz + offloads + SP=NPROC, mirrored here).
 "${PYBIN}" -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node="${NPROC}" \
   -m verl.trainer.sft_trainer \
   data.train_files="${TRAIN}" \
   data.val_files="${VAL}" \
   data.messages_key=messages \
   data.pad_mode=no_padding \
-  data.use_dynamic_bsz=false \
+  data.use_dynamic_bsz=true \
+  data.max_token_len_per_gpu="${MAXTOK}" \
   data.train_batch_size="${BSZ}" \
-  data.micro_batch_size_per_gpu=2 \
+  data.micro_batch_size_per_gpu=1 \
   data.max_length="${MAXLEN}" \
   data.truncation=right \
   data.ignore_input_ids_mismatch=true \
@@ -75,8 +93,12 @@ echo "[run_sft] output=${OUTPUT}  epochs=${EPOCHS}  maxlen=${MAXLEN}  bsz=${BSZ}
   model.trust_remote_code=true \
   model.use_remove_padding=true \
   model.enable_gradient_checkpointing=true \
+  model.enable_activation_offload=true \
   engine.use_torch_compile=false \
-  optim.lr=1e-5 \
+  engine.param_offload=true \
+  engine.optimizer_offload=true \
+  engine.ulysses_sequence_parallel_size="${ULYSSES_SP}" \
+  optim.lr="${SCALESEEK_SFT_LR:-5e-6}" \
   checkpoint.save_contents='[model,hf_model,extra]' \
   trainer.default_local_dir="${OUTPUT}" \
   trainer.project_name=scaleseek_sft \

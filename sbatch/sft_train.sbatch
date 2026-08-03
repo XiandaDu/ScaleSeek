@@ -7,8 +7,8 @@
 #   SCALESEEK_SFT_BASE    学生模型      [Qwen/Qwen3.5-9B]
 #   SCALESEEK_SFT_TRAIN   训练 parquet  [$SFT_TRAJ_DIR/sft_train.parquet]
 #   SCALESEEK_SFT_EPOCHS  轮数          [3]
-#   SCALESEEK_SFT_BSZ     全局 batch    [64]
-#   SCALESEEK_SFT_MAXLEN  最大序列长度  [4096]
+#   SCALESEEK_SFT_BSZ     全局 batch    [32]
+#   SCALESEEK_SFT_MAXLEN  最大序列长度  [8192]
 #   SFT_GPUS              GPU 数        [4]
 #
 # 产物：$SFT_CKPT_DIR/<experiment>/global_step_*/huggingface  <- RL 的热启动点
@@ -30,11 +30,13 @@ trap cleanup_tmpdir EXIT
 
 export SCALESEEK_SFT_BASE="${SCALESEEK_SFT_BASE:-Qwen/Qwen3.5-9B}"
 export SCALESEEK_SFT_TRAIN="${SCALESEEK_SFT_TRAIN:-$SFT_TRAJ_DIR/sft_train.parquet}"
-export SCALESEEK_SFT_VAL="${SCALESEEK_SFT_VAL:-$SCALESEEK_SFT_TRAIN}"
+# 默认无验证集：验证走静态 collate 路径，Qwen3.5 的 4 行 position_ids 在
+# 那里会触发 rope 崩溃（详见 scripts/run_sft.sh 的 use_dynamic_bsz 注释）。
+export SCALESEEK_SFT_VAL="${SCALESEEK_SFT_VAL:-null}"
 export SCALESEEK_SFT_OUTPUT="${SCALESEEK_SFT_OUTPUT:-$SFT_CKPT_DIR/$SLURM_JOB_ID}"
 export SCALESEEK_SFT_EPOCHS="${SCALESEEK_SFT_EPOCHS:-3}"
-export SCALESEEK_SFT_MAXLEN="${SCALESEEK_SFT_MAXLEN:-4096}"
-export SCALESEEK_SFT_BSZ="${SCALESEEK_SFT_BSZ:-64}"
+export SCALESEEK_SFT_MAXLEN="${SCALESEEK_SFT_MAXLEN:-8192}"
+export SCALESEEK_SFT_BSZ="${SCALESEEK_SFT_BSZ:-32}"
 export NPROC=4
 export PYBIN="$PY"
 
