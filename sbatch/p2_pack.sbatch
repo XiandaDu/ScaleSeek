@@ -138,7 +138,6 @@ run_cell() {
     esac
     [ -f "$out" ] && RESUME=(--resume)
 
-    local pid
     if [ "$agent" = search_r1 ]; then
       local M R CONC
       case "$sr1" in
@@ -146,8 +145,8 @@ run_cell() {
         14b) M=$SR1_14B; R=$SR1_14B_REV; CONC=${CONC:-6};;
         *) echo "FATAL: search_r1 needs sr1=7b|14b"; return 1;;
       esac
-      pid=$(start_vllm_on "$gpus" "$M" "$R" "$port" "$PER" "search-r1-$sr1")
-      waitp_pid "$port" "$pid" 3600 || return 1
+      start_vllm_on "$gpus" "$M" "$R" "$port" "$PER" "search-r1-$sr1"
+      waitp_pid "$port" "$PACK_LAST_PID" 3600 || return 1
       "$PY" -m eval.run_eval --dataset popqa --full-eval --agent search_r1 \
         "${RETARGS[@]}" \
         --search-r1-host 127.0.0.1 --search-r1-port "$port" \
@@ -157,9 +156,9 @@ run_cell() {
         --output "$out" "${RESUME[@]}" || return 1
     else
       export VLLM_USE_V2_MODEL_RUNNER=0
-      pid=$(start_vllm_on "$gpus" Qwen/Qwen3.5-9B "$GEN_REV" "$port" "$PER" \
-                          Qwen/Qwen3.5-9B --reasoning-parser qwen3)
-      waitp_pid "$port" "$pid" 3600 || return 1
+      start_vllm_on "$gpus" Qwen/Qwen3.5-9B "$GEN_REV" "$port" "$PER" \
+                    Qwen/Qwen3.5-9B --reasoning-parser qwen3
+      waitp_pid "$port" "$PACK_LAST_PID" 3600 || return 1
       case "$agent" in
         direct|rag|scaleseek)
           if ! "$PY" scripts/probe_thinking_closure.py \

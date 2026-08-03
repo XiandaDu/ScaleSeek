@@ -131,7 +131,13 @@ gpus_per_cell() {  # how many GPUs one Qwen3.5-9B server needs on this node
 }
 
 PACK_PIDS=()
+PACK_LAST_PID=""
 start_vllm_on() {  # start_vllm_on <gpus> <model> <rev> <port> <tp> <name> [extra...]
+  # Returns the pid in the global PACK_LAST_PID, NOT on stdout. `pid=$(start_vllm_on
+  # ...)` would capture this function's log lines too, and the caller would then
+  # `kill -0` a string -- which fails, and reports as "vLLM exited before the port
+  # opened" while vLLM is in fact still loading normally. That cost three cells on
+  # 2026-07-31 (jobs 7284/7290 died in 52s with vLLM healthy).
   local gpus=$1 model=$2 rev=$3 port=$4 tp=$5 name=$6; shift 6
   local log=$REPO/logs/vllm_${SLURM_JOB_NAME:-manual}_${SLURM_JOB_ID:-0}_$port.log
   echo "[vllm] gpus=$gpus serving $model@$rev on :$port tp=$tp as '$name'"
@@ -144,8 +150,8 @@ start_vllm_on() {  # start_vllm_on <gpus> <model> <rev> <port> <tp> <name> [extr
       --gpu-memory-utilization "${VLLM_MEM_UTIL:-0.90}" \
       --disable-custom-all-reduce \
       "$@" > "$log" 2>&1 &
-  PACK_PIDS+=("$!")
-  echo "$!"
+  PACK_LAST_PID=$!
+  PACK_PIDS+=("$PACK_LAST_PID")
 }
 
 stop_pack() {
@@ -158,6 +164,11 @@ stop_pack() {
 
 waitp_pid() {  # waitp_pid <port> <pid> [timeout] -- like waitp but for a given pid
   local port=$1 pid=$2 timeout=${3:-3600} t=0
+  # Fail loudly on a non-numeric pid instead of letting `kill -0` fail and
+  # reporting it as a dead server (see start_vllm_on).
+  case "$pid" in
+    ''|*[!0-9]*) echo "FATAL: waitp_pid got a non-numeric pid: ${pid:0:80}"; return 1;;
+  esac
   until curl -sf "http://127.0.0.1:$port/v1/models" >/dev/null 2>&1; do
     if ! kill -0 "$pid" 2>/dev/null; then
       echo "FATAL: vLLM (pid $pid) exited before :$port opened"; return 1

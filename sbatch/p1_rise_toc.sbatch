@@ -35,10 +35,19 @@ unset XIAOMI_API_KEY DEEPSEEK_API_KEY 2>/dev/null || true
 # corpus stays the full 3.2M and RISE's retrieval boundary is unchanged --
 # structuring a subset must never become evaluating against a smaller corpus.
 CAND=$ART/candidates.txt
+QSET=$DATA/dcilite_datasets/popqa_cap1500.jsonl
+# Fail on the real cause. 7292 died here because this file did not exist yet
+# (p0_assets generates it), but the handler below blamed the cost gate and told
+# the operator to lower RISE_CAND_TOPK -- which would not have helped at all.
+[ -f "$QSET" ] || {
+  echo "FATAL: $QSET missing. Generate it first:"
+  echo "  \"\$PY\" scripts/make_dcilite_datasets.py --datasets popqa --cap 1500 \\"
+  echo "      --out-dir \"\$DATA/dcilite_datasets\""
+  exit 4; }
 if [ ! -f "$CAND" ]; then
   echo "== select candidate articles reachable from the evaluated questions =="
   "$PY" scripts/build_rise_candidate_set.py \
-    --questions "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
+    --questions "$QSET" \
     --index-dir "$BM25_INDEX_DIR" \
     --mapping "$ART/passage_article_mapping.jsonl" \
     --top-k "${RISE_CAND_TOPK:-100}" --out "$CAND" \
