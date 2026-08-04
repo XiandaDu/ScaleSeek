@@ -2,6 +2,20 @@
 # 一键查看 phase-1/2 链状态。任何机器上直接: bash sbatch/status.sh
 cd /data/rech/mofengra/ScaleSeek 2>/dev/null || cd "$(dirname "$0")/.."
 
+# Loudest thing first: a stalled lane is silent otherwise and has twice parked
+# the pipeline for days (2026-07-28 laneA ~2d, 2026-08-02 laneA again).
+shopt -s nullglob
+_stalls=(logs/.lane_stalled_*)
+if [ ${#_stalls[@]} -gt 0 ]; then
+  echo "########################################################"
+  echo "##  ⛔ LANE STALLED — 没人踢的话这条线不会自己恢复  ##"
+  echo "########################################################"
+  for s in "${_stalls[@]}"; do echo "-- $s"; sed 's/^/   /' "$s"; done
+  echo "########################################################"
+  echo
+fi
+shopt -u nullglob
+
 echo "== SLURM 队列 =="
 squeue -u "$USER" -o "%.9i %.24j %.9T %.11M %.12r"
 
@@ -18,12 +32,17 @@ if [ ${#packlogs[@]} -eq 0 ]; then
 else
   for c in "${packlogs[@]}"; do
     name=$(basename "$c" .log); name=${name#cell_}
+    # On --resume the counter runs over the REMAINING examples (e.g. [6020/7922]),
+    # not the full split, so also report rows actually on disk -- otherwise a
+    # healthy resumed cell reads as stuck.
     last=$(grep -oE "\[ *[0-9]+/[0-9]+\]" "$c" 2>/dev/null | tail -1)
+    out=$(grep -oE "results/phase2/popqa_[a-z0-9_]+\.jsonl" "$c" 2>/dev/null | head -1)
+    rows=""; [ -n "$out" ] && [ -f "$out" ] && rows="盘上$(wc -l < "$out")行"
     gate=$(grep -oE "GATE-(PASS|FAIL)" "$c" 2>/dev/null | tail -1)
     done_=$(grep -c "ALL_DONE" "$c" 2>/dev/null)
     st="running"; [ "${done_:-0}" -gt 0 ] && st="DONE"
     grep -q "FATAL" "$c" 2>/dev/null && st="FATAL"
-    printf '  %-46s %-8s %-14s %s\n' "$name" "$st" "${gate:-—}" "${last:-启动中}"
+    printf '  %-40s %-8s %-11s %-16s %s\n' "$name" "$st" "${gate:-—}" "${last:-启动中}" "$rows"
   done
 fi
 shopt -u nullglob

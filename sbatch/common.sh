@@ -212,13 +212,42 @@ PYEOF
 }
 
 submit_retry() {  # submit_retry <sbatch args...> -- survive QOSMaxSubmitJobPerUserLimit
+  # Retrying here can only ever half-work, and it is worth being explicit about
+  # why rather than tuning the number:
+  #
+  #   * This runs in the EXIT trap. stop_vllm has killed the server, but SLURM
+  #     still holds the node+GPUs until the batch script exits, so every minute
+  #     spent retrying is a minute of idle allocated GPUs.
+  #   * The job also still counts toward MaxSubmitPU while it sits here, so at
+  #     the cap it is partly blocking its own submission. Waiting succeeds only
+  #     if some OTHER job happens to finish meanwhile.
+  #
+  # So the budget stays short (1h). The real fix is to stop submitting from the
+  # trap at all -- pre-arm the successor at job start with
+  # `--dependency=afterany:$SLURM_JOB_ID` -- which needs a lane-architecture
+  # change and should be done deliberately, not in an EXIT handler.
+  #
+  # What IS fixed here is the silence. Giving up used to print one line into a
+  # log nobody reads, and the lane simply stopped: laneA parked ~2 days on
+  # 2026-07-28 and again on 2026-08-02. A stall now leaves a marker file that
+  # sbatch/status.sh reports at the top, so it is visible on the next check.
   local tries=0
   while true; do
-    if out=$(sbatch "$@" 2>&1); then echo "[submit] $out <- $*"; return 0; fi
+    if out=$(sbatch "$@" 2>&1); then
+      echo "[submit] $out <- $*"
+      rm -f "$REPO/logs/.lane_stalled_${LANE:-unknown}" 2>/dev/null || true
+      return 0
+    fi
     tries=$((tries+1))
-    echo "[submit] blocked ($out); retry $tries in 300s: $*"
-    # Give up after ~30 min: a job stuck here is holding its GPUs hostage.
-    if [ "$tries" -ge 6 ]; then return 1; fi
+    echo "[submit] blocked ($out); retry $tries/12 in 300s: $*"
+    if [ "$tries" -ge 12 ]; then
+      printf '%s\nlane=%s job=%s (%s)\nkick with: sbatch %s\n' \
+        "STALLED at QOS submit cap after 1h of retries" \
+        "${LANE:-unknown}" "${SLURM_JOB_NAME:-?}/${SLURM_JOB_ID:-?}" \
+        "$(date '+%Y-%m-%d %H:%M')" "$*" \
+        > "$REPO/logs/.lane_stalled_${LANE:-unknown}" 2>/dev/null || true
+      return 1
+    fi
     sleep 300
   done
 }

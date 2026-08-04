@@ -24,7 +24,10 @@
 #   sbatch sbatch/p2_grepseek_recover.sbatch
 set -euo pipefail
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
-trap cleanup_tmpdir EXIT
+# advance_lane must be in the trap: this script sits in queue_laneA, so without
+# it the lane stops here and everything behind it (p2_dci, p2_agentir_encode)
+# never gets submitted.
+trap 'code=$?; cleanup_tmpdir; advance_lane; exit $code' EXIT
 
 SRC=$OFFICIAL_ROOT/grepseek/results/phase2/grepseek_raw/test/predictions.jsonl
 OUT=$REPO/results/phase2/popqa_grepseek.jsonl
