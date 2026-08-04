@@ -108,7 +108,7 @@ RL_WORKERS=$(( ${SLURM_CPUS_PER_TASK:-8} < 8 ? ${SLURM_CPUS_PER_TASK:-8} : 8 ))
 
 bash scripts/run_rl.sh \
     actor_rollout_ref.rollout.tensor_model_parallel_size="$RL_ROLLOUT_TP" \
-    data.num_workers="$RL_WORKERS" \
+    data.dataloader_num_workers="$RL_WORKERS" \
     trainer.experiment_name="nibi_${SLURM_JOB_ID}" \
     "$@"
 
