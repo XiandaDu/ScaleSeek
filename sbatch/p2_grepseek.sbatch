@@ -12,7 +12,12 @@
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
 PORT=$((10000 + SLURM_JOB_ID % 20000))
-RAW=results/phase2/grepseek_raw
+# ABSOLUTE. run_official_baseline.py launches the harness with
+# cwd=<official checkout> (subprocess.run(..., cwd=repo)), so a relative
+# --out_dir/--output-root lands inside the OFFICIAL repo, not ours, and the
+# post-run `find $RAW` then reports 'no output jsonl' after the whole eval
+# already ran. That silently cost grepseek 2d17h of GPU on 2026-08-02.
+RAW=$REPO/results/phase2/grepseek_raw
 mkdir -p results/phase2 "$RAW"
 
 start_vllm "$GREPSEEK_MODEL" "$GREPSEEK_REV" "$PORT" 2 "$GREPSEEK_MODEL" --reasoning-parser qwen3
