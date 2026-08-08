@@ -28,7 +28,17 @@ mkdir -p results/phase2 "$RAW"
 
 echo "== official wiki18 E5 retriever service (project E5 index) =="
 SVC_LOG=$REPO/logs/dr_dci_retriever_$SLURM_JOB_ID.log
-( cd "$OFFICIAL_ROOT/dr_dci" && uv run python tools/dense_retriever/searchr1_wiki18_dci_server.py \
+# Interpreter, deliberately: the official script runs under OUR env, not `uv run`.
+# The dr_dci checkout's uv environment has no faiss, so `uv run` fails at
+# `import faiss` (job 7331, 2026-08-06). Adding faiss there would edit uv.lock in
+# the pinned checkout and trip the commit gate.
+#
+# This is a tool process, not the method: it is the official
+# searchr1_wiki18_dci_server.py, unmodified, serving OUR frozen E5 index over
+# HTTP. Same script, same index, same FAISS query path -- only the interpreter
+# differs, which cannot change retrieval semantics. The Pi agent harness itself
+# still runs under the official env via run_official_baseline.py.
+( cd "$OFFICIAL_ROOT/dr_dci" && "$PY" tools/dense_retriever/searchr1_wiki18_dci_server.py \
     --index-path "$E5_INDEX_DIR/index.faiss" \
     --corpus-path "$CORPUS_FILE" \
     --model-name-or-path intfloat/e5-base-v2 \

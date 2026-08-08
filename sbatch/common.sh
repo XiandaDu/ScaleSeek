@@ -241,10 +241,14 @@ submit_retry() {  # submit_retry <sbatch args...> -- survive QOSMaxSubmitJobPerU
     tries=$((tries+1))
     echo "[submit] blocked ($out); retry $tries/12 in 300s: $*"
     if [ "$tries" -ge 12 ]; then
-      printf '%s\nlane=%s job=%s (%s)\nkick with: sbatch %s\n' \
-        "STALLED at QOS submit cap after 1h of retries" \
+      # Report the ACTUAL sbatch error, never a guessed cause. The first version
+      # of this marker hardcoded "at QOS submit cap"; job 7303 in fact failed
+      # with "Unable to open file sbatch/p2_grepseek_recover.sbatch" (a relative
+      # path resolved from the wrong cwd), and the marker sent the reader looking
+      # at the wrong thing for two days.
+      printf 'LANE STALLED after 1h of retries\nlane=%s job=%s at %s\nsbatch said: %s\nkick with: sbatch %s\n' \
         "${LANE:-unknown}" "${SLURM_JOB_NAME:-?}/${SLURM_JOB_ID:-?}" \
-        "$(date '+%Y-%m-%d %H:%M')" "$*" \
+        "$(date '+%Y-%m-%d %H:%M')" "$out" "$*" \
         > "$REPO/logs/.lane_stalled_${LANE:-unknown}" 2>/dev/null || true
       return 1
     fi
@@ -261,6 +265,11 @@ advance_lane() {  # advance_lane -- pop the next job off this lane's queue file
   line=$(head -1 "$qf")
   tail -n +2 "$qf" > "$qf.tmp" && mv "$qf.tmp" "$qf"
   echo "[lane $lane] next: $line"
+  # Queue lines name the script relatively ("sbatch/p2_x.sbatch"); sbatch resolves
+  # that against the CURRENT directory, which is whatever the finishing job left
+  # it as. Job 7303 died with "Unable to open file sbatch/p2_grepseek_recover.sbatch"
+  # for exactly this reason and parked laneA for two days. Submit from $REPO.
+  cd "$REPO" || true
   # shellcheck disable=SC2086
   if ! submit_retry $line; then
     # Put the line back so the lane can be kicked manually; free our resources.

@@ -62,7 +62,11 @@ echo "[pack] node=$(hostname) gpus=$NGPU per_cell=$PER cells='$CELLS'"
 # ---------------------------------------------------------------------------
 # Plan: assign GPUs to cells, skipping already-finished ones.
 # ---------------------------------------------------------------------------
-declare -a PLAN_NAME PLAN_AGENT PLAN_RET PLAN_SR1 PLAN_GPUS PLAN_PORT PLAN_ENC
+# Assign empty arrays explicitly: under `set -u` a bare `declare -a X` leaves X
+# unset, so ${#X[@]} aborts the script. That is what killed job 7330 ("PLAN_NAME:
+# unbound variable") when every cell was already finished -- the one case where
+# the job should simply exit 0.
+PLAN_NAME=(); PLAN_AGENT=(); PLAN_RET=(); PLAN_SR1=(); PLAN_GPUS=(); PLAN_PORT=(); PLAN_ENC=()
 next_gpu=0
 for spec in $CELLS; do
   IFS=: read -r name agent ret sr1 <<<"$spec"
