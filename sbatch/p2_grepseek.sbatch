@@ -41,6 +41,7 @@ INPUT=$(find "$RAW" -name '*.jsonl' -printf '%T@ %p\n' | sort -rn | head -1 | cu
   --input "$INPUT" \
   --run-record results/phase2/popqa_grepseek.run.json \
   --dataset-manifest "$POPQA_MANIFEST" --dataset-jsonl "$POPQA_NORM" \
+  --id-prefix popqa_ \
   --output results/phase2/popqa_grepseek.jsonl
 sane results/phase2/popqa_grepseek.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_grepseek.jsonl \

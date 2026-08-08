@@ -29,6 +29,24 @@ def load_rows(path: Path) -> list[tuple[str, dict]]:
     return [(str(file), json.loads(file.read_text())) for file in files]
 
 
+def _canonical_id(raw: str, prefix: str) -> str:
+    """Map a harness-side id onto our canonical id space.
+
+    Harnesses fed the raw FlashRAG file emit its ids verbatim ("test_8"), while
+    our canonical dataset namespaces them per dataset ("popqa_test_8"). Without
+    this the exact-ID-set check below rejects a perfectly good run: GrepSeek job
+    7291 evaluated all 14,267 questions and its recovery then failed on
+    "ID set differs from the canonical dataset" for nothing but a missing prefix.
+
+    Idempotent on purpose -- an id that already carries the prefix is left alone,
+    so passing --id-prefix to a harness that was fed the normalized file is a
+    no-op rather than producing "popqa_popqa_test_8".
+    """
+    if not prefix or raw.startswith(prefix):
+        return raw
+    return prefix + raw
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--method", required=True,
@@ -40,6 +58,12 @@ def main() -> None:
                         help="Canonical normalized dataset JSONL for exact ID-set validation")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--id-field", default="id")
+    parser.add_argument("--id-prefix", default="",
+                        help="Prepended to each harness id unless already present, "
+                             "to reach our canonical namespace (e.g. 'popqa_' for a "
+                             "harness fed the raw FlashRAG file, whose ids are "
+                             "'test_N' while ours are 'popqa_test_N'). Leave empty "
+                             "for harnesses fed our own converted datasets.")
     parser.add_argument("--question-field", default="question")
     parser.add_argument("--gold-field", default="gold_answers")
     parser.add_argument("--prediction-field", default="prediction")
@@ -59,7 +83,7 @@ def main() -> None:
             gold = [gold]
         turns = get(row, args.turns_field, []) or []
         output.append({
-            "id": str(get(row, args.id_field, "")),
+            "id": _canonical_id(str(get(row, args.id_field, "")), args.id_prefix),
             "question": get(row, args.question_field, ""),
             "gold_answers": gold,
             "prediction": get(row, args.prediction_field),

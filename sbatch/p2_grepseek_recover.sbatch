@@ -41,6 +41,7 @@ echo "== normalize -> $OUT =="
   --input "$SRC" \
   --run-record "$REPO/results/phase2/popqa_grepseek.run.json" \
   --dataset-manifest "$POPQA_MANIFEST" --dataset-jsonl "$POPQA_NORM" \
+  --id-prefix popqa_ \
   --output "$OUT"
 
 sane "$OUT"
