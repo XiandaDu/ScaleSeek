@@ -106,11 +106,55 @@ fi
 # "DataLoader worker is killed by signal: Killed"）。
 RL_WORKERS=$(( ${SLURM_CPUS_PER_TASK:-8} < 8 ? ${SLURM_CPUS_PER_TASK:-8} : 8 ))
 
+# ── 反挂死措施（2026-08-08，作业 19083387 的教训）────────────────────────────
+# 那次 TaskRunner 在 processor 加载后静默挂死 22 小时，8×H100×24h 烧完零训练步。
+# 三层防护：
+#   1. HF_HUB_OFFLINE：一切所需模型/分词器已在本地缓存；任何意外的 Hub 网络调用
+#      从"无限挂起"变成"立即报错或走缓存"。
+#   2. 看门狗：每 15 分钟打时间戳 + GPU 利用率 + 主进程 py-spy 栈 —— 再挂死时
+#      日志里直接有挂在哪一行的证据。
+#   3. 断路器：RL_STALL_MIN（默认 150 分钟，冒烟时 init+验证约 25 分钟）内日志
+#      没出现任何 step: 就主动自杀，把节点还回去而不是烧满墙钟。
+export HF_HUB_OFFLINE=1
+export RAY_DEDUP_LOGS=0
+export HYDRA_FULL_ERROR=1
+export NCCL_DEBUG=WARN
+
+RL_LOG=/home/a32du/ScaleSeek/logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out
+PYSPY="$SCALESEEK_VENV/bin/py-spy"
+
 bash scripts/run_rl.sh \
     actor_rollout_ref.rollout.tensor_model_parallel_size="$RL_ROLLOUT_TP" \
     data.dataloader_num_workers="$RL_WORKERS" \
     trainer.experiment_name="nibi_${SLURM_JOB_ID}" \
-    "$@"
+    "$@" &
+MAIN_PID=$!
+
+STALL_MIN="${RL_STALL_MIN:-150}"
+(
+  t=0
+  while kill -0 "$MAIN_PID" 2>/dev/null; do
+    sleep 900; t=$((t+15))
+    util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | paste -sd, -)
+    echo "[watchdog] +${t}min gpu_util=[${util}]"
+    if [ -x "$PYSPY" ]; then
+      for p in $(pgrep -f "ray::TaskRunner|verl.trainer.main_ppo" | head -2); do
+        echo "[watchdog] py-spy dump pid=$p:"
+        "$PYSPY" dump --pid "$p" 2>&1 | head -25
+      done
+    fi
+    if [ "$t" -ge "$STALL_MIN" ] && ! grep -aq "step:" "$RL_LOG" 2>/dev/null; then
+      echo "[watchdog] FATAL: ${STALL_MIN} 分钟无任何训练步 —— 判定挂死，主动终止以释放节点"
+      kill -TERM "$MAIN_PID" 2>/dev/null; sleep 60; kill -KILL "$MAIN_PID" 2>/dev/null
+      break
+    fi
+  done
+) &
+WATCHDOG_PID=$!
+
+RC=0; wait "$MAIN_PID" || RC=$?   # set -e 下裸 wait 失败会直接退脚本，绕过收尾
+kill "$WATCHDOG_PID" 2>/dev/null || true
+[ "$RC" -eq 0 ] || { echo "FATAL: run_rl.sh 退出码 $RC"; exit "$RC"; }
 
 echo "[rl] 完成。checkpoints -> $SCALESEEK_OUTPUT_DIR"
 echo "评测结果请写入 \$RESULTS ($RESULTS)，checkpoint 留在 \$CKPT (/scratch)。"
