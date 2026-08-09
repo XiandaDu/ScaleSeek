@@ -25,10 +25,17 @@ mkdir -p results/phase2 "$RAW"
 
 [ -d "$DATA/dci_wiki_corpus" ] && [ -n "$(ls -A "$DATA/dci_wiki_corpus" 2>/dev/null)" ] || {
   echo "FATAL: expanded DCI corpus missing; p0_dci_corpus must run first"; exit 4; }
-start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B --reasoning-parser qwen3
+# Pi rejects tool_choice:"auto" unless the server advertises tool calling;
+# without these it fails with `400 status code (no body)`
+# (dr_dci assets/docs/setup.md, and BASELINE_SOURCES.md already noted it).
+start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
+  --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser hermes
 waitp "$PORT" 3600
 
-export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"
+# The Pi agent ignores OPENAI_BASE_URL; it resolves providers from
+# $PI_CODING_AGENT_DIR/models.json. pi_vllm_provider writes that file.
+pi_vllm_provider "$PORT" Qwen/Qwen3.5-9B
+export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"   # for the Python-side tools
 export OPENAI_API_KEY=dummy
 
 # Scope: the dataset file below IS the sanctioned <=1500-question subset (TASK.md
@@ -39,7 +46,7 @@ export OPENAI_API_KEY=dummy
 "$PY" scripts/run_official_baseline.py dci --repo-root "$OFFICIAL_ROOT" \
   --full-eval --model-revision "$GEN_REV" \
   --record results/phase2/popqa_dci.run.json -- \
-  --model Qwen/Qwen3.5-9B --provider openai \
+  --model Qwen/Qwen3.5-9B --provider vllm \
   --max-turns 300 --runtime-context-level level3 \
   --tools read,bash --max-concurrency "${CONC:-2}" \
   --judge-model Qwen/Qwen3.5-9B \

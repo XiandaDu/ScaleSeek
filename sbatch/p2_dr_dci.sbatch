@@ -57,10 +57,17 @@ curl -sf -X POST "http://127.0.0.1:$PULL_PORT/retrieve" \
   | head -c 500 || { echo "FATAL: /retrieve probe failed"; exit 4; }
 echo
 
-start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B --reasoning-parser qwen3
+# Pi rejects tool_choice:"auto" unless the server advertises tool calling;
+# without these it fails with `400 status code (no body)`
+# (dr_dci assets/docs/setup.md, and BASELINE_SOURCES.md already noted it).
+start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
+  --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser hermes
 waitp "$PORT" 3600
 
-export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"
+# The Pi agent ignores OPENAI_BASE_URL; it resolves providers from
+# $PI_CODING_AGENT_DIR/models.json. pi_vllm_provider writes that file.
+pi_vllm_provider "$PORT" Qwen/Qwen3.5-9B
+export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"   # for the Python-side tools
 export OPENAI_API_KEY=dummy
 export DCI_PULL_BASE_URL="http://127.0.0.1:$PULL_PORT/retrieve"
 export DCI_PULL_DOCUMENT_BASE_URL="http://127.0.0.1:$PULL_PORT/document"
@@ -74,7 +81,7 @@ mkdir -p "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty"
 "$PY" scripts/run_official_baseline.py dr_dci --repo-root "$OFFICIAL_ROOT" \
   --full-eval --model-revision "$GEN_REV" \
   --record results/phase2/popqa_dr_dci.run.json -- \
-  --model Qwen/Qwen3.5-9B --provider openai \
+  --model Qwen/Qwen3.5-9B --provider vllm \
   --max-turns 300 --runtime-context-level level3 \
   --tools read,bash,pull \
   --pull-view-mode hardlink --pull-terminal-tools --pull-backend local \

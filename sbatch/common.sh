@@ -180,6 +180,63 @@ waitp_pid() {  # waitp_pid <port> <pid> [timeout] -- like waitp but for a given 
   echo "[vllm] :$port up after ${t}s"
 }
 
+pi_vllm_provider() {  # pi_vllm_provider <port> [model] -- point the Pi agent at our vLLM
+  # The Pi coding agent (dci / dr_dci) does NOT read OPENAI_BASE_URL. Passing
+  # `--provider openai` therefore sends it to api.openai.com, which answers 401,
+  # and the launcher still exits 0 with run_status "completed" and an empty
+  # final_text -- 1.2s per question, 1500/1500 blank. dci (7340) and dr_dci
+  # (7341) both burned a slot producing exactly nothing that way.
+  #
+  # The official path needs no patching (assets/docs/setup.md "configure a local
+  # vLLM provider"): declare a custom OpenAI-compatible provider in
+  # $PI_CODING_AGENT_DIR/models.json and pass `--provider vllm`. The port is
+  # per-job, so the file is generated per job rather than kept in ~/.pi.
+  local port=$1 model=${2:-Qwen/Qwen3.5-9B}
+  export PI_CODING_AGENT_DIR=$TMPDIR/pi_agent
+  export VLLM_API_KEY=dummy
+  mkdir -p "$PI_CODING_AGENT_DIR"
+  cat > "$PI_CODING_AGENT_DIR/models.json" <<PIEOF
+{
+  "providers": {
+    "vllm": {
+      "baseUrl": "http://127.0.0.1:$port/v1",
+      "api": "openai-completions",
+      "apiKey": "VLLM_API_KEY",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+      },
+      "models": [
+        { "id": "$model" }
+      ]
+    }
+  }
+}
+PIEOF
+  echo "[pi] provider vllm -> http://127.0.0.1:$port/v1 (model $model)"
+  echo "[pi] PI_CODING_AGENT_DIR=$PI_CODING_AGENT_DIR"
+
+  # Both documented failure modes, checked in seconds instead of hours. dci ran
+  # 2h03 and dr_dci 17min before anyone learned the agent could not talk to the
+  # model at all; the harness reports run_status "completed" with an empty
+  # final_text, so nothing downstream complains until `sane` sees 1500 identical
+  # blank predictions.
+  local probe
+  probe=$(curl -sf -X POST "http://127.0.0.1:$port/v1/chat/completions" \
+    -H 'Content-Type: application/json' -H "Authorization: Bearer ${VLLM_API_KEY}" \
+    -d "{\"model\":\"$model\",\"max_tokens\":16,\"tool_choice\":\"auto\",
+         \"messages\":[{\"role\":\"user\",\"content\":\"say ok\"}],
+         \"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"noop\",
+           \"description\":\"no op\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}}]}" \
+    2>&1) || {
+      echo "FATAL: the model endpoint rejected a tool_choice=auto request."
+      echo "       Pi sends exactly this and fails with '400 (no body)' when vLLM"
+      echo "       lacks --enable-auto-tool-choice --tool-call-parser hermes."
+      echo "       response: ${probe:0:400}"
+      return 1; }
+  echo "[pi] tool-calling probe OK"
+}
+
 sane() {  # sane <results.jsonl> -- refuse mostly-api_error or parroted outputs
   "$PY" - "$1" <<'PYEOF'
 import collections, json, sys
