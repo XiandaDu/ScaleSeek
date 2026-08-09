@@ -105,6 +105,7 @@ else INPUT=$(find "$RAW" -name "*.jsonl" -print -quit); fi
   --run-record results/phase2/popqa_dr_dci.run.json \
   --dataset-manifest "$POPQA_MANIFEST" \
   --dataset-jsonl "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
+  --id-field query_id \
   --output results/phase2/popqa_dr_dci.jsonl
 sane results/phase2/popqa_dr_dci.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_dr_dci.jsonl \

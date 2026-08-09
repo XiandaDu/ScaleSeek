@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 #SBATCH -J p2_agentir_encode
 #SBATCH -p rali
-#SBATCH -w octal30
+# NOTE: was `-w octal30`. Pinning a single node meant the job could not run at
+# all once that node went down (2026-08-09). octal31 is the identical 4x A5000
+# box; let the scheduler choose among equivalent nodes instead.
+#SBATCH --constraint=rtx_a5000
 #SBATCH --gres=gpu:4
 #SBATCH -c 32
 #SBATCH --mem=200G

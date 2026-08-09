@@ -80,6 +80,7 @@ else INPUT=$(find "$RAW" -name '*.jsonl' -printf '%T@ %p\n' | sort -rn | awk 'NR
   --run-record results/phase2/popqa_rise.run.json \
   --dataset-manifest "$POPQA_MANIFEST" \
   --dataset-jsonl "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
+  --id-field query_id \
   --output results/phase2/popqa_rise.jsonl
 sane results/phase2/popqa_rise.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_rise.jsonl \

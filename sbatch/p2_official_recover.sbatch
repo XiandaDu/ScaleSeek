@@ -30,8 +30,9 @@ CAP=$DATA/dcilite_datasets/popqa_cap1500.jsonl
 
 # The capped harnesses are scored against the subset; grepseek against the split.
 case "$METHOD" in
-  dci|dr_dci|rise) REF=$CAP; EXPECT=(--expect-ids "$DATA/dcilite_datasets/popqa_cap1500.manifest.json"); PREFIX=();;
-  grepseek)        REF=$POPQA_NORM; EXPECT=(); PREFIX=(--id-prefix popqa_);;
+  # The Pi harness family names the id "query_id"; grepseek emits "id".
+  dci|dr_dci|rise) REF=$CAP; EXPECT=(--expect-ids "$DATA/dcilite_datasets/popqa_cap1500.manifest.json"); EXTRA=(--id-field query_id);;
+  grepseek)        REF=$POPQA_NORM; EXPECT=(); EXTRA=(--id-prefix popqa_);;
   *) echo "FATAL: unknown METHOD=$METHOD"; exit 2;;
 esac
 
@@ -44,7 +45,7 @@ echo "== $METHOD: $INPUT ($(wc -l < "$INPUT") rows) vs $REF ($(wc -l < "$REF") r
 "$PY" "$REPO/scripts/normalize_official_results.py" --method "$METHOD" \
   --input "$INPUT" --run-record "$RUNREC" \
   --dataset-manifest "$POPQA_MANIFEST" --dataset-jsonl "$REF" \
-  "${PREFIX[@]}" --output "$OUT"
+  "${EXTRA[@]}" --output "$OUT"
 
 sane "$OUT"
 "$PY" "$REPO/scripts/compute_metrics.py" --results "$OUT" \
