@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+#SBATCH -J p2_official_recover
+#SBATCH -p rali
+#SBATCH -c 8
+#SBATCH --mem=32G
+#SBATCH -t 04:00:00
+#SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
+#
+# Score an official-harness run whose evaluation finished but whose
+# post-processing died. No model, no GPU -- normalize + metrics only.
+#
+#   sbatch -J p2_recover_dci    --export=ALL,METHOD=dci    sbatch/p2_official_recover.sbatch
+#   sbatch -J p2_recover_drdci  --export=ALL,METHOD=dr_dci sbatch/p2_official_recover.sbatch
+#
+# Why this keeps being needed: the harnesses run for hours-to-days and then hand
+# off to a few lines of shell that have now failed three separate ways --
+# a relative --out_dir writing into the official checkout (grepseek 7291, 2d17h),
+# `find | head` raising SIGPIPE under pipefail (dci 7340 / dr_dci 7341, exit 141),
+# and an id set compared against the wrong reference file. Each time the
+# expensive part had already succeeded. Recovering is minutes; re-running is days.
+set -euo pipefail
+source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
+trap 'code=$?; cleanup_tmpdir; advance_lane; exit $code' EXIT
+
+METHOD=${METHOD:?export METHOD=dci|dr_dci|rise|grepseek}
+RAW=$REPO/results/phase2/${METHOD}_raw
+OUT=$REPO/results/phase2/popqa_${METHOD}.jsonl
+RUNREC=$REPO/results/phase2/popqa_${METHOD}.run.json
+CAP=$DATA/dcilite_datasets/popqa_cap1500.jsonl
+
+# The capped harnesses are scored against the subset; grepseek against the split.
+case "$METHOD" in
+  dci|dr_dci|rise) REF=$CAP; EXPECT=(--expect-ids "$DATA/dcilite_datasets/popqa_cap1500.manifest.json"); PREFIX=();;
+  grepseek)        REF=$POPQA_NORM; EXPECT=(); PREFIX=(--id-prefix popqa_);;
+  *) echo "FATAL: unknown METHOD=$METHOD"; exit 2;;
+esac
+
+[ -f "$RUNREC" ] || { echo "FATAL: no run record at $RUNREC"; exit 4; }
+if [ -f "$RAW/results.jsonl" ]; then INPUT=$RAW/results.jsonl
+else INPUT=$(find "$RAW" -name '*.jsonl' -print -quit); fi
+[ -n "${INPUT:-}" ] && [ -f "$INPUT" ] || { echo "FATAL: no raw jsonl under $RAW"; exit 4; }
+
+echo "== $METHOD: $INPUT ($(wc -l < "$INPUT") rows) vs $REF ($(wc -l < "$REF") rows) =="
+"$PY" "$REPO/scripts/normalize_official_results.py" --method "$METHOD" \
+  --input "$INPUT" --run-record "$RUNREC" \
+  --dataset-manifest "$POPQA_MANIFEST" --dataset-jsonl "$REF" \
+  "${PREFIX[@]}" --output "$OUT"
+
+sane "$OUT"
+"$PY" "$REPO/scripts/compute_metrics.py" --results "$OUT" \
+  --dataset popqa --agent "$METHOD" "${EXPECT[@]}" \
+  --out "${OUT%.jsonl}.metrics.json"
+echo "ALL_DONE popqa_$METHOD (recovered)"

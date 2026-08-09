@@ -102,7 +102,15 @@ def main() -> None:
     ids = [row["id"] for row in output]
     if not all(ids) or len(ids) != len(set(ids)):
         raise SystemExit("Normalized official output has empty or duplicate IDs")
-    expected_ids = {str(json.loads(line)["id"]) for line in
+    # The reference file is our canonical dataset for full-split methods, and the
+    # capped subset for the call-bound ones (dci / dr_dci / rise). Those two file
+    # shapes name the id differently -- "id" in the canonical jsonl, "query_id" in
+    # the dci-lite conversion -- so accept either rather than KeyError on one.
+    def _row_id(line: str) -> str:
+        row = json.loads(line)
+        return str(row.get("id") or row.get("query_id") or "")
+
+    expected_ids = {_row_id(line) for line in
                     args.dataset_jsonl.read_text().splitlines() if line.strip()}
     if set(ids) != expected_ids:
         raise SystemExit("Normalized official output ID set differs from the canonical dataset")

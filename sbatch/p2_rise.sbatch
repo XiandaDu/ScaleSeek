@@ -67,11 +67,19 @@ unset XIAOMI_API_KEY DEEPSEEK_API_KEY 2>/dev/null || true
 stop_vllm
 
 echo "== normalize + metrics =="
-INPUT=$(find "$RAW" -name '*.jsonl' -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
+# Pick the aggregate file explicitly, and never pipe find into head.
+# `find ... | head -1` sends SIGPIPE upstream when head closes; under
+# `set -o pipefail` that exits 141 and kills the job AFTER the evaluation has
+# already finished. dci (7340) and dr_dci (7341) both died exactly this way on
+# 2026-08-08 with complete 1,500-row outputs on disk. It was also non-deterministic:
+# find's first hit can be a per-question events.jsonl rather than the aggregate.
+if [ -f "$RAW/results.jsonl" ]; then INPUT=$RAW/results.jsonl
+else INPUT=$(find "$RAW" -name '*.jsonl' -printf '%T@ %p\n' | sort -rn | awk 'NR==1{sub(/^[^ ]* /,"");print}'); fi
 "$PY" scripts/normalize_official_results.py --method rise \
   --input "$INPUT" \
   --run-record results/phase2/popqa_rise.run.json \
-  --dataset-manifest "$POPQA_MANIFEST" --dataset-jsonl "$POPQA_NORM" \
+  --dataset-manifest "$POPQA_MANIFEST" \
+  --dataset-jsonl "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
   --output results/phase2/popqa_rise.jsonl
 sane results/phase2/popqa_rise.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_rise.jsonl \

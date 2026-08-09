@@ -92,11 +92,19 @@ mkdir -p "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty"
 stop_vllm
 
 echo "== normalize + metrics =="
-INPUT=$(find "$RAW" -name "*.jsonl" | head -1)
+# Pick the aggregate file explicitly, and never pipe find into head.
+# `find ... | head -1` sends SIGPIPE upstream when head closes; under
+# `set -o pipefail` that exits 141 and kills the job AFTER the evaluation has
+# already finished. dci (7340) and dr_dci (7341) both died exactly this way on
+# 2026-08-08 with complete 1,500-row outputs on disk. It was also non-deterministic:
+# find's first hit can be a per-question events.jsonl rather than the aggregate.
+if [ -f "$RAW/results.jsonl" ]; then INPUT=$RAW/results.jsonl
+else INPUT=$(find "$RAW" -name "*.jsonl" -print -quit); fi
 "$PY" scripts/normalize_official_results.py --method dr_dci \
   --input "$INPUT" \
   --run-record results/phase2/popqa_dr_dci.run.json \
-  --dataset-manifest "$POPQA_MANIFEST" --dataset-jsonl "$POPQA_NORM" \
+  --dataset-manifest "$POPQA_MANIFEST" \
+  --dataset-jsonl "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
   --output results/phase2/popqa_dr_dci.jsonl
 sane results/phase2/popqa_dr_dci.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_dr_dci.jsonl \
