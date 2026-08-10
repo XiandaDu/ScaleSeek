@@ -128,7 +128,11 @@ echo "== normalize + metrics =="
 # already finished. dci (7340) and dr_dci (7341) both died exactly this way on
 # 2026-08-08 with complete 1,500-row outputs on disk. It was also non-deterministic:
 # find's first hit can be a per-question events.jsonl rather than the aggregate.
-if [ -f "$RAW/results.jsonl" ]; then INPUT=$RAW/results.jsonl
+# Read the COMPLETE node-local tree, never the scratch copy: the background
+# rsync can capture results.jsonl mid-append and the truncated line kills
+# normalize (job 18753890). $RAW remains the fallback for recover-style reruns.
+if [ -f "$RAW_LOCAL/results.jsonl" ]; then INPUT=$RAW_LOCAL/results.jsonl
+elif [ -f "$RAW/results.jsonl" ]; then INPUT=$RAW/results.jsonl
 else INPUT=$(find "$RAW" -name '*.jsonl' -printf '%T@ %p\n' | sort -rn | awk 'NR==1{sub(/^[^ ]* /,"");print}'); fi
 "$PY" scripts/normalize_official_results.py --method rise \
   --input "$INPUT" \

@@ -57,6 +57,7 @@ export OPENAI_API_KEY=dummy
   --full-eval --model-revision "$GEN_REV" \
   --record $RESULTS_DIR/${DS}_dci.run.json -- \
   --model Qwen/Qwen3.5-9B --provider vllm \
+  --agent-dir "$PI_CODING_AGENT_DIR" \
   --max-turns 300 --runtime-context-level level3 \
   --tools read,bash --max-concurrency "${CONC:-2}" \
   --judge-model Qwen/Qwen3.5-9B \
