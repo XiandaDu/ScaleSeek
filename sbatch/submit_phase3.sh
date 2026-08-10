@@ -97,6 +97,10 @@ echo "== wave 3: the $DS matrix (one small backfill-friendly job per cell) =="
 # GPU planning, skip-if-finished and requeue logic for a CELLS list of one.
 cell() {  # cell <name> <agent> <ret> [sr1] [ngpu]
   local name=$1 agent=$2 ret=$3 sr1=${4:-} ngpu=${5:-1}
+  # Finished rows need no job at all (the pack would only start, see the
+  # metrics file and exit — wasting a queue slot each babysitter cycle).
+  [ -f "results/$PHASE/${DS}_${name}.metrics.json" ] && {
+    echo "done    p3_$name (metrics exist)" >&2; return 0; }
   local spec="$name:$agent:$ret"; [ -n "$sr1" ] && spec="$spec:$sr1"
   local deps="$ACCEPT"
   [ "$ret" = qwen3_emb_4b ] && deps="$deps $Q3E"
@@ -118,10 +122,10 @@ cell rag_qwen3emb           rag       qwen3_emb_4b "" 2
 cell search_o1_qwen3emb     search_o1 qwen3_emb_4b "" 2
 cell search_r1_7b_qwen3emb  search_r1 qwen3_emb_4b 7b 2
 cell search_r1_14b_qwen3emb search_r1 qwen3_emb_4b 14b 2
-sub p3_grepseek --export="$EXP" $(dep $ACCEPT) sbatch/p2_grepseek.sbatch >/dev/null
-sub p3_dr_dci   --export="$EXP" $(dep $ACCEPT) sbatch/p2_dr_dci.sbatch >/dev/null
-sub p3_agentir  --export="$EXP" $(dep $ACCEPT $AIRENC) sbatch/p2_agentir.sbatch >/dev/null
-sub p3_dci      --export="$EXP" $(dep $ACCEPT $DCICORP) sbatch/p2_dci.sbatch >/dev/null
-sub p3_rise     --export="$EXP" $(dep $ACCEPT $RISETOC) sbatch/p2_rise.sbatch >/dev/null
+[ -f "results/$PHASE/${DS}_grepseek.metrics.json" ] && echo "done    p3_grepseek" >&2 || sub p3_grepseek --export="$EXP" $(dep $ACCEPT) sbatch/p2_grepseek.sbatch >/dev/null
+[ -f "results/$PHASE/${DS}_dr_dci.metrics.json" ] && echo "done    p3_dr_dci" >&2 || sub p3_dr_dci   --export="$EXP" $(dep $ACCEPT) sbatch/p2_dr_dci.sbatch >/dev/null
+[ -f "results/$PHASE/${DS}_agentir.metrics.json" ] && echo "done    p3_agentir" >&2 || sub p3_agentir  --export="$EXP" $(dep $ACCEPT $AIRENC) sbatch/p2_agentir.sbatch >/dev/null
+[ -f "results/$PHASE/${DS}_dci.metrics.json" ] && echo "done    p3_dci" >&2 || sub p3_dci      --export="$EXP" $(dep $ACCEPT $DCICORP) sbatch/p2_dci.sbatch >/dev/null
+[ -f "results/$PHASE/${DS}_rise.metrics.json" ] && echo "done    p3_rise" >&2 || sub p3_rise     --export="$EXP" $(dep $ACCEPT $RISETOC) sbatch/p2_rise.sbatch >/dev/null
 
 squeue -u "$USER" -o "%.9i %.22j %.9T %.12r %.20E"
