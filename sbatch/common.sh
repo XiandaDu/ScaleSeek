@@ -251,7 +251,7 @@ PIEOF
     2>&1) || {
       echo "FATAL: the model endpoint rejected a tool_choice=auto request."
       echo "       Pi sends exactly this and fails with '400 (no body)' when vLLM"
-      echo "       lacks --enable-auto-tool-choice --tool-call-parser hermes."
+      echo "       lacks --enable-auto-tool-choice --tool-call-parser qwen3_xml."
       echo "       response: ${probe:0:400}"
       return 1; }
   echo "[pi] tool-calling probe OK"
