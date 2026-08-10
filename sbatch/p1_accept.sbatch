@@ -3,7 +3,7 @@
 #SBATCH --account=def-amirhk_gpu
 #SBATCH --gres=gpu:h100:2
 #SBATCH -c 12
-#SBATCH --mem=56G
+#SBATCH --mem=100G
 #SBATCH -t 24:00:00
 #SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
 # Phase-1 server acceptance (GPU): index same-query stability, real-model

@@ -3,7 +3,7 @@
 #SBATCH --account=def-amirhk_gpu
 #SBATCH --gres=gpu:h100:2
 #SBATCH -c 16
-#SBATCH --mem=56G
+#SBATCH --mem=100G
 #SBATCH -t 7-00:00:00
 #SBATCH --requeue
 #SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
