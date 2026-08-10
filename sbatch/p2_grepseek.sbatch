@@ -29,6 +29,7 @@ waitp "$PORT" 3600
   --model "$GREPSEEK_MODEL" --tokenizer "$GREPSEEK_MODEL" \
   --base_url "http://127.0.0.1:$PORT/v1" \
   --max_assistant_turns 6 --max_tokens_per_turn 0 --tool_max_tokens 2048 \
+  --cache_dir "$HF_HUB_CACHE" \
   --temperature 0.6 --top_p 1.0 --parallel 16 \
   --input "$DS_RAW" --corpus_dir "$CORPUS_DIR" \
   --out_dir "$RAW"
