@@ -201,6 +201,35 @@ waitp_pid() {  # waitp_pid <port> <pid> [timeout] -- like waitp but for a given 
   echo "[vllm] :$port up after ${t}s"
 }
 
+pi_smoke_gate() {  # pi_smoke_gate <dataset.jsonl> <smoke_out_dir> <harness cmd...>
+  # One question, checked before committing to 1500. Every Pi failure so far --
+  # wrong provider location, reasoning_effort ignored, poisoned resume state --
+  # produced blank answers that only surfaced 20-30 minutes into a full run, and
+  # each time the fix looked obvious in hindsight. One question costs a minute.
+  local ds=$1 out=$2; shift 2
+  local one=$TMPDIR/smoke_one.jsonl
+  head -1 "$ds" > "$one"
+  rm -rf "$out"; mkdir -p "$out"
+  echo "[smoke] one question through the real harness before the full run"
+  "$@" --dataset "$one" --output-root "$out" >"$REPO/logs/pi_smoke_${SLURM_JOB_ID:-0}.log" 2>&1 || {
+    echo "FATAL: smoke question failed; see logs/pi_smoke_${SLURM_JOB_ID:-0}.log"
+    tail -20 "$REPO/logs/pi_smoke_${SLURM_JOB_ID:-0}.log" 2>/dev/null
+    return 1; }
+  local res=$out/results.jsonl
+  [ -f "$res" ] || { echo "FATAL: smoke produced no results.jsonl"; return 1; }
+  if grep -q '"final_text": ""' "$res"; then
+    echo "FATAL: the smoke question came back with an EMPTY final_text."
+    echo "       The agent runs but answers nothing -- exactly the state that"
+    echo "       produced 1500 blank rows on 7340/7341/7351/7354/7355."
+    echo "       Inspect: $out/*/result.json and $out/*/stderr.txt"
+    grep -oE '"(turn_count|request_count|run_error)": *("[^"]{0,120}"|[0-9]+|null)' "$res" | head -3
+    return 1
+  fi
+  echo "[smoke] OK -- non-empty answer:"
+  grep -oE '"final_text": *"[^"]{0,120}"' "$res" | head -1
+  rm -rf "$out"
+}
+
 assert_raw_not_poisoned() {  # assert_raw_not_poisoned <raw_dir>
   # The Pi launcher resumes: a per-question directory whose result.json says
   # run_status "completed" is skipped, returncode 2, "Cannot resume completed
@@ -263,6 +292,9 @@ pi_vllm_provider() {  # pi_vllm_provider <port> [model] -- point the Pi agent at
       "baseUrl": "http://127.0.0.1:$port/v1",
       "apiKey": "EMPTY",
       "api": "openai-completions",
+      "compat": {
+        "thinkingFormat": "qwen-chat-template"
+      },
       "models": [
         {
           "id": "$model",
@@ -316,7 +348,13 @@ PIEOF
       return 1
     fi
   else
-    echo "[pi] WARN: --list-models did not run; cannot confirm the provider loaded"
+    # Not a warning. This assertion exists precisely because a misconfigured
+    # provider is invisible until 1500 blank rows later; letting it through
+    # "because the check itself failed" wasted 27 minutes on job 7355.
+    echo "FATAL: could not run --list-models in $repo, so the provider config is"
+    echo "       unverified. Refusing to start rather than risk another blank run."
+    echo "       output: $(printf '%s' "$listed" | head -c 300)"
+    return 1
   fi
 }
 
