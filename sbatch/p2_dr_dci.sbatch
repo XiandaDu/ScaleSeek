@@ -14,17 +14,28 @@
 # encoder exactly, so the manifest-pinned project E5 index backs the official
 # /retrieve + /document service (recorded in the run record).
 source /home/a32du/ScaleSeek/sbatch/common.sh
-trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
+# Rorqual: root_flat pull materialization can write up to ~0.9M workspace files
+# for 1,500 questions — too close to the 1M-file /scratch quota. The harness
+# therefore runs with a NODE-LOCAL out-root; result files sync to /scratch every
+# 30 min and the full raw tree (incl. workspaces) is archived at the end, which
+# also preserves the official pull artifacts TASK.md requires.
+RAW=$REPO/$RESULTS_DIR/dr_dci_raw          # scratch-side synced copy
+RAW_LOCAL=$TMPDIR/dr_dci_raw               # node-local live out-root
+sync_raw() {
+  mkdir -p "$RAW"
+  rsync -a --include='*/' --include='*.json' --include='*.jsonl' --exclude='*' \
+    "$RAW_LOCAL/" "$RAW/" 2>/dev/null || true
+}
+trap 'code=$?; stop_vllm; sync_raw; cleanup_tmpdir; advance_lane; exit $code' EXIT
 export PATH=/scratch/a32du/tools/node/bin:$PATH
 PORT=$((10000 + SLURM_JOB_ID % 20000))
 PULL_PORT=$((PORT + 1))
-# ABSOLUTE. run_official_baseline.py launches the harness with
+# out-root stays ABSOLUTE: run_official_baseline.py launches the harness with
 # cwd=<official checkout> (subprocess.run(..., cwd=repo)), so a relative
 # --out_dir/--output-root lands inside the OFFICIAL repo, not ours, and the
 # post-run `find $RAW` then reports 'no output jsonl' after the whole eval
 # already ran. That silently cost grepseek 2d17h of GPU on 2026-08-02.
-RAW=$REPO/$RESULTS_DIR/dr_dci_raw
-mkdir -p "$RESULTS_DIR" "$RAW"
+mkdir -p "$RESULTS_DIR" "$RAW" "$RAW_LOCAL"
 
 echo "== official wiki18 E5 retriever service (project E5 index) =="
 SVC_LOG=$REPO/logs/dr_dci_retriever_$SLURM_JOB_ID.log
@@ -78,6 +89,7 @@ mkdir -p "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty"
 # any further --limit/-n/--offset and pins the frozen model/revision -- so the
 # two together mean "run the entire capped file, unsliced". compute_metrics then
 # verifies the produced id set against the subset manifest (--expect-ids).
+( while sleep 1800; do sync_raw; done ) & SYNC_PID=$!
 "$PY" scripts/run_official_baseline.py dr_dci --repo-root "$OFFICIAL_ROOT" \
   --full-eval --model-revision "$GEN_REV" \
   --record $RESULTS_DIR/${DS}_dr_dci.run.json -- \
@@ -95,8 +107,14 @@ mkdir -p "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty"
   --pi-thinking-level high --node-max-old-space-size-mb 8192 \
   --dataset "$DATA/dcilite_datasets/${DS}_cap1500.jsonl" \
   --corpus-dir "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty" \
-  --output-root "$RAW"
+  --output-root "$RAW_LOCAL"
 stop_vllm
+kill "$SYNC_PID" 2>/dev/null || true
+sync_raw
+echo "== archive full raw tree (incl. workspaces) to scratch =="
+command -v zstd >/dev/null 2>&1 || module load zstd 2>/dev/null || true
+tar -C "$TMPDIR" -cf "$RAW/dr_dci_raw_full.tar.zst.partial" -I 'zstd -T8 -3' dr_dci_raw \
+  && mv "$RAW/dr_dci_raw_full.tar.zst.partial" "$RAW/dr_dci_raw_full.tar.zst" || true
 
 echo "== normalize + metrics =="
 # Pick the aggregate file explicitly, and never pipe find into head.

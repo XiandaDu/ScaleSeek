@@ -36,7 +36,7 @@ else
     # not the full split, so also report rows actually on disk -- otherwise a
     # healthy resumed cell reads as stuck.
     last=$(grep -oE "\[ *[0-9]+/[0-9]+\]" "$c" 2>/dev/null | tail -1)
-    out=$(grep -oE "results/phase2/popqa_[a-z0-9_]+\.jsonl" "$c" 2>/dev/null | head -1)
+    out=$(grep -oE "results/phase[0-9]/[a-z0-9]+_[a-z0-9_]+\.jsonl" "$c" 2>/dev/null | head -1)
     rows=""; [ -n "$out" ] && [ -f "$out" ] && rows="盘上$(wc -l < "$out")行"
     gate=$(grep -oE "GATE-(PASS|FAIL)" "$c" 2>/dev/null | tail -1)
     done_=$(grep -c "ALL_DONE" "$c" 2>/dev/null)
@@ -47,8 +47,8 @@ else
 fi
 shopt -u nullglob
 
-echo; echo "== 已完成的 phase-2 指标 =="
-ls results/phase2/*.metrics.json 2>/dev/null | while read -r m; do
+echo; echo "== 已完成的指标（全部 phase）=="
+ls results/phase*/*.metrics.json 2>/dev/null | while read -r m; do
   python3 - "$m" <<'EOF'
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -61,7 +61,7 @@ print(f"  {name:34s} n={d.get('n')}  EM={a.get('em', 0):.4f}{band}  "
       f"conc={l.get('concurrency')}  wall={l.get('wall_s_per_example', '?')}s/ex")
 EOF
 done
-[ -z "$(ls results/phase2/*.metrics.json 2>/dev/null)" ] && echo "  (还没有完成的 run)"
+[ -z "$(ls results/phase*/*.metrics.json 2>/dev/null)" ] && echo "  (还没有完成的 run)"
 
 echo; echo "== 今天结束的作业 =="
 sacct -X -S today -u "$USER" -o JobID%9,JobName%24,State%12,Elapsed%11,ExitCode 2>/dev/null | tail -15
