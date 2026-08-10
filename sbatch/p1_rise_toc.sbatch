@@ -41,7 +41,9 @@ if [ ! -d "$ART" ]; then
 fi
 cp -n "$META/passage_article_mapping.jsonl" "$ART/" 2>/dev/null || true
 
-VLLM_MAX_LEN=49152 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B
+# 131072: probe run 18753874 lost 8/500 articles to 49152-token overflow; the
+# official call still requests max_tokens=32768, so prompts up to ~98k now fit.
+VLLM_MAX_LEN=131072 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B
 waitp "$PORT" 3600
 export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"
 export OPENAI_API_KEY=dummy
@@ -76,11 +78,27 @@ if [ ! -f "$CAND" ]; then
       exit 4; }
 fi
 
-echo "== probe: 500 candidate articles for rate + anchor validation =="
-"$PY" scripts/build_wiki_toc.py --articles-dir "$ART" --out-dir "$TOC_DIR" \
-  --candidates "$CAND" --workers 96 --limit 500
-echo "== full candidate pass (LLM TOC; no passthrough here — see p2_rise) =="
-"$PY" scripts/build_wiki_toc.py --articles-dir "$ART" --out-dir "$TOC_DIR" \
-  --candidates "$CAND" --workers 96 --limit "$(wc -l < "$CAND")"
+# Throughput reality (probe 18753874): ~0.07 docs/s per 2-GPU server, so the
+# 98,582-candidate set is ~16 days serially. The candidate list is therefore
+# sharded across CAND_NSHARDS independent jobs (CAND_SHARD=0..N-1); per-article
+# output files + resume-skip make concurrent shards safe. Workers 96 -> 32:
+# the other 8/500 probe failures were client timeouts from queue wait.
+# --limit is load-bearing: it keeps build_wiki_toc in probe mode, which never
+# emits the 3.2M empty-TOC passthrough files (those stay node-local in p2_rise).
+WORKERS=${TOC_WORKERS:-32}
+if [ -n "${CAND_SHARD:-}" ] && [ -n "${CAND_NSHARDS:-}" ]; then
+  SLICE=$TMPDIR/cand_slice_${CAND_SHARD}.txt
+  awk -v n="$CAND_NSHARDS" -v s="$CAND_SHARD" 'NR % n == s' "$CAND" > "$SLICE"
+  echo "== shard $CAND_SHARD/$CAND_NSHARDS: $(wc -l < "$SLICE") candidate articles =="
+  "$PY" scripts/build_wiki_toc.py --articles-dir "$ART" --out-dir "$TOC_DIR" \
+    --candidates "$SLICE" --workers "$WORKERS" --limit "$(wc -l < "$SLICE")"
+else
+  echo "== probe: 500 candidate articles for rate + anchor validation =="
+  "$PY" scripts/build_wiki_toc.py --articles-dir "$ART" --out-dir "$TOC_DIR" \
+    --candidates "$CAND" --workers "$WORKERS" --limit 500
+  echo "== full candidate pass (LLM TOC; no passthrough here — see p2_rise) =="
+  "$PY" scripts/build_wiki_toc.py --articles-dir "$ART" --out-dir "$TOC_DIR" \
+    --candidates "$CAND" --workers "$WORKERS" --limit "$(wc -l < "$CAND")"
+fi
 stop_vllm
 echo "ALL_P1_RISE_TOC_DONE"
