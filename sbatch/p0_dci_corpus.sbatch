@@ -37,7 +37,7 @@ for i in 0 1 2 3; do
 done
 FAIL=0
 for pid in "${PIDS[@]}"; do wait "$pid" || FAIL=1; done
-tail -2 "$REPO"/logs/dci_expand_*.log
+tail -n 2 "$REPO"/logs/dci_expand_*.log
 [ "$FAIL" = 0 ] || { echo "FATAL: at least one expand range failed"; exit 1; }
 
 echo "== archive to /scratch (single file, quota-safe) =="
