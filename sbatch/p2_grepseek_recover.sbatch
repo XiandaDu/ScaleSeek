@@ -9,12 +9,12 @@
 # Recover the completed-but-misfiled GrepSeek run (job 7291, 2026-08-02).
 #
 # 7291 evaluated all 14,267 questions over 2d17h and then died with "no grepseek
-# output jsonl under results/phase2/grepseek_raw". The eval had in fact
+# output jsonl under $RESULTS_DIR/grepseek_raw". The eval had in fact
 # succeeded: run_official_baseline.py launches the harness with cwd=<official
 # checkout>, so the relative --out_dir resolved inside the official repo. The
 # predictions are here, complete and with 14,267 unique ids:
 #
-#   $OFFICIAL_ROOT/grepseek/results/phase2/grepseek_raw/test/predictions.jsonl
+#   $OFFICIAL_ROOT/grepseek/$RESULTS_DIR/grepseek_raw/test/predictions.jsonl
 #
 # The path bug itself is fixed in p2_grepseek.sbatch (RAW is now absolute), so
 # this script exists only to rescue the already-computed 7291 output. It is CPU
@@ -29,7 +29,7 @@ source /home/a32du/ScaleSeek/sbatch/common.sh
 # never gets submitted.
 trap 'code=$?; cleanup_tmpdir; advance_lane; exit $code' EXIT
 
-SRC=$OFFICIAL_ROOT/grepseek/results/phase2/grepseek_raw/test/predictions.jsonl
+SRC=$OFFICIAL_ROOT/grepseek/$RESULTS_DIR/grepseek_raw/test/predictions.jsonl
 OUT=$REPO/$RESULTS_DIR/${DS}_grepseek.jsonl
 
 [ -f "$SRC" ] || { echo "FATAL: recovered predictions not found at $SRC"; exit 4; }
@@ -53,7 +53,7 @@ echo "== metrics =="
 
 # Park the raw output where p2_grepseek would have put it, so a later re-run
 # finds it and skips instead of burning another 2d17h.
-mkdir -p "$REPO/results/phase2/grepseek_raw/test"
-cp -n "$SRC" "$REPO/results/phase2/grepseek_raw/test/predictions.jsonl" || true
+mkdir -p "$REPO/$RESULTS_DIR/grepseek_raw/test"
+cp -n "$SRC" "$REPO/$RESULTS_DIR/grepseek_raw/test/predictions.jsonl" || true
 
 echo "ALL_DONE ${DS}_grepseek (recovered from 7291)"

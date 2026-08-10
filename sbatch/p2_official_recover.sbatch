@@ -23,7 +23,7 @@ source /home/a32du/ScaleSeek/sbatch/common.sh
 trap 'code=$?; cleanup_tmpdir; advance_lane; exit $code' EXIT
 
 METHOD=${METHOD:?export METHOD=dci|dr_dci|rise|grepseek}
-RAW=$REPO/results/phase2/${METHOD}_raw
+RAW=$REPO/$RESULTS_DIR/${METHOD}_raw
 OUT=$REPO/$RESULTS_DIR/${DS}_${METHOD}.jsonl
 RUNREC=$REPO/$RESULTS_DIR/${DS}_${METHOD}.run.json
 CAP=$DATA/dcilite_datasets/${DS}_cap1500.jsonl
