@@ -23,6 +23,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export DS=${DS:-triviaqa}
 export PHASE=${PHASE:-phase3}
+DATA_ROOT=/scratch/a32du/data
 mkdir -p logs "results/$PHASE"
 # advance_lane must find empty queues (lane machinery retired on Rorqual).
 : > sbatch/queue_laneA.txt; : > sbatch/queue_laneB.txt; : > sbatch/queue_laneD.txt
@@ -34,23 +35,55 @@ for r in dci_agent_lite dr_dci rise agentir grepseek; do
 done
 
 EXP=ALL,DS=$DS,PHASE=$PHASE
-jid() { sbatch "$@" | grep -oP 'Submitted batch job \K\d+'; }
+# Idempotent by JOB NAME: if a job of this name is already pending/running,
+# reuse its id for downstream dependencies instead of double-submitting (a
+# second copy of a resumable index build would fight the first one's
+# checkpoints). Failed/cancelled jobs are not in PD/R, so re-running this
+# script resubmits exactly the broken part of the DAG.
+sub() {  # sub <job-name> <sbatch args...>
+  local name=$1; shift
+  local existing
+  existing=$(squeue -h -u "$USER" -n "$name" -t PD,R -o %i 2>/dev/null | head -1)
+  if [ -n "$existing" ]; then
+    echo "reuse   $name -> $existing" >&2
+    echo "$existing"; return 0
+  fi
+  local id
+  id=$(sbatch -J "$name" "$@" | grep -oP 'Submitted batch job \K\d+')
+  echo "submit  $name -> $id" >&2
+  echo "$id"
+}
+
+# Stages whose outputs already exist need no job at all; represent them with
+# dependency-free "done" and prune afterok terms accordingly.
+dep() {  # dep <id-or-done>... -> "--dependency=afterok:..." or nothing
+  local ids=""
+  for x in "$@"; do [ "$x" != done ] && ids="$ids:$x"; done
+  [ -n "$ids" ] && echo "--dependency=afterok:${ids#:}"
+}
 
 echo "== wave 0: corpus =="
-UNZIP=$(jid --export="$EXP" sbatch/p0_corpus_unzip.sbatch)
+if [ -f "$DATA_ROOT/wiki_18_corpus/corpus_manifest.json" ]; then UNZIP=done
+else UNZIP=$(sub p0_corpus_unzip --export="$EXP" sbatch/p0_corpus_unzip.sbatch); fi
 
 echo "== wave 1: indexes + corpora (all after corpus) =="
-BM25=$(jid   --export="$EXP" --dependency=afterok:$UNZIP sbatch/p0_bm25_index.sbatch)
-E5=$(jid     --export="$EXP" --dependency=afterok:$UNZIP sbatch/p0_e5_index.sbatch)
-Q3E=$(jid    --export="$EXP" --dependency=afterok:$UNZIP sbatch/p1_qwen3emb_index.sbatch)
-AIRENC=$(jid --export="$EXP" --dependency=afterok:$UNZIP sbatch/p2_agentir_encode.sbatch)
-DCICORP=$(jid --export="$EXP" --dependency=afterok:$UNZIP sbatch/p0_dci_corpus.sbatch)
-RISEART=$(jid --export="$EXP" --dependency=afterok:$UNZIP sbatch/p0_rise_articles.sbatch)
+if [ -f "$DATA_ROOT/bm25_index/index_manifest.json" ]; then BM25=done
+else BM25=$(sub p0_bm25_index --export="$EXP" $(dep $UNZIP) sbatch/p0_bm25_index.sbatch); fi
+if [ -f "$DATA_ROOT/e5_index/index_manifest.json" ]; then E5=done
+else E5=$(sub p0_e5_index --export="$EXP" $(dep $UNZIP) sbatch/p0_e5_index.sbatch); fi
+if [ -f "$DATA_ROOT/qwen3_embedding_4b_index/index_manifest.json" ]; then Q3E=done
+else Q3E=$(sub p1_qwen3emb_index --export="$EXP" $(dep $UNZIP) sbatch/p1_qwen3emb_index.sbatch); fi
+if ls "$DATA_ROOT"/agentir_official_index/corpus.*.pkl >/dev/null 2>&1; then AIRENC=done
+else AIRENC=$(sub p2_agentir_encode --export="$EXP" $(dep $UNZIP) sbatch/p2_agentir_encode.sbatch); fi
+if [ -f "$DATA_ROOT/dci_wiki_corpus.tar.zst" ]; then DCICORP=done
+else DCICORP=$(sub p0_dci_corpus --export="$EXP" $(dep $UNZIP) sbatch/p0_dci_corpus.sbatch); fi
+if [ -f "$DATA_ROOT/rise_wiki_articles.tar.zst" ]; then RISEART=done
+else RISEART=$(sub p0_rise_articles --export="$EXP" $(dep $UNZIP) sbatch/p0_rise_articles.sbatch); fi
 
 echo "== wave 2: dataset assets + acceptance gate =="
-ASSETS=$(jid --export="$EXP" --dependency=afterok:$BM25:$E5 sbatch/p0_assets.sbatch)
-ACCEPT=$(jid --export="$EXP" --dependency=afterok:$ASSETS sbatch/p1_accept.sbatch)
-RISETOC=$(jid --export="$EXP" --dependency=afterok:$RISEART:$ASSETS sbatch/p1_rise_toc.sbatch)
+ASSETS=$(sub p0_assets --export="$EXP" $(dep $BM25 $E5) sbatch/p0_assets.sbatch)
+ACCEPT=$(sub p1_accept --export="$EXP" $(dep $ASSETS) sbatch/p1_accept.sbatch)
+RISETOC=$(sub p1_rise_toc --export="$EXP" $(dep $RISEART $ASSETS) sbatch/p1_rise_toc.sbatch)
 
 echo "== wave 3: the $DS matrix (one small backfill-friendly job per cell) =="
 # Rorqual queue reality: a whole-node 4-GPU 4-day job waits ~2 weeks in
@@ -60,10 +93,11 @@ echo "== wave 3: the $DS matrix (one small backfill-friendly job per cell) =="
 cell() {  # cell <name> <agent> <ret> [sr1] [ngpu]
   local name=$1 agent=$2 ret=$3 sr1=${4:-} ngpu=${5:-1}
   local spec="$name:$agent:$ret"; [ -n "$sr1" ] && spec="$spec:$sr1"
-  local dep=afterok:$ACCEPT
-  [ "$ret" = qwen3_emb_4b ] && dep=$dep:$Q3E
-  jid -J "p3_$name" --gres=gpu:h100:$ngpu -c $((12 * ngpu)) --mem=$((100 * ngpu))G \
-    -t 48:00:00 --export="$EXP,CELLS=$spec" --dependency=$dep sbatch/p2_pack.sbatch
+  local deps="$ACCEPT"
+  [ "$ret" = qwen3_emb_4b ] && deps="$deps $Q3E"
+  # shellcheck disable=SC2046
+  sub "p3_$name" --gres=gpu:h100:$ngpu -c $((12 * ngpu)) --mem=$((100 * ngpu))G \
+    -t 48:00:00 --export="$EXP,CELLS=$spec" $(dep $deps) sbatch/p2_pack.sbatch >/dev/null
 }
 cell direct            direct    none
 cell rag_bm25          rag       bm25
@@ -79,10 +113,10 @@ cell rag_qwen3emb           rag       qwen3_emb_4b "" 2
 cell search_o1_qwen3emb     search_o1 qwen3_emb_4b "" 2
 cell search_r1_7b_qwen3emb  search_r1 qwen3_emb_4b 7b 2
 cell search_r1_14b_qwen3emb search_r1 qwen3_emb_4b 14b 2
-jid -J p3_grepseek --export="$EXP" --dependency=afterok:$ACCEPT sbatch/p2_grepseek.sbatch
-jid -J p3_dr_dci  --export="$EXP" --dependency=afterok:$ACCEPT sbatch/p2_dr_dci.sbatch
-jid -J p3_agentir --export="$EXP" --dependency=afterok:$ACCEPT:$AIRENC sbatch/p2_agentir.sbatch
-jid -J p3_dci     --export="$EXP" --dependency=afterok:$ACCEPT:$DCICORP sbatch/p2_dci.sbatch
-jid -J p3_rise    --export="$EXP" --dependency=afterok:$ACCEPT:$RISETOC sbatch/p2_rise.sbatch
+sub p3_grepseek --export="$EXP" $(dep $ACCEPT) sbatch/p2_grepseek.sbatch >/dev/null
+sub p3_dr_dci   --export="$EXP" $(dep $ACCEPT) sbatch/p2_dr_dci.sbatch >/dev/null
+sub p3_agentir  --export="$EXP" $(dep $ACCEPT $AIRENC) sbatch/p2_agentir.sbatch >/dev/null
+sub p3_dci      --export="$EXP" $(dep $ACCEPT $DCICORP) sbatch/p2_dci.sbatch >/dev/null
+sub p3_rise     --export="$EXP" $(dep $ACCEPT $RISETOC) sbatch/p2_rise.sbatch >/dev/null
 
 squeue -u "$USER" -o "%.9i %.22j %.9T %.12r %.20E"
