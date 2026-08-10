@@ -22,6 +22,9 @@ if [ -f "$HOME/scaleseek_env/bin/activate" ]; then
 else
   echo "warn: ~/scaleseek_env 不存在；先在登录节点运行 build_venv（见分支说明）"
 fi
+# uv 是 standalone 二进制（pip 源码编译会被登录节点 OOM 杀掉）；官方 harness 的
+# `uv run` 依赖它。
+export PATH=$HOME/.local/bin:$PATH
 
 # --- 核心路径 ---
 export REPO=$HOME/ScaleSeek

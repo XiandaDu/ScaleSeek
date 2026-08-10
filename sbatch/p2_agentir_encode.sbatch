@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:h100:4
 #SBATCH -c 32
 #SBATCH --mem=200G
-#SBATCH -t 7-00:00:00
+#SBATCH -t 48:00:00
 #SBATCH --requeue
 #SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
 # AgentIR prerequisite: encode the full Wiki-18 corpus with the frozen

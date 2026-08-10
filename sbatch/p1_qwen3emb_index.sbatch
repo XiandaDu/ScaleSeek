@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH -c 12
 #SBATCH --mem=100G
-#SBATCH -t 7-00:00:00
+#SBATCH -t 48:00:00
 #SBATCH --requeue
 #SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
 # Phase-1 acceptance: build the frozen Qwen3-Embedding-4B full-corpus index on

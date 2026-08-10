@@ -13,7 +13,7 @@
 #   3. scripts/rorqual_login_setup.sh completed (official repos, uv envs, node)
 #
 # DAG:
-#   p0_corpus_unzip ─┬─ p0_bm25_index ──┬─ p0_assets ── p1_accept ─┬─ packs A-E
+#   p0_corpus_unzip ─┬─ p0_bm25_index ──┬─ p0_assets ── p1_accept ─┬─ 14 per-cell jobs
 #                    ├─ p0_e5_index ────┘                          ├─ p2_grepseek
 #                    ├─ p1_qwen3emb_index ──────────── (packs D,E) ├─ p2_dr_dci
 #                    ├─ p2_agentir_encode ───────────────────────── p2_agentir
@@ -52,18 +52,33 @@ ASSETS=$(jid --export="$EXP" --dependency=afterok:$BM25:$E5 sbatch/p0_assets.sba
 ACCEPT=$(jid --export="$EXP" --dependency=afterok:$ASSETS sbatch/p1_accept.sbatch)
 RISETOC=$(jid --export="$EXP" --dependency=afterok:$RISEART:$ASSETS sbatch/p1_rise_toc.sbatch)
 
-echo "== wave 3: the $DS matrix =="
-jid -J p3_packA --export="$EXP,CELLS=direct:direct:none+rag_bm25:rag:bm25+rag_e5:rag:e5+scaleseek:scaleseek:bm25" \
-  --dependency=afterok:$ACCEPT sbatch/p2_pack.sbatch
-jid -J p3_packB --export="$EXP,CELLS=search_o1_bm25:search_o1:bm25+search_o1_e5:search_o1:e5+search_r1_7b_bm25:search_r1:bm25:7b+search_r1_7b_e5:search_r1:e5:7b" \
-  --dependency=afterok:$ACCEPT sbatch/p2_pack.sbatch
-jid -J p3_packC --gres=gpu:h100:2 -c 24 --mem=100G \
-  --export="$EXP,CELLS=search_r1_14b_bm25:search_r1:bm25:14b+search_r1_14b_e5:search_r1:e5:14b" \
-  --dependency=afterok:$ACCEPT sbatch/p2_pack.sbatch
-jid -J p3_packD --export="$EXP,CELLS=rag_qwen3emb:rag:qwen3_emb_4b+search_o1_qwen3emb:search_o1:qwen3_emb_4b" \
-  --dependency=afterok:$ACCEPT:$Q3E sbatch/p2_pack.sbatch
-jid -J p3_packE --export="$EXP,CELLS=search_r1_7b_qwen3emb:search_r1:qwen3_emb_4b:7b+search_r1_14b_qwen3emb:search_r1:qwen3_emb_4b:14b" \
-  --dependency=afterok:$ACCEPT:$Q3E sbatch/p2_pack.sbatch
+echo "== wave 3: the $DS matrix (one small backfill-friendly job per cell) =="
+# Rorqual queue reality: a whole-node 4-GPU 4-day job waits ~2 weeks in
+# gpubase_bynode_b5, while 1-2 GPU 48h jobs backfill in hours-days. There is no
+# job-count cap here, so each cell gets its own job; p2_pack still provides the
+# GPU planning, skip-if-finished and requeue logic for a CELLS list of one.
+cell() {  # cell <name> <agent> <ret> [sr1] [ngpu]
+  local name=$1 agent=$2 ret=$3 sr1=${4:-} ngpu=${5:-1}
+  local spec="$name:$agent:$ret"; [ -n "$sr1" ] && spec="$spec:$sr1"
+  local dep=afterok:$ACCEPT
+  [ "$ret" = qwen3_emb_4b ] && dep=$dep:$Q3E
+  jid -J "p3_$name" --gres=gpu:h100:$ngpu -c $((12 * ngpu)) --mem=$((100 * ngpu))G \
+    -t 48:00:00 --export="$EXP,CELLS=$spec" --dependency=$dep sbatch/p2_pack.sbatch
+}
+cell direct            direct    none
+cell rag_bm25          rag       bm25
+cell rag_e5            rag       e5
+cell scaleseek         scaleseek bm25
+cell search_o1_bm25    search_o1 bm25
+cell search_o1_e5      search_o1 e5
+cell search_r1_7b_bm25 search_r1 bm25 7b
+cell search_r1_7b_e5   search_r1 e5   7b
+cell search_r1_14b_bm25 search_r1 bm25 14b
+cell search_r1_14b_e5   search_r1 e5   14b
+cell rag_qwen3emb           rag       qwen3_emb_4b "" 2
+cell search_o1_qwen3emb     search_o1 qwen3_emb_4b "" 2
+cell search_r1_7b_qwen3emb  search_r1 qwen3_emb_4b 7b 2
+cell search_r1_14b_qwen3emb search_r1 qwen3_emb_4b 14b 2
 jid -J p3_grepseek --export="$EXP" --dependency=afterok:$ACCEPT sbatch/p2_grepseek.sbatch
 jid -J p3_dr_dci  --export="$EXP" --dependency=afterok:$ACCEPT sbatch/p2_dr_dci.sbatch
 jid -J p3_agentir --export="$EXP" --dependency=afterok:$ACCEPT:$AIRENC sbatch/p2_agentir.sbatch
