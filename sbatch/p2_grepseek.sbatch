@@ -38,6 +38,20 @@ stop_vllm
 echo "== normalize + metrics =="
 INPUT=$(find "$RAW" -name '*.jsonl' -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
 [ -n "$INPUT" ] || { echo "FATAL: no grepseek output jsonl under $RAW"; exit 4; }
+# The harness appends from --parallel 16 workers; on Lustre the final lines can
+# still be in flight when the process exits (job 18753889 died in normalize on
+# a torn line that was intact a minute later). Wait until the file is fully
+# valid JSON before normalizing, up to 5 minutes.
+for attempt in 1 2 3 4 5; do
+  if "$PY" - "$INPUT" <<'VEOF'
+import json, sys
+[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+VEOF
+  then break; fi
+  echo "[grepseek] output not yet fully flushed (attempt $attempt); waiting 60s"
+  sleep 60
+  [ "$attempt" = 5 ] && { echo "FATAL: $INPUT still torn after 5 minutes"; exit 4; }
+done
 "$PY" scripts/normalize_official_results.py --method grepseek \
   --input "$INPUT" \
   --run-record $RESULTS_DIR/${DS}_grepseek.run.json \
