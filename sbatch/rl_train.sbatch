@@ -8,7 +8,8 @@
 #
 # 覆盖项：
 #   SCALESEEK_MODEL_PATH   SFT checkpoint    [未设则从 base 冷启动]
-#   RL_GPUS                GPU 数            [8]
+#   RL_GPUS                GPU 数            [4]
+#   RL_BATCH               每步题数          [64]（× rollout.n=5 = 320 条轨迹）
 #   SCALESEEK_TRAIN_FILES  RL 训练集         [$RL_DATA_DIR/train.jsonl]
 #   SCALESEEK_VAL_FILES    RL 验证集         [$RL_DATA_DIR/dev.jsonl]
 #   ULYSSES_SP             序列并行度，须整除 NPROC  [2]
@@ -16,19 +17,21 @@
 #
 # 产物：$RL_CKPT_DIR/<jobid>/
 #
-# RL 比 SFT 重得多：GRPO 要同时驻留 actor(FSDP) + reference + vLLM rollout 引擎，
-# 9B student 三者相加远超 4 张卡，因此默认整节点 8 卡 + --mem=0（整机内存）。
-# ULYSSES_SP 必须整除 GPU 数。
+# 4 卡：这就是 grpo_trainer.yaml 的目标拓扑（fsdp_size: 4，三重 offload 全开，
+# 注释写明按 4×A5000-24GB 调过），H100 80GB 是当初目标显存的 3.3 倍，余量充足。
+# 先前的 8 卡整节点是我的偏离，代价是排队 22 小时（68 个 8 卡作业竞争、零空闲
+# 整节点）；4 卡能从 mix 节点回填，调度容易得多。
+# ULYSSES_SP 与 RL_ROLLOUT_TP 都必须整除 GPU 数（4 % 2 == 0）。
 #SBATCH --account=def-amirhk_gpu
 #SBATCH --job-name=ss_rl
-#SBATCH --gres=gpu:h100:8
-#SBATCH --cpus-per-task=112
-#SBATCH --mem=0
+#SBATCH --gres=gpu:h100:4
+#SBATCH --cpus-per-task=56
+#SBATCH --mem=1000G
 #SBATCH --time=24:00:00
 #SBATCH --output=/home/a32du/ScaleSeek/logs/%x-%j.out
 
 source /home/a32du/ScaleSeek/sbatch/common.sh
-export NPROC="${RL_GPUS:-8}"
+export NPROC="${RL_GPUS:-4}"
 require_full_gpus "$NPROC"
 trap cleanup_tmpdir EXIT
 
@@ -126,6 +129,7 @@ PYSPY="$SCALESEEK_VENV/bin/py-spy"
 bash scripts/run_rl.sh \
     actor_rollout_ref.rollout.tensor_model_parallel_size="$RL_ROLLOUT_TP" \
     data.dataloader_num_workers="$RL_WORKERS" \
+    data.train_batch_size="${RL_BATCH:-64}" \
     trainer.experiment_name="nibi_${SLURM_JOB_ID}" \
     "$@" &
 MAIN_PID=$!
