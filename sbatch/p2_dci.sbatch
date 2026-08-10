@@ -36,7 +36,7 @@ waitp "$PORT" 3600
 
 # The Pi agent ignores OPENAI_BASE_URL; it resolves providers from
 # $PI_CODING_AGENT_DIR/models.json. pi_vllm_provider writes that file.
-pi_vllm_provider "$PORT" Qwen/Qwen3.5-9B
+pi_vllm_provider "$PORT" Qwen/Qwen3.5-9B "$OFFICIAL_ROOT/dci_agent_lite"
 export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"   # for the Python-side tools
 export OPENAI_API_KEY=dummy
 

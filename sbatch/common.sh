@@ -235,8 +235,14 @@ pi_vllm_provider() {  # pi_vllm_provider <port> [model] -- point the Pi agent at
   # vLLM provider"): declare a custom OpenAI-compatible provider in
   # $PI_CODING_AGENT_DIR/models.json and pass `--provider vllm`. The port is
   # per-job, so the file is generated per job rather than kept in ~/.pi.
-  local port=$1 model=${2:-Qwen/Qwen3.5-9B}
-  export PI_CODING_AGENT_DIR=$TMPDIR/pi_agent
+  # The agent dir must be the checkout's own pi-mono/.pi/agent -- that is where
+  # Pi looks, and where the July configuration lived alongside auth.json. Writing
+  # models.json anywhere else (e.g. under $TMPDIR) leaves the provider undefined
+  # and every question dies with `Unknown provider "vllm"`, turn_count 0,
+  # returncode 1 -- 167/167 blank rows on job 7354 before this was spotted.
+  # .pi/ is untracked in the checkout, so this does not disturb the commit gate.
+  local port=$1 model=${2:-Qwen/Qwen3.5-9B} repo=${3:-$OFFICIAL_ROOT/dr_dci}
+  export PI_CODING_AGENT_DIR=$repo/pi-mono/.pi/agent
   export VLLM_API_KEY=dummy
   mkdir -p "$PI_CODING_AGENT_DIR"
   # Shape copied from the configuration that actually ran DCI and DR-DCI in July
@@ -293,6 +299,25 @@ PIEOF
       echo "       response: ${probe:0:400}"
       return 1; }
   echo "[pi] tool-calling probe OK"
+
+  # The probe above only proves the ENDPOINT speaks tool-calling. It passed on
+  # jobs 7351 and 7354 while the agent itself was completely broken -- Pi never
+  # loaded the provider at all and every question died with `Unknown provider
+  # "vllm"`. So assert the thing that actually matters: that Pi resolves the
+  # provider from the file we just wrote.
+  local listed
+  if listed=$(cd "$repo" && timeout 120 uv run dci-agent-lite --list-models 2>&1); then
+    if printf '%s' "$listed" | grep -q "vllm"; then
+      echo "[pi] --list-models sees provider 'vllm' -- config is loaded"
+    else
+      echo "FATAL: Pi does not see provider 'vllm' from $PI_CODING_AGENT_DIR."
+      echo "       Every question would die with 'Unknown provider' (turn_count 0)."
+      echo "       --list-models said: $(printf '%s' "$listed" | head -c 300)"
+      return 1
+    fi
+  else
+    echo "[pi] WARN: --list-models did not run; cannot confirm the provider loaded"
+  fi
 }
 
 sane() {  # sane <results.jsonl> -- refuse mostly-api_error or parroted outputs
