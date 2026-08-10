@@ -332,30 +332,12 @@ PIEOF
       return 1; }
   echo "[pi] tool-calling probe OK"
 
-  # The probe above only proves the ENDPOINT speaks tool-calling. It passed on
-  # jobs 7351 and 7354 while the agent itself was completely broken -- Pi never
-  # loaded the provider at all and every question died with `Unknown provider
-  # "vllm"`. So assert the thing that actually matters: that Pi resolves the
-  # provider from the file we just wrote.
-  local listed
-  if listed=$(cd "$repo" && timeout 120 uv run dci-agent-lite --list-models 2>&1); then
-    if printf '%s' "$listed" | grep -q "vllm"; then
-      echo "[pi] --list-models sees provider 'vllm' -- config is loaded"
-    else
-      echo "FATAL: Pi does not see provider 'vllm' from $PI_CODING_AGENT_DIR."
-      echo "       Every question would die with 'Unknown provider' (turn_count 0)."
-      echo "       --list-models said: $(printf '%s' "$listed" | head -c 300)"
-      return 1
-    fi
-  else
-    # Not a warning. This assertion exists precisely because a misconfigured
-    # provider is invisible until 1500 blank rows later; letting it through
-    # "because the check itself failed" wasted 27 minutes on job 7355.
-    echo "FATAL: could not run --list-models in $repo, so the provider config is"
-    echo "       unverified. Refusing to start rather than risk another blank run."
-    echo "       output: $(printf '%s' "$listed" | head -c 300)"
-    return 1
-  fi
+  # Whether Pi actually loaded this provider is proven by pi_smoke_gate, which
+  # runs a real question and requires a real answer. An earlier version asserted
+  # it here via `dci-agent-lite --list-models` -- a flag that does not exist; the
+  # name came from a Pi error message referring to a different CLI, and the check
+  # only ever printed usage and blocked the run. The smoke gate is strictly
+  # stronger, so there is nothing left to add here.
 }
 
 sane() {  # sane <results.jsonl> -- refuse mostly-api_error or parroted outputs
