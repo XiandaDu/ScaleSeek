@@ -14,6 +14,7 @@
 # fixing instead of running with wrong parameters.
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
+assert_gpus_usable || exit 4
 PORT=$((10000 + SLURM_JOB_ID % 20000))
 DOCS=$DATA/rise_wiki_articles_structured
 RISE_INDEX=$DATA/rise_bm25_index_wiki

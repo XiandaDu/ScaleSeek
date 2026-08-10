@@ -15,6 +15,7 @@
 # /retrieve + /document service (recorded in the run record).
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
+assert_gpus_usable || exit 4
 export PATH=/data/rech/mofengra/tools/node/bin:$PATH
 PORT=$((10000 + SLURM_JOB_ID % 20000))
 PULL_PORT=$((PORT + 1))

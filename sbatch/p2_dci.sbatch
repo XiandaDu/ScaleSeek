@@ -13,6 +13,7 @@
 # tool stdout to os.tmpdir(), which on octal30 is tmpfs (RAM).
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
+assert_gpus_usable || exit 4
 export PATH=/data/rech/mofengra/tools/node/bin:$PATH
 PORT=$((10000 + SLURM_JOB_ID % 20000))
 # ABSOLUTE. run_official_baseline.py launches the harness with

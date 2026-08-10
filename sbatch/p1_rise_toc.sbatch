@@ -16,6 +16,7 @@
 # as failures in the audit rather than crashing the run.
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
+assert_gpus_usable || exit 4
 PORT=$((10000 + SLURM_JOB_ID % 20000))
 ART=$DATA/rise_wiki_articles
 OUT=$DATA/rise_wiki_articles_structured

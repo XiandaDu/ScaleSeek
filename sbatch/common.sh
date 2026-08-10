@@ -70,6 +70,27 @@ cleanup_tmpdir() { rm -rf "$TMPDIR" 2>/dev/null || true; }
 # A5000/3090 have no P2P; the flag is a small perf cost elsewhere but never wrong.
 export NCCL_P2P_DISABLE=1
 
+assert_gpus_usable() {  # assert_gpus_usable [expected_count]
+  # Fail fast, and blame the node. octal35 repeatedly reported `idle` with tens
+  # of GB free while every vLLM launch on it died several minutes later with
+  # "CUDA unknown error ... Setting the available devices to be zero" -- it took
+  # down dci/dr_dci twice (7336/7337, then 7347/7348). SLURM does not detect this,
+  # so without a check here the scheduler keeps handing out a node that cannot
+  # run anything, and the failure looks like a vLLM or config problem.
+  local want=${1:-} got
+  got=$(nvidia-smi -L 2>/dev/null | grep -c "^GPU ") || got=0
+  if [ "${got:-0}" -eq 0 ]; then
+    echo "FATAL: no usable GPU on $(hostname) -- nvidia-smi lists none."
+    echo "       This is a node fault, not a config problem. Resubmit with"
+    echo "       --exclude=$(hostname) and report the node."
+    return 1
+  fi
+  if [ -n "$want" ] && [ "$got" -lt "$want" ]; then
+    echo "FATAL: $(hostname) exposes $got GPU(s), need $want"; return 1
+  fi
+  echo "[gpu] $(hostname): $got GPU(s) visible"
+}
+
 VLLM_PID=""
 start_vllm() {  # start_vllm <model> <revision> <port> <tp> <served-name> [extra vllm args...]
   local model=$1 rev=$2 port=$3 tp=$4 name=$5; shift 5

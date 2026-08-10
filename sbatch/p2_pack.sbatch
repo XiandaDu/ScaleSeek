@@ -50,6 +50,7 @@
 # any cell failed, and every cell's verdict is printed in the summary.
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_pack; cleanup_tmpdir; advance_lane; exit $code' EXIT
+assert_gpus_usable || exit 4
 
 CELLS=${CELLS:?export CELLS="name:agent:ret[:sr1]+..."}
 CELLS=${CELLS//+/ }   # accept the queue-safe `+` separator

@@ -14,6 +14,7 @@
 # The output file name comes from the job name: p2_<x> -> results/phase2/popqa_<x>.jsonl
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
+assert_gpus_usable || exit 4
 
 AGENT=${AGENT:?export AGENT=}
 RET=${RET:-none}

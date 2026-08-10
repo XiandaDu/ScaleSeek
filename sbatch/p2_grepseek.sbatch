@@ -11,6 +11,7 @@
 # official GRPO checkpoint, full PopQA, then normalize + offline metrics.
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
+assert_gpus_usable || exit 4
 PORT=$((10000 + SLURM_JOB_ID % 20000))
 # ABSOLUTE. run_official_baseline.py launches the harness with
 # cwd=<official checkout> (subprocess.run(..., cwd=repo)), so a relative
