@@ -23,8 +23,13 @@ def get(row, path: str, default=None):
 
 def load_rows(path: Path) -> list[tuple[str, dict]]:
     if path.is_file() and path.suffix == ".jsonl":
-        return [(f"{path}:{i + 1}", json.loads(line)) for i, line in enumerate(
-            path.read_text().splitlines()) if line.strip()]
+        # Split on \n ONLY. str.splitlines() also breaks on  / /NEL
+        # etc., and model outputs do contain them inside JSON strings (grepseek
+        # triviaqa predictions carried NEL on 3 lines), which tears a valid
+        # JSONL line into unparseable halves.
+        with path.open(encoding="utf-8") as fh:
+            return [(f"{path}:{i + 1}", json.loads(line))
+                    for i, line in enumerate(fh, 1) if line.strip()]
     files = [path] if path.is_file() else sorted(path.rglob("*.json"))
     return [(str(file), json.loads(file.read_text())) for file in files]
 
