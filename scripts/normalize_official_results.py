@@ -115,8 +115,8 @@ def main() -> None:
         row = json.loads(line)
         return str(row.get("id") or row.get("query_id") or "")
 
-    expected_ids = {_row_id(line) for line in
-                    args.dataset_jsonl.read_text().splitlines() if line.strip()}
+    with args.dataset_jsonl.open(encoding="utf-8", newline="\n") as fh:
+        expected_ids = {_row_id(line) for line in fh if line.strip()}
     if set(ids) != expected_ids:
         raise SystemExit("Normalized official output ID set differs from the canonical dataset")
     args.output.parent.mkdir(parents=True, exist_ok=True)
