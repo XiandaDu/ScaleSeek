@@ -201,6 +201,29 @@ waitp_pid() {  # waitp_pid <port> <pid> [timeout] -- like waitp but for a given 
   echo "[vllm] :$port up after ${t}s"
 }
 
+assert_raw_not_poisoned() {  # assert_raw_not_poisoned <raw_dir>
+  # The Pi launcher resumes: a per-question directory whose result.json says
+  # run_status "completed" is skipped, returncode 2, "Cannot resume completed
+  # run". That is correct behaviour -- but a run that finished with EMPTY answers
+  # also writes "completed", so a broken run leaves state that makes every later
+  # attempt silently skip all 1500 questions in minutes and produce nothing.
+  # 7351 did exactly that on top of 7340's leftovers before anyone noticed.
+  local raw=$1 res=$1/results.jsonl
+  [ -f "$res" ] || return 0
+  local total empty
+  total=$(wc -l < "$res")
+  empty=$(grep -c '"final_text": ""' "$res" || true)
+  [ "${total:-0}" -gt 0 ] || return 0
+  if [ "${empty:-0}" -eq "$total" ]; then
+    echo "FATAL: $raw holds $total rows whose final_text is ALL empty, and the Pi"
+    echo "       launcher will skip every one of them as already 'completed'."
+    echo "       Archive it before re-running, e.g."
+    echo "         mv $raw ${raw}_poisoned_\$(date +%m%d)"
+    return 1
+  fi
+  echo "[raw] $raw: $total prior rows, $empty empty -- resume is meaningful"
+}
+
 pi_vllm_provider() {  # pi_vllm_provider <port> [model] -- point the Pi agent at our vLLM
   # The Pi coding agent (dci / dr_dci) does NOT read OPENAI_BASE_URL. Passing
   # `--provider openai` therefore sends it to api.openai.com, which answers 401,
@@ -216,24 +239,38 @@ pi_vllm_provider() {  # pi_vllm_provider <port> [model] -- point the Pi agent at
   export PI_CODING_AGENT_DIR=$TMPDIR/pi_agent
   export VLLM_API_KEY=dummy
   mkdir -p "$PI_CODING_AGENT_DIR"
+  # Shape copied from the configuration that actually ran DCI and DR-DCI in July
+  # (/data/rech/mofengra/dr_dci_official/pi-mono/.pi/agent/models.json), not from
+  # the setup docs. The docs' example omits reasoning/contextWindow/maxTokens and
+  # writes apiKey as an env var NAME; the working file set a literal key and
+  # declared the model's reasoning + window explicitly, which matters for a
+  # thinking model.
+  #
+  # One deliberate difference: the July file used id "agent" (vLLM was served
+  # under --served-model-name agent). Phase-2 pins the frozen generator, and
+  # run_official_baseline._validate requires --model Qwen/Qwen3.5-9B under
+  # --full-eval, so the id here matches the served-model-name we actually launch.
   cat > "$PI_CODING_AGENT_DIR/models.json" <<PIEOF
 {
   "providers": {
     "vllm": {
       "baseUrl": "http://127.0.0.1:$port/v1",
+      "apiKey": "EMPTY",
       "api": "openai-completions",
-      "apiKey": "VLLM_API_KEY",
-      "compat": {
-        "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false
-      },
       "models": [
-        { "id": "$model" }
+        {
+          "id": "$model",
+          "name": "Qwen3.5-9B (local vLLM)",
+          "reasoning": true,
+          "contextWindow": 32768,
+          "maxTokens": 8192
+        }
       ]
     }
   }
 }
 PIEOF
+  export OPENAI_API_KEY=EMPTY
   echo "[pi] provider vllm -> http://127.0.0.1:$port/v1 (model $model)"
   echo "[pi] PI_CODING_AGENT_DIR=$PI_CODING_AGENT_DIR"
 

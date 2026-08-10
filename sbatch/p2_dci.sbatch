@@ -23,6 +23,7 @@ PORT=$((10000 + SLURM_JOB_ID % 20000))
 # already ran. That silently cost grepseek 2d17h of GPU on 2026-08-02.
 RAW=$REPO/results/phase2/dci_raw
 mkdir -p results/phase2 "$RAW"
+assert_raw_not_poisoned "$RAW" || exit 4
 
 [ -d "$DATA/dci_wiki_corpus" ] && [ -n "$(ls -A "$DATA/dci_wiki_corpus" 2>/dev/null)" ] || {
   echo "FATAL: expanded DCI corpus missing; p0_dci_corpus must run first"; exit 4; }

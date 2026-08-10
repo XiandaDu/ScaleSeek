@@ -26,6 +26,7 @@ PULL_PORT=$((PORT + 1))
 # already ran. That silently cost grepseek 2d17h of GPU on 2026-08-02.
 RAW=$REPO/results/phase2/dr_dci_raw
 mkdir -p results/phase2 "$RAW"
+assert_raw_not_poisoned "$RAW" || exit 4
 
 echo "== official wiki18 E5 retriever service (project E5 index) =="
 SVC_LOG=$REPO/logs/dr_dci_retriever_$SLURM_JOB_ID.log

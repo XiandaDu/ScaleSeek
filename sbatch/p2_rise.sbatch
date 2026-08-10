@@ -26,6 +26,7 @@ MAP=$DATA/rise_bm25_index_wiki/filename_docid_map.json
 # already ran. That silently cost grepseek 2d17h of GPU on 2026-08-02.
 RAW=$REPO/results/phase2/rise_raw
 mkdir -p results/phase2 "$RAW"
+assert_raw_not_poisoned "$RAW" || exit 4
 [ -f "$DOCS/audit.jsonl" ] || { echo "FATAL: structured corpus missing (run p1_rise_toc)"; exit 4; }
 
 cd "$OFFICIAL_ROOT/rise"
