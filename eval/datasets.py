@@ -40,6 +40,7 @@ ALL_DATASETS = list(FLASHRAG_DATASETS) + ["bright", "browsecomp", "browsecomp_pl
 EXPECTED_FULL_COUNTS = {"popqa": 14_267, "triviaqa": 11_313}
 EXPECTED_NORMALIZED_SHA256 = {
     "popqa": "56269abde328a259e4e38a186941cfd755ab0d72d7fbd7a1e8801a8ea781bd42",
+    "triviaqa": "41c7a3eed74f17126b58e891efa1edc795e8174c9518bb31078c62422f9cad3a",
 }
 
 

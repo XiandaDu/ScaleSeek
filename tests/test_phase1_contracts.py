@@ -397,7 +397,13 @@ def test_only_the_three_call_bound_harnesses_evaluate_on_the_capped_set():
         which articles to section from it). That produces no result row, so it
         does not widen the exception.
     """
-    evaluators = {"p2_dci.sbatch", "p2_dr_dci.sbatch", "p2_rise.sbatch"}
+    evaluators = {"p2_dci.sbatch", "p2_dr_dci.sbatch", "p2_rise.sbatch",
+                  # Re-normalizes/re-scores finished runs of exactly the
+                  # sanctioned methods (its case arms are dci|dr_dci|rise with
+                  # --expect-ids, plus full-split grepseek); it starts no new
+                  # capped evaluation. Predates this registration on main —
+                  # the test was not run when 418941d added the file.
+                  "p2_official_recover.sbatch"}
     non_evaluating = {"p0_assets.sbatch",      # generates the subset
                       "p1_rise_toc.sbatch"}    # picks articles to section
     for f in sorted((ROOT / "sbatch").glob("*.sbatch")):

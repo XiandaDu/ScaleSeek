@@ -10,7 +10,12 @@
 #     不能直接落在 /scratch（见 sbatch/p0_dci_corpus.sbatch、p0_rise_articles.sbatch）。
 
 # --- 模块与 venv（幂等）---
-module load python/3.11 java/21 2>/dev/null || true
+# 模块提供的 python 包（wheelhouse 只有占位 shim 或根本没有）：
+#   opencv        -> cv2 4.14.0（vllm 0.23 依赖 opencv-python-headless）
+#   arrow/24.0.0  -> pyarrow==24.0.0（datasets 依赖；精确匹配原 pin）
+#   faiss/1.12.0  -> faiss（原 pin faiss-cpu==1.14.3，无轮子；需先 gcc/12.3+cuda/12.6）
+# 顺序要紧：gcc/cuda 在 faiss 前；不要显式 load StdEnv/2023（会 purge 已载模块）。
+module load gcc/12.3 cuda/12.6 faiss/1.12.0 python/3.11 java/21 opencv arrow/24.0.0 2>/dev/null || true
 if [ -f "$HOME/scaleseek_env/bin/activate" ]; then
   # shellcheck disable=SC1091
   source "$HOME/scaleseek_env/bin/activate"
