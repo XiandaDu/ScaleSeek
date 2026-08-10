@@ -126,3 +126,4 @@ rm -rf results/smoke
 # 4-job QOS cap, so the RALI lane machinery is unnecessary); downstream jobs
 # hang on afterok:<this job> and start now.
 echo "acceptance gate passed for DS=$DS"
+mkdir -p "results/$PHASE"; touch "results/$PHASE/.accept_passed_${DS}"

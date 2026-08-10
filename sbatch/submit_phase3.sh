@@ -81,8 +81,13 @@ if [ -f "$DATA_ROOT/rise_wiki_articles.tar.zst" ]; then RISEART=done
 else RISEART=$(sub p0_rise_articles --export="$EXP" $(dep $UNZIP) sbatch/p0_rise_articles.sbatch); fi
 
 echo "== wave 2: dataset assets + acceptance gate =="
-ASSETS=$(sub p0_assets --export="$EXP" $(dep $BM25 $E5) sbatch/p0_assets.sbatch)
-ACCEPT=$(sub p1_accept --export="$EXP" $(dep $ASSETS) sbatch/p1_accept.sbatch)
+if [ -f "results/$PHASE/.accept_passed_${DS}" ]; then
+  echo "acceptance already passed for $DS; skipping assets+accept resubmission" >&2
+  ASSETS=done; ACCEPT=done
+else
+  ASSETS=$(sub p0_assets --export="$EXP" $(dep $BM25 $E5) sbatch/p0_assets.sbatch)
+  ACCEPT=$(sub p1_accept --export="$EXP" $(dep $ASSETS) sbatch/p1_accept.sbatch)
+fi
 RISETOC=$(sub p1_rise_toc --export="$EXP" $(dep $RISEART $ASSETS) sbatch/p1_rise_toc.sbatch)
 
 echo "== wave 3: the $DS matrix (one small backfill-friendly job per cell) =="
