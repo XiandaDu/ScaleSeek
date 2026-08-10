@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #SBATCH -J p2_official_recover
-#SBATCH -p rali
+#SBATCH --account=def-amirhk_gpu
 #SBATCH -c 8
 #SBATCH --mem=32G
 #SBATCH -t 04:00:00
-#SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
+#SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
 #
 # Score an official-harness run whose evaluation finished but whose
 # post-processing died. No model, no GPU -- normalize + metrics only.
@@ -19,20 +19,20 @@
 # and an id set compared against the wrong reference file. Each time the
 # expensive part had already succeeded. Recovering is minutes; re-running is days.
 set -euo pipefail
-source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
+source /home/a32du/ScaleSeek/sbatch/common.sh
 trap 'code=$?; cleanup_tmpdir; advance_lane; exit $code' EXIT
 
 METHOD=${METHOD:?export METHOD=dci|dr_dci|rise|grepseek}
 RAW=$REPO/results/phase2/${METHOD}_raw
-OUT=$REPO/results/phase2/popqa_${METHOD}.jsonl
-RUNREC=$REPO/results/phase2/popqa_${METHOD}.run.json
-CAP=$DATA/dcilite_datasets/popqa_cap1500.jsonl
+OUT=$REPO/$RESULTS_DIR/${DS}_${METHOD}.jsonl
+RUNREC=$REPO/$RESULTS_DIR/${DS}_${METHOD}.run.json
+CAP=$DATA/dcilite_datasets/${DS}_cap1500.jsonl
 
 # The capped harnesses are scored against the subset; grepseek against the split.
 case "$METHOD" in
   # The Pi harness family names the id "query_id"; grepseek emits "id".
-  dci|dr_dci|rise) REF=$CAP; EXPECT=(--expect-ids "$DATA/dcilite_datasets/popqa_cap1500.manifest.json"); EXTRA=(--id-field query_id);;
-  grepseek)        REF=$POPQA_NORM; EXPECT=(); EXTRA=(--id-prefix popqa_);;
+  dci|dr_dci|rise) REF=$CAP; EXPECT=(--expect-ids "$DATA/dcilite_datasets/${DS}_cap1500.manifest.json"); EXTRA=(--id-field query_id);;
+  grepseek)        REF=$DS_NORM; EXPECT=(); EXTRA=(--id-prefix "${DS}_");;
   *) echo "FATAL: unknown METHOD=$METHOD"; exit 2;;
 esac
 
@@ -44,11 +44,11 @@ else INPUT=$(find "$RAW" -name '*.jsonl' -print -quit); fi
 echo "== $METHOD: $INPUT ($(wc -l < "$INPUT") rows) vs $REF ($(wc -l < "$REF") rows) =="
 "$PY" "$REPO/scripts/normalize_official_results.py" --method "$METHOD" \
   --input "$INPUT" --run-record "$RUNREC" \
-  --dataset-manifest "$POPQA_MANIFEST" --dataset-jsonl "$REF" \
+  --dataset-manifest "$DS_MANIFEST" --dataset-jsonl "$REF" \
   "${EXTRA[@]}" --output "$OUT"
 
 sane "$OUT"
 "$PY" "$REPO/scripts/compute_metrics.py" --results "$OUT" \
-  --dataset popqa --agent "$METHOD" "${EXPECT[@]}" \
+  --dataset "$DS" --agent "$METHOD" "${EXPECT[@]}" \
   --out "${OUT%.jsonl}.metrics.json"
-echo "ALL_DONE popqa_$METHOD (recovered)"
+echo "ALL_DONE ${DS}_$METHOD (recovered)"

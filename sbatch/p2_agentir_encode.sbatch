@@ -1,21 +1,20 @@
 #!/usr/bin/env bash
 #SBATCH -J p2_agentir_encode
-#SBATCH -p rali
+#SBATCH --account=def-amirhk_gpu
 # NOTE: was `-w octal30`. Pinning a single node meant the job could not run at
 # all once that node went down (2026-08-09). octal31 is the identical 4x A5000
 # box; let the scheduler choose among equivalent nodes instead.
-#SBATCH --constraint=rtx_a5000
-#SBATCH --gres=gpu:4
+#SBATCH --gres=gpu:h100:4
 #SBATCH -c 32
 #SBATCH --mem=200G
 #SBATCH -t 7-00:00:00
 #SBATCH --requeue
-#SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
+#SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
 # AgentIR prerequisite: encode the full Wiki-18 corpus with the frozen
 # AgentIR-4B checkpoint via the official Tevatron encode driver, producing the
 # corpus.*.pkl shards that the official FaissSearcher expects.
 # The obsolete self-built agentir_index_v2 is intentionally NOT reused.
-source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
+source /home/a32du/ScaleSeek/sbatch/common.sh
 trap cleanup_tmpdir EXIT
 OUT=$DATA/agentir_official_index
 SNAP=$HF_HUB_CACHE/models--Tevatron--AgentIR-4B/snapshots/e31abb637caa227c4b7d04176a24ecff1bcb10f4
@@ -72,4 +71,5 @@ if [ "$FAIL" = 1 ]; then
 fi
 ls -lh "$OUT"/corpus.*.pkl
 echo "ALL_P2_AGENTIR_ENCODE_DONE"
-submit_retry sbatch/p2_agentir.sbatch
+# Rorqual: p2_agentir is submitted by submit_phase3.sh with
+# --dependency=afterok on this job; no direct submit here.

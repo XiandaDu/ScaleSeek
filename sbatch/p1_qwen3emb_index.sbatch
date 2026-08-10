@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 #SBATCH -J p1_qwen3emb_index
-#SBATCH -p rali
-#SBATCH -w octal25
-#SBATCH --gres=gpu:1
+#SBATCH --account=def-amirhk_gpu
+#SBATCH --gres=gpu:h100:1
 #SBATCH -c 12
 #SBATCH --mem=100G
 #SBATCH -t 7-00:00:00
 #SBATCH --requeue
-#SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
+#SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
 # Phase-1 acceptance: build the frozen Qwen3-Embedding-4B full-corpus index on
 # the otherwise-idle octal25 (1x3090). Resumable; checkpoints every 1M vectors.
 # Finishes with the same-query stability probe + three-way manifest validation.
-source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
+source /home/a32du/ScaleSeek/sbatch/common.sh
 trap cleanup_tmpdir EXIT
 
 "$PY" scripts/build_qwen3_embedding_index.py \
@@ -40,7 +39,5 @@ mkdir -p results/smoke
   --device cuda --out results/smoke/stability_all3.json
 
 echo "ALL_P1_QWEN3EMB_DONE"
-
-# Index accepted: launch the qwen3_emb_4b column (lane D self-advances from its queue).
-submit_retry -J p2_rag_qwen3emb --gres=gpu:3 --mem=110G \
-  --export=ALL,AGENT=rag,RET=qwen3_emb_4b,LANE=laneD sbatch/p2_local.sbatch
+# Rorqual: the qwen3_emb_4b cells are submitted by submit_phase3.sh with
+# --dependency=afterok on this job; no lane seeding here.

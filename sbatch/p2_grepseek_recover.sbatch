@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #SBATCH -J p2_grepseek_recover
-#SBATCH -p rali
+#SBATCH --account=def-amirhk_gpu
 #SBATCH -c 8
 #SBATCH --mem=32G
 #SBATCH -t 02:00:00
-#SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
+#SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
 #
 # Recover the completed-but-misfiled GrepSeek run (job 7291, 2026-08-02).
 #
@@ -23,14 +23,14 @@
 #
 #   sbatch sbatch/p2_grepseek_recover.sbatch
 set -euo pipefail
-source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
+source /home/a32du/ScaleSeek/sbatch/common.sh
 # advance_lane must be in the trap: this script sits in queue_laneA, so without
 # it the lane stops here and everything behind it (p2_dci, p2_agentir_encode)
 # never gets submitted.
 trap 'code=$?; cleanup_tmpdir; advance_lane; exit $code' EXIT
 
 SRC=$OFFICIAL_ROOT/grepseek/results/phase2/grepseek_raw/test/predictions.jsonl
-OUT=$REPO/results/phase2/popqa_grepseek.jsonl
+OUT=$REPO/$RESULTS_DIR/${DS}_grepseek.jsonl
 
 [ -f "$SRC" ] || { echo "FATAL: recovered predictions not found at $SRC"; exit 4; }
 echo "== source =="
@@ -39,16 +39,16 @@ wc -l "$SRC"
 echo "== normalize -> $OUT =="
 "$PY" "$REPO/scripts/normalize_official_results.py" --method grepseek \
   --input "$SRC" \
-  --run-record "$REPO/results/phase2/popqa_grepseek.run.json" \
-  --dataset-manifest "$POPQA_MANIFEST" --dataset-jsonl "$POPQA_NORM" \
-  --id-prefix popqa_ \
+  --run-record "$REPO/$RESULTS_DIR/${DS}_grepseek.run.json" \
+  --dataset-manifest "$DS_MANIFEST" --dataset-jsonl "$DS_NORM" \
+  --id-prefix "${DS}_" \
   --output "$OUT"
 
 sane "$OUT"
 
 echo "== metrics =="
 "$PY" "$REPO/scripts/compute_metrics.py" --results "$OUT" \
-  --dataset popqa --agent grepseek \
+  --dataset "$DS" --agent grepseek \
   --out "${OUT%.jsonl}.metrics.json"
 
 # Park the raw output where p2_grepseek would have put it, so a later re-run
@@ -56,4 +56,4 @@ echo "== metrics =="
 mkdir -p "$REPO/results/phase2/grepseek_raw/test"
 cp -n "$SRC" "$REPO/results/phase2/grepseek_raw/test/predictions.jsonl" || true
 
-echo "ALL_DONE popqa_grepseek (recovered from 7291)"
+echo "ALL_DONE ${DS}_grepseek (recovered from 7291)"

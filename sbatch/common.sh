@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
 # Shared guards and helpers for every ScaleSeek sbatch job. `source sbatch/common.sh`.
-# Encodes the hard operational lessons:
-#   1. never run heavy work on a jump host (arcade*),
-#   2. octal40/41 have no /usr/local/cuda -> unset CUDA_HOME kills vLLM silently,
-#   3. /tmp on octal30 is tmpfs -> route TMPDIR to /var/tmp and clean it up,
-#   4. a dead vLLM must abort the lane instead of producing 100% api_error rows.
+# Rorqual port (cluster-packing-and-decile-scope-Rorqual). Keeps the hard
+# operational lessons from the RALI cluster and adds Rorqual's own:
+#   1. never run heavy work on a login node (rorqual1..N are the jump hosts here),
+#   2. an unset CUDA_HOME kills vLLM silently -> probe the venv's pip CUDA runtime,
+#   3. TMPDIR must be the node-local $SLURM_TMPDIR, never /tmp on a shared node,
+#   4. a dead vLLM must abort the lane instead of producing 100% api_error rows,
+#   5. compute nodes have no internet: everything (models, data, wheels) must
+#      already be on /scratch or /home before the job starts.
 set -euo pipefail
 
 case "$(hostname)" in
-  octal*|ilar*|abaque*|blg*) ;;
-  *) echo "FATAL: refusing to run on $(hostname) (jump host?)"; exit 1;;
+  rg*|rc*|rl*) ;;   # rorqual compute nodes (rg=GPU, rc=CPU, rl=large-mem)
+  *) echo "FATAL: refusing to run on $(hostname) (login node?)"; exit 1;;
 esac
 
-source /u/mofengra/miniconda3/etc/profile.d/conda.sh
-source /data/rech/mofengra/ScaleSeek/setup_env.sh
-PY=/u/mofengra/miniconda3/envs/scaleseek/bin/python
+source "$HOME/ScaleSeek/setup_env.sh"
+PY=$HOME/scaleseek_env/bin/python
 
 export E5_INDEX_DIR=$DATA/e5_index
 export QWEN3_EMB_INDEX_DIR=$DATA/qwen3_embedding_4b_index
 export LLM_TOKENIZER=Qwen/Qwen3.5-9B
-export OFFICIAL_ROOT=/data/rech/mofengra/official-baselines
+export OFFICIAL_ROOT=/scratch/a32du/official-baselines
 export GEN_REV=c202236235762e1c871ad0ccb60c8ee5ba337b9a
 export SR1_7B=PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-7b-em-grpo-v0.3
 export SR1_7B_REV=395b18f1fecee52f1b51fb22f898c220f0a08ec3
@@ -28,6 +30,18 @@ export SR1_14B_REV=d65f11c88d3c129a01466f0c154aaad7d9b09225
 export GREPSEEK_MODEL=alireza7/GrepSeek-Qwen3.5-9B-GRPO
 export GREPSEEK_REV=a79563970cfdd2ced3cc5fde481737d0ebea6fa4
 export CORPUS_MANIFEST=$CORPUS_DIR/corpus_manifest.json
+
+# --- Dataset parameterization (phase 3) ----------------------------------
+# Phase-2 jobs hardcoded popqa; phase 3 runs the same matrix per dataset.
+# Jobs read $DS (default popqa) and the DS_* paths; results go under
+# results/$PHASE/${DS}_<cell>.jsonl. The POPQA_* names stay as aliases so
+# unported call sites keep working on the popqa default.
+export DS=${DS:-popqa}
+export DS_RAW=$DATASETS/$DS/test.jsonl
+export DS_NORM=$DATASETS/$DS/test.normalized.jsonl
+export DS_MANIFEST=$DATASETS/$DS/manifest.json
+if [ "$DS" = popqa ]; then export PHASE=${PHASE:-phase2}; else export PHASE=${PHASE:-phase3}; fi
+export RESULTS_DIR=results/$PHASE
 export POPQA_RAW=$DATASETS/popqa/test.jsonl
 export POPQA_NORM=$DATASETS/popqa/test.normalized.jsonl
 export POPQA_MANIFEST=$DATASETS/popqa/manifest.json
@@ -40,14 +54,19 @@ fi
 if [ -z "${CUDA_HOME:-}" ] && command -v nvcc >/dev/null 2>&1; then
   CUDA_HOME=$(dirname "$(dirname "$(command -v nvcc)")"); export CUDA_HOME
 fi
-# octal40/41 have no /usr/local/cuda and no nvcc on PATH, so both probes above
-# miss and vLLM dies silently -> a whole run of 100% api_error rows. The pip
-# CUDA package inside the env is the working CUDA_HOME there (commit 00e687f).
+# Rorqual compute nodes have no /usr/local/cuda either; the pip CUDA package
+# inside the venv is the working CUDA_HOME (same failure mode as octal40/41 on
+# RALI, commit 00e687f: unset CUDA_HOME -> vLLM dies silently -> 100% api_error).
 if [ -z "${CUDA_HOME:-}" ]; then
-  for c in /u/mofengra/miniconda3/envs/scaleseek/lib/python3.11/site-packages/nvidia/cu13 \
-           /u/mofengra/miniconda3/envs/scaleseek/lib/python3.11/site-packages/nvidia/cu12; do
+  for c in "$HOME"/scaleseek_env/lib/python3.11/site-packages/nvidia/cu13 \
+           "$HOME"/scaleseek_env/lib/python3.11/site-packages/nvidia/cu12; do
     [ -x "$c/bin/nvcc" ] && export CUDA_HOME=$c && break
   done
+fi
+# Last resort on Rorqual: the cuda module.
+if [ -z "${CUDA_HOME:-}" ]; then
+  module load cuda 2>/dev/null || true
+  [ -n "${CUDA_HOME:-}" ] || { command -v nvcc >/dev/null 2>&1 && CUDA_HOME=$(dirname "$(dirname "$(command -v nvcc)")") && export CUDA_HOME; }
 fi
 [ -n "${CUDA_HOME:-}" ] && export PATH=$CUDA_HOME/bin:$PATH
 if [ -z "${CUDA_HOME:-}" ]; then
@@ -63,12 +82,13 @@ if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qiE "l4
   echo "[common] L40S detected -> VLLM_USE_FLASHINFER_SAMPLER=0"
 fi
 
-export TMPDIR=/var/tmp/mofengra/${SLURM_JOB_ID:-manual}
+# $SLURM_TMPDIR is node-local NVMe on Rorqual and is wiped by SLURM at job end.
+export TMPDIR=${SLURM_TMPDIR:-/tmp/a32du_${SLURM_JOB_ID:-manual}}
 mkdir -p "$TMPDIR"
-cleanup_tmpdir() { rm -rf "$TMPDIR" 2>/dev/null || true; }
+cleanup_tmpdir() { rm -rf "${TMPDIR:?}"/pi_agent 2>/dev/null || true; }
 
-# A5000/3090 have no P2P; the flag is a small perf cost elsewhere but never wrong.
-export NCCL_P2P_DISABLE=1
+# H100 SXM nodes have NVLink; the RALI-era NCCL_P2P_DISABLE=1 (A5000/3090 had no
+# P2P) would only cost TP>1 bandwidth here, so it is deliberately NOT set.
 
 VLLM_PID=""
 start_vllm() {  # start_vllm <model> <revision> <port> <tp> <served-name> [extra vllm args...]

@@ -1,26 +1,26 @@
 #!/usr/bin/env bash
-#SBATCH -p rali
-#SBATCH --gres=gpu:2
+#SBATCH --account=def-amirhk_gpu
+#SBATCH --gres=gpu:h100:2
 #SBATCH -c 12
 #SBATCH --mem=56G
 #SBATCH -t 4-00:00:00
 #SBATCH --requeue
-#SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
-# Parametrized full-PopQA Phase-2 run for the locally-run methods.
+#SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
+# Parametrized full-dataset run ($DS, default popqa) for the locally-run methods.
 # Submit with:  sbatch -J p2_<name> --export=ALL,AGENT=...,RET=...,SR1=... p2_local.sbatch
 #   AGENT: direct | rag | scaleseek | search_o1 | search_r1
-#   RET:   none | bm25 | e5 | qwen3_emb_4b        (qwen3_emb_4b needs --gres=gpu:3 --mem=110G)
+#   RET:   none | bm25 | e5 | qwen3_emb_4b        (qwen3_emb_4b needs --gres=gpu:h100:3 --mem=110G)
 #   SR1:   "" | 7b | 14b                          (search_r1 only)
-# The output file name comes from the job name: p2_<x> -> results/phase2/popqa_<x>.jsonl
-source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
+# The output file name comes from the job name: p2_<x> -> $RESULTS_DIR/${DS}_<x>.jsonl
+source /home/a32du/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
 
 AGENT=${AGENT:?export AGENT=}
 RET=${RET:-none}
 SR1=${SR1:-}
 PORT=$((10000 + SLURM_JOB_ID % 20000))
-OUT=results/phase2/popqa_${SLURM_JOB_NAME#p2_}.jsonl
-mkdir -p results/phase2
+OUT=$RESULTS_DIR/${DS}_${SLURM_JOB_NAME#p2_}.jsonl
+mkdir -p "$RESULTS_DIR"
 
 RETARGS=()
 NGPU=$(echo "${CUDA_VISIBLE_DEVICES:-0,1}" | tr ',' '\n' | wc -l)
@@ -45,7 +45,7 @@ if [ "$AGENT" = search_r1 ]; then
   esac
   start_vllm "$M" "$R" "$PORT" 2 "search-r1-$SR1"
   waitp "$PORT" 3600
-  "$PY" -m eval.run_eval --dataset popqa --full-eval --agent search_r1 \
+  "$PY" -m eval.run_eval --dataset "$DS" --full-eval --agent search_r1 \
     "${RETARGS[@]}" \
     --search-r1-host 127.0.0.1 --search-r1-port "$PORT" \
     --search-r1-model "search-r1-$SR1" --search-r1-tokenizer "$M" \
@@ -77,7 +77,7 @@ else
   if [ -n "$GATE_MODE" ]; then
     if ! "$PY" scripts/probe_thinking_closure.py \
           --base-url "http://127.0.0.1:$PORT/v1" --model Qwen/Qwen3.5-9B \
-          --popqa "$POPQA_NORM" --n 16 --max-tokens 28000 \
+          --popqa "$DS_NORM" --n 16 --max-tokens 28000 \
           --gate-mode "$GATE_MODE" --agent "$AGENT"; then
       echo "FATAL: thinking-closure gate ($GATE_MODE) failed for $AGENT; config needs a user decision (see mode tables above)"
       exit 3
@@ -87,7 +87,7 @@ else
   case "$AGENT" in
     search_o1|scaleseek) EXTRA=(--tokenizer Qwen/Qwen3.5-9B);;
   esac
-  "$PY" -m eval.run_eval --dataset popqa --full-eval --agent "$AGENT" \
+  "$PY" -m eval.run_eval --dataset "$DS" --full-eval --agent "$AGENT" \
     "${RETARGS[@]}" "${EXTRA[@]}" \
     --host 127.0.0.1 --port "$PORT" --model Qwen/Qwen3.5-9B \
     --generator-revision "$GEN_REV" --concurrency "${CONC:-48}" --retries 3 \
@@ -96,6 +96,6 @@ fi
 stop_vllm
 
 sane "$OUT"
-"$PY" scripts/compute_metrics.py --results "$OUT" --dataset popqa --agent "$AGENT" \
+"$PY" scripts/compute_metrics.py --results "$OUT" --dataset "$DS" --agent "$AGENT" \
   --out "${OUT%.jsonl}.metrics.json"
 echo "ALL_DONE $OUT"

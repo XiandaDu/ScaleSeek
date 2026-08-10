@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #SBATCH -J p0_harness_env
-#SBATCH -p rali
+#SBATCH --account=def-amirhk_cpu
 #SBATCH -c 8
 #SBATCH --mem=16G
 #SBATCH -t 12:00:00
-#SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
+#SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
 # Phase-1 wave 0 (CPU): runtime environments for the official external harnesses
 # (uv envs, node toolchain, pi-mono agent packages). Per-repo status is recorded;
 # the job fails only if the harnesses needed by scheduled Phase-2 jobs are broken.
-source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
+source /home/a32du/ScaleSeek/sbatch/common.sh
 trap cleanup_tmpdir EXIT
 STATUS=$REPO/logs/harness_env_status.txt
 : > "$STATUS"
@@ -18,7 +18,7 @@ command -v uv >/dev/null 2>&1 || pip install --quiet uv
 uv --version
 
 echo "== node =="
-NODE_ROOT=/data/rech/mofengra/tools/node
+NODE_ROOT=/scratch/a32du/tools/node
 if ! command -v node >/dev/null 2>&1; then
   if [ ! -x "$NODE_ROOT/bin/node" ]; then
     mkdir -p "$NODE_ROOT"

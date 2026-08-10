@@ -35,7 +35,9 @@ ALL_DATASETS = list(FLASHRAG_DATASETS) + ["bright", "browsecomp", "browsecomp_pl
 
 # Counts are gates, not sampling targets. Add a value only after pinning and
 # verifying the complete upstream evaluation split.
-EXPECTED_FULL_COUNTS = {"popqa": 14_267}
+# triviaqa pinned 2026-08-10 (phase 3 benchmark #2, Rorqual): FlashRAG revision
+# bcafb8dd, raw sha256 8f0891dece17a6a6472c87bf0e8c555c80673853d8dc7780be4d47158ec85290.
+EXPECTED_FULL_COUNTS = {"popqa": 14_267, "triviaqa": 11_313}
 EXPECTED_NORMALIZED_SHA256 = {
     "popqa": "56269abde328a259e4e38a186941cfd755ab0d72d7fbd7a1e8801a8ea781bd42",
 }

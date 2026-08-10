@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #SBATCH -J p1_accept
-#SBATCH -p rali
-#SBATCH --gres=gpu:2
+#SBATCH --account=def-amirhk_gpu
+#SBATCH --gres=gpu:h100:2
 #SBATCH -c 12
 #SBATCH --mem=56G
 #SBATCH -t 24:00:00
-#SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
+#SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
 # Phase-1 server acceptance (GPU): index same-query stability, real-model
 # end-to-end smokes for every locally-run method, judge serving closure, and
 # Search-R1 7B/14B + GrepSeek serving closures. Smoke outputs live only in
 # results/smoke/ and never enter any results table.
-source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
+source /home/a32du/ScaleSeek/sbatch/common.sh
 trap 'stop_vllm; cleanup_tmpdir' EXIT
 mkdir -p results/smoke
 PORT=$((10000 + SLURM_JOB_ID % 20000))
@@ -36,7 +36,7 @@ smoke() {  # smoke <name> <agent> [extra run_eval args...]
   local name=$1 agent=$2; shift 2
   local out=results/smoke/smoke_${name}.jsonl
   echo "-- smoke $name ($agent $*) -> $out"
-  "$PY" -m eval.run_eval --dataset popqa -n 8 --agent "$agent" \
+  "$PY" -m eval.run_eval --dataset "$DS" -n 8 --agent "$agent" \
     --host 127.0.0.1 --port "$PORT" --model Qwen/Qwen3.5-9B \
     --concurrency 4 --retries 2 --output "$out" "$@"
   sane "$out"
@@ -73,7 +73,7 @@ if ! passed D; then
 echo "== D. Search-R1 7B smoke =="
 start_vllm "$SR1_7B" "$SR1_7B_REV" "$PORT" 2 search-r1-7b
 waitp "$PORT"
-"$PY" -m eval.run_eval --dataset popqa -n 8 --agent search_r1 \
+"$PY" -m eval.run_eval --dataset "$DS" -n 8 --agent search_r1 \
   --retriever bm25 --retriever-device cpu \
   --search-r1-host 127.0.0.1 --search-r1-port "$PORT" \
   --search-r1-model search-r1-7b --search-r1-tokenizer "$SR1_7B" \
@@ -109,7 +109,7 @@ waitp "$PORT"
   --base_url "http://127.0.0.1:$PORT/v1" \
   --max_assistant_turns 6 --max_tokens_per_turn 0 --tool_max_tokens 2048 \
   --temperature 0.6 --top_p 1.0 --parallel 4 --limit 8 \
-  --input "$POPQA_RAW" --corpus_dir "$CORPUS_DIR" \
+  --input "$DS_RAW" --corpus_dir "$CORPUS_DIR" \
   --out_dir results/smoke/grepseek_smoke
 stop_vllm
 mark F
@@ -120,11 +120,8 @@ echo "ALL_P1_ACCEPT_DONE"
 # removing them also clears the stage markers for any future fresh acceptance.
 rm -rf results/smoke
 
-# Acceptance passed: launch the Phase-2 lanes (QOS caps us at 4 queued jobs, so
-# each lane keeps exactly one job in the queue and self-advances via its queue file).
-squeue -h -u "$USER" -n p1_qwen3emb_index | grep -q . || \
-  submit_retry sbatch/p1_qwen3emb_index.sbatch
-squeue -h -u "$USER" -n p2_direct | grep -q . || \
-  submit_retry -J p2_direct --export=ALL,AGENT=direct,RET=none,LANE=laneA sbatch/p2_local.sbatch
-squeue -h -u "$USER" -n p2_search_r1_7b_bm25 | grep -q . || \
-  submit_retry -J p2_search_r1_7b_bm25 --export=ALL,AGENT=search_r1,SR1=7b,RET=bm25,LANE=laneB sbatch/p2_local.sbatch
+# Acceptance passed. On Rorqual the matrix is orchestrated by
+# sbatch/submit_phase3.sh with plain SLURM dependencies (this cluster has no
+# 4-job QOS cap, so the RALI lane machinery is unnecessary); downstream jobs
+# hang on afterok:<this job> and start now.
+echo "acceptance gate passed for DS=$DS"

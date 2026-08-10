@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-#SBATCH -p rali
-#SBATCH --gres=gpu:4
+#SBATCH --account=def-amirhk_gpu
+#SBATCH --gres=gpu:h100:4
 #SBATCH -c 48
 #SBATCH --mem=200G
 #SBATCH -t 4-00:00:00
 #SBATCH --requeue
-#SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
+#SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
 #
 # Packed Phase-2 launcher: hold a WHOLE node and run one eval cell per GPU.
 #
 # Why this exists
 # ---------------
 # QOS `normal` is MaxJobsPU=2 / MaxSubmitPU=4 with **no MaxTRES at all** -- it
-# caps the number of jobs, not GPUs. p2_local.sbatch asked for `--gres=gpu:2` on
+# caps the number of jobs, not GPUs. p2_local.sbatch asked for `--gres=gpu:h100:2` on
 # nodes that have 4, so two concurrent jobs used 4 of the partition's ~19 GPUs
 # and the matrix ran 2-wide. The cells are independent (different output files,
 # no shared state), so this serialisation bought nothing. Packing to a full node
@@ -30,7 +30,7 @@
 #     Use `+` when the value travels through `--export=ALL,CELLS=...` or a lane
 #     queue file: `--export` splits on commas, and advance_lane word-splits the
 #     queue line, so a space- or comma-separated list silently loses cells.
-#     outname -> results/phase2/popqa_<outname>.jsonl   (must be unique per cell)
+#     outname -> $RESULTS_DIR/${DS}_<outname>.jsonl   (must be unique per cell)
 #     agent   -> direct | rag | scaleseek | search_o1 | search_r1
 #     ret     -> none | bm25 | e5 | qwen3_emb_4b
 #     sr1     -> 7b | 14b        (search_r1 only)
@@ -48,12 +48,12 @@
 # manual GPU2 helper in ab35cde), so a requeued job resumes the remaining work.
 # One cell failing does not abort its siblings; the job exit code is non-zero if
 # any cell failed, and every cell's verdict is printed in the summary.
-source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
+source /home/a32du/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_pack; cleanup_tmpdir; advance_lane; exit $code' EXIT
 
 CELLS=${CELLS:?export CELLS="name:agent:ret[:sr1]+..."}
 CELLS=${CELLS//+/ }   # accept the queue-safe `+` separator
-mkdir -p results/phase2
+mkdir -p "$RESULTS_DIR"
 
 NGPU=$(echo "${CUDA_VISIBLE_DEVICES:-0}" | tr ',' '\n' | grep -c .)
 PER=$(gpus_per_cell)
@@ -71,7 +71,7 @@ next_gpu=0
 for spec in $CELLS; do
   IFS=: read -r name agent ret sr1 <<<"$spec"
   ret=${ret:-none}
-  out=results/phase2/popqa_${name}.jsonl
+  out=$RESULTS_DIR/${DS}_${name}.jsonl
   if [ -f "${out%.jsonl}.metrics.json" ]; then
     echo "[pack] skip $name (metrics.json exists)"
     continue
@@ -129,7 +129,7 @@ run_cell() {
   local i=$1
   local name=${PLAN_NAME[$i]} agent=${PLAN_AGENT[$i]} ret=${PLAN_RET[$i]}
   local sr1=${PLAN_SR1[$i]} gpus=${PLAN_GPUS[$i]} port=${PLAN_PORT[$i]} enc=${PLAN_ENC[$i]}
-  local out=results/phase2/popqa_${name}.jsonl
+  local out=$RESULTS_DIR/${DS}_${name}.jsonl
   local clog=$REPO/logs/cell_${SLURM_JOB_NAME:-pack}_${SLURM_JOB_ID:-0}_${name}.log
 
   {
@@ -151,7 +151,7 @@ run_cell() {
       esac
       start_vllm_on "$gpus" "$M" "$R" "$port" "$PER" "search-r1-$sr1"
       waitp_pid "$port" "$PACK_LAST_PID" 3600 || return 1
-      "$PY" -m eval.run_eval --dataset popqa --full-eval --agent search_r1 \
+      "$PY" -m eval.run_eval --dataset "$DS" --full-eval --agent search_r1 \
         "${RETARGS[@]}" \
         --search-r1-host 127.0.0.1 --search-r1-port "$port" \
         --search-r1-model "search-r1-$sr1" --search-r1-tokenizer "$M" \
@@ -167,7 +167,7 @@ run_cell() {
         direct|rag|scaleseek)
           if ! "$PY" scripts/probe_thinking_closure.py \
                 --base-url "http://127.0.0.1:$port/v1" --model Qwen/Qwen3.5-9B \
-                --popqa "$POPQA_NORM" --n 16 --max-tokens 28000 \
+                --popqa "$DS_NORM" --n 16 --max-tokens 28000 \
                 --gate-mode budget_think --agent "$agent"; then
             echo "FATAL: thinking-closure gate failed for $agent"; return 1
           fi;;
@@ -175,7 +175,7 @@ run_cell() {
       case "$agent" in
         search_o1|scaleseek) EXTRA=(--tokenizer Qwen/Qwen3.5-9B);;
       esac
-      "$PY" -m eval.run_eval --dataset popqa --full-eval --agent "$agent" \
+      "$PY" -m eval.run_eval --dataset "$DS" --full-eval --agent "$agent" \
         "${RETARGS[@]}" "${EXTRA[@]}" \
         --host 127.0.0.1 --port "$port" --model Qwen/Qwen3.5-9B \
         --generator-revision "$GEN_REV" --concurrency "${CONC:-48}" --retries 3 \
@@ -184,7 +184,7 @@ run_cell() {
     fi
 
     sane "$out" || return 1
-    "$PY" scripts/compute_metrics.py --results "$out" --dataset popqa \
+    "$PY" scripts/compute_metrics.py --results "$out" --dataset "$DS" \
       --agent "$agent" --out "${out%.jsonl}.metrics.json" || return 1
     echo "ALL_DONE $out"
   } > "$clog" 2>&1
@@ -210,7 +210,7 @@ done
 
 echo "[pack] summary:"
 for i in $(seq 0 $((N - 1))); do
-  m=results/phase2/popqa_${PLAN_NAME[$i]}.metrics.json
+  m=$RESULTS_DIR/${DS}_${PLAN_NAME[$i]}.metrics.json
   if [ -f "$m" ]; then
     printf '  %-28s %s\n' "${PLAN_NAME[$i]}" \
       "$("$PY" -c "import json,sys; d=json.load(open('$m')); a=d['answer_quality']; print(f\"n={d['n']} em={a['em']:.4f} f1={a['f1']:.4f}\")" 2>/dev/null || echo "metrics unreadable")"

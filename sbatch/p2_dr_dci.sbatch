@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #SBATCH -J p2_dr_dci
-#SBATCH -p rali
-#SBATCH --gres=gpu:2
+#SBATCH --account=def-amirhk_gpu
+#SBATCH --gres=gpu:h100:2
 #SBATCH -c 16
 #SBATCH --mem=56G
-#SBATCH -t 14-00:00:00
+#SBATCH -t 7-00:00:00
 #SBATCH --requeue
-#SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
+#SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
 # Phase-2 DR-DCI (Wiki-18 official E5 pull route). The official
 # searchr1_wiki18_dci_server maps FAISS position -> corpus line; our frozen E5
 # index is provably in corpus order (ordered_doc_ids_sha256 matches the corpus
 # manifest), and its query prefix/pooling/normalization match the server's
 # encoder exactly, so the manifest-pinned project E5 index backs the official
 # /retrieve + /document service (recorded in the run record).
-source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
+source /home/a32du/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
-export PATH=/data/rech/mofengra/tools/node/bin:$PATH
+export PATH=/scratch/a32du/tools/node/bin:$PATH
 PORT=$((10000 + SLURM_JOB_ID % 20000))
 PULL_PORT=$((PORT + 1))
 # ABSOLUTE. run_official_baseline.py launches the harness with
@@ -23,8 +23,8 @@ PULL_PORT=$((PORT + 1))
 # --out_dir/--output-root lands inside the OFFICIAL repo, not ours, and the
 # post-run `find $RAW` then reports 'no output jsonl' after the whole eval
 # already ran. That silently cost grepseek 2d17h of GPU on 2026-08-02.
-RAW=$REPO/results/phase2/dr_dci_raw
-mkdir -p results/phase2 "$RAW"
+RAW=$REPO/$RESULTS_DIR/dr_dci_raw
+mkdir -p "$RESULTS_DIR" "$RAW"
 
 echo "== official wiki18 E5 retriever service (project E5 index) =="
 SVC_LOG=$REPO/logs/dr_dci_retriever_$SLURM_JOB_ID.log
@@ -80,7 +80,7 @@ mkdir -p "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty"
 # verifies the produced id set against the subset manifest (--expect-ids).
 "$PY" scripts/run_official_baseline.py dr_dci --repo-root "$OFFICIAL_ROOT" \
   --full-eval --model-revision "$GEN_REV" \
-  --record results/phase2/popqa_dr_dci.run.json -- \
+  --record $RESULTS_DIR/${DS}_dr_dci.run.json -- \
   --model Qwen/Qwen3.5-9B --provider vllm \
   --max-turns 300 --runtime-context-level level3 \
   --tools read,bash,pull \
@@ -93,7 +93,7 @@ mkdir -p "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty"
   --pull-preview-mode ranked --pull-preview-limit 20 \
   --max-concurrency "${CONC:-4}" --skip-judge \
   --pi-thinking-level high --node-max-old-space-size-mb 8192 \
-  --dataset "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
+  --dataset "$DATA/dcilite_datasets/${DS}_cap1500.jsonl" \
   --corpus-dir "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty" \
   --output-root "$RAW"
 stop_vllm
@@ -109,13 +109,13 @@ if [ -f "$RAW/results.jsonl" ]; then INPUT=$RAW/results.jsonl
 else INPUT=$(find "$RAW" -name "*.jsonl" -print -quit); fi
 "$PY" scripts/normalize_official_results.py --method dr_dci \
   --input "$INPUT" \
-  --run-record results/phase2/popqa_dr_dci.run.json \
-  --dataset-manifest "$POPQA_MANIFEST" \
-  --dataset-jsonl "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
+  --run-record $RESULTS_DIR/${DS}_dr_dci.run.json \
+  --dataset-manifest "$DS_MANIFEST" \
+  --dataset-jsonl "$DATA/dcilite_datasets/${DS}_cap1500.jsonl" \
   --id-field query_id \
-  --output results/phase2/popqa_dr_dci.jsonl
-sane results/phase2/popqa_dr_dci.jsonl
-"$PY" scripts/compute_metrics.py --results results/phase2/popqa_dr_dci.jsonl \
-  --dataset popqa --agent dr_dci --expect-ids "$DATA/dcilite_datasets/popqa_cap1500.manifest.json" \
-  --out results/phase2/popqa_dr_dci.metrics.json
-echo "ALL_DONE popqa_dr_dci"
+  --output $RESULTS_DIR/${DS}_dr_dci.jsonl
+sane $RESULTS_DIR/${DS}_dr_dci.jsonl
+"$PY" scripts/compute_metrics.py --results $RESULTS_DIR/${DS}_dr_dci.jsonl \
+  --dataset "$DS" --agent dr_dci --expect-ids "$DATA/dcilite_datasets/${DS}_cap1500.manifest.json" \
+  --out $RESULTS_DIR/${DS}_dr_dci.metrics.json
+echo "ALL_DONE ${DS}_dr_dci"

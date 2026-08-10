@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 一键查看 phase-1/2 链状态。任何机器上直接: bash sbatch/status.sh
-cd /data/rech/mofengra/ScaleSeek 2>/dev/null || cd "$(dirname "$0")/.."
+cd /home/a32du/ScaleSeek 2>/dev/null || cd "$(dirname "$0")/.."
 
 # Loudest thing first: a stalled lane is silent otherwise and has twice parked
 # the pipeline for days (2026-07-28 laneA ~2d, 2026-08-02 laneA again).
