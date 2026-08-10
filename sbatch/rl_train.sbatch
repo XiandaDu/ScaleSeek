@@ -15,19 +15,24 @@
 #   ULYSSES_SP             序列并行度，须整除 NPROC  [2]
 #   WANDB_API_KEY/ENTITY   两个都设才开 W&B
 #
-# 产物：$RL_CKPT_DIR/<jobid>/
+# 产物：$RL_CKPT_DIR/$RL_RUN_NAME/  （续跑链共享，见下方 RL_RUN_NAME）
 #
 # 4 卡：这就是 grpo_trainer.yaml 的目标拓扑（fsdp_size: 4，三重 offload 全开，
 # 注释写明按 4×A5000-24GB 调过），H100 80GB 是当初目标显存的 3.3 倍，余量充足。
 # 先前的 8 卡整节点是我的偏离，代价是排队 22 小时（68 个 8 卡作业竞争、零空闲
 # 整节点）；4 卡能从 mix 节点回填，调度容易得多。
 # ULYSSES_SP 与 RL_ROLLOUT_TP 都必须整除 GPU 数（4 % 2 == 0）。
+#
+# 墙钟 3h（b1 档）而非长跑：4 卡这档也排着 49 个作业，12h 请求被调度器排到
+# 3.5 天后（Reason=Priority，不是资源形状问题 —— 换 GPU 数救不了）。短墙钟能
+# 吃回填，配合 save_freq + resume_mode=auto 用作业链推进，总吞吐远高于赌一次长跑。
+#   bash sbatch/chain_rl.sh 6      # 挂 6 段 = 18h 训练
 #SBATCH --account=def-amirhk_gpu
 #SBATCH --job-name=ss_rl
 #SBATCH --gres=gpu:h100:4
 #SBATCH --cpus-per-task=56
 #SBATCH --mem=1000G
-#SBATCH --time=24:00:00
+#SBATCH --time=3:00:00
 #SBATCH --output=/home/a32du/ScaleSeek/logs/%x-%j.out
 
 source /home/a32du/ScaleSeek/sbatch/common.sh
@@ -48,7 +53,11 @@ export RL_ROLLOUT_TP="${RL_ROLLOUT_TP:-2}"
 if [ $(( NPROC % RL_ROLLOUT_TP )) -ne 0 ]; then
   echo "FATAL: RL_ROLLOUT_TP=$RL_ROLLOUT_TP 必须整除 NPROC=$NPROC"; exit 1
 fi
-export SCALESEEK_OUTPUT_DIR="${SCALESEEK_OUTPUT_DIR:-$RL_CKPT_DIR/$SLURM_JOB_ID}"
+# 输出目录按 RUN NAME 而非 JOB ID —— 短墙钟续跑链的每个作业必须写同一个目录，
+# verl 的 trainer.resume_mode=auto 才能捡起上一段的 global_step_*。用 JOB ID
+# 会让每段各写各的，续跑等于每次从头开始。
+export RL_RUN_NAME="${RL_RUN_NAME:-grpo_9b}"
+export SCALESEEK_OUTPUT_DIR="${SCALESEEK_OUTPUT_DIR:-$RL_CKPT_DIR/$RL_RUN_NAME}"
 export SCALESEEK_TRAIN_FILES="${SCALESEEK_TRAIN_FILES:-$RL_DATA_DIR/train.jsonl}"
 export SCALESEEK_VAL_FILES="${SCALESEEK_VAL_FILES:-$RL_DATA_DIR/dev.jsonl}"
 
@@ -116,7 +125,7 @@ RL_WORKERS=$(( ${SLURM_CPUS_PER_TASK:-8} < 8 ? ${SLURM_CPUS_PER_TASK:-8} : 8 ))
 #      从"无限挂起"变成"立即报错或走缓存"。
 #   2. 看门狗：每 15 分钟打时间戳 + GPU 利用率 + 主进程 py-spy 栈 —— 再挂死时
 #      日志里直接有挂在哪一行的证据。
-#   3. 断路器：RL_STALL_MIN（默认 150 分钟，冒烟时 init+验证约 25 分钟）内日志
+#   3. 断路器：RL_STALL_MIN（默认 75 分钟；短墙钟续跑模式下 150 分钟太宽）内日志
 #      没出现任何 step: 就主动自杀，把节点还回去而不是烧满墙钟。
 export HF_HUB_OFFLINE=1
 export RAY_DEDUP_LOGS=0
@@ -130,11 +139,13 @@ bash scripts/run_rl.sh \
     actor_rollout_ref.rollout.tensor_model_parallel_size="$RL_ROLLOUT_TP" \
     data.dataloader_num_workers="$RL_WORKERS" \
     data.train_batch_size="${RL_BATCH:-64}" \
-    trainer.experiment_name="nibi_${SLURM_JOB_ID}" \
+    trainer.save_freq="${RL_SAVE_FREQ:-10}" \
+    trainer.resume_mode=auto \
+    trainer.experiment_name="${RL_RUN_NAME}" \
     "$@" &
 MAIN_PID=$!
 
-STALL_MIN="${RL_STALL_MIN:-150}"
+STALL_MIN="${RL_STALL_MIN:-75}"
 (
   t=0
   while kill -0 "$MAIN_PID" 2>/dev/null; do
