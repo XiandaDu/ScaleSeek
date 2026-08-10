@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -31,9 +32,13 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--out", type=Path, required=True)
+    # The probe checks same-query determinism of the indexes; any fixed query
+    # set serves. Default to the phase's active dataset ($DS) so acceptance on
+    # a fresh cluster does not require assets of a dataset it will not run.
+    parser.add_argument("--dataset", default=os.environ.get("DS", "popqa"))
     args = parser.parse_args()
 
-    rows = load_dataset("popqa", limit=args.num_queries)
+    rows = load_dataset(args.dataset, limit=args.num_queries)
     queries = [row["question"] for row in rows]
     report: dict = {"queries": len(queries), "repeats": args.repeats,
                     "top_k": args.top_k, "backends": {}}
