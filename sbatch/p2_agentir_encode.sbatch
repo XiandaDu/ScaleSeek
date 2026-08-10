@@ -6,7 +6,7 @@
 # box; let the scheduler choose among equivalent nodes instead.
 #SBATCH --gres=gpu:h100:4
 #SBATCH -c 32
-#SBATCH --mem=200G
+#SBATCH --mem=480G
 #SBATCH -t 48:00:00
 #SBATCH --requeue
 #SBATCH -o /home/a32du/ScaleSeek/logs/%x-%j.out
@@ -45,7 +45,7 @@ uv run python -m tevatron.retriever.driver.encode --help > "$REPO/logs/tevatron_
 echo "== 3. encode 4 shards in parallel (one per GPU) =="
 PIDS=()
 for i in 0 1 2 3; do
-  if [ -f "$OUT/corpus.$i.pkl" ]; then echo "shard $i already done"; continue; fi
+  if [ -s "$OUT/corpus.$i.pkl" ]; then echo "shard $i already done"; continue; fi
   CUDA_VISIBLE_DEVICES=$i uv run python -m tevatron.retriever.driver.encode \
     --output_dir "$TMPDIR/enc$i" \
     --model_name_or_path "$SNAP" \
