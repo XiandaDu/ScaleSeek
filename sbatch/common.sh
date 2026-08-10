@@ -70,6 +70,15 @@ cleanup_tmpdir() { rm -rf "$TMPDIR" 2>/dev/null || true; }
 # A5000/3090 have no P2P; the flag is a small perf cost elsewhere but never wrong.
 export NCCL_P2P_DISABLE=1
 
+# Static ripgrep for the DCI-family harnesses. The official dci-agent-lite
+# setup.sh installs ripgrep via apt/brew; cluster nodes have neither rg nor
+# sudo, so a static musl build lives here. Without it the agent's `rg` fails
+# with exit 127 and the model falls back to `grep -r` over the 14GB corpus --
+# job 7361 hung 4h49m on ONE smoke question that way. Pi's bash tool has no
+# default timeout in the Lite checkout (`DCI_BASH_DEFAULT_TIMEOUT_SECONDS`
+# only exists in the dr_dci fork's bash.ts), so nothing else bounds it.
+export PATH=/data/rech/mofengra/tools/bin:$PATH
+
 assert_gpus_usable() {  # assert_gpus_usable [expected_count]
   # Fail fast, and blame the node. octal35 repeatedly reported `idle` with tens
   # of GB free while every vLLM launch on it died several minutes later with

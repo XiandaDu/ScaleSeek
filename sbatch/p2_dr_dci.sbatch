@@ -86,6 +86,10 @@ mkdir -p "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty"
 # Build the invocation once so the smoke question and the full run are
 # provably the same command apart from --dataset/--output-root.
 HARNESS=("$PY" scripts/run_official_baseline.py dr_dci --repo-root "$OFFICIAL_ROOT"   --full-eval --model-revision "$GEN_REV"   --record results/phase2/popqa_dr_dci.run.json --   --model Qwen/Qwen3.5-9B --provider vllm   --max-turns 300 --runtime-context-level level3   --tools read,bash,pull   --pull-view-mode hardlink --pull-terminal-tools --pull-backend local   --pull-base-url "$DCI_PULL_BASE_URL"   --pull-document-base-url "$DCI_PULL_DOCUMENT_BASE_URL"   --pull-layout root --pull-prompt-mode rank_aware   --pull-materialization-mode root_flat_disclosed   --pull-min-top-k 300 --pull-max-top-k 600 --pull-max-queries 10   --pull-preview-mode ranked --pull-preview-limit 20   --max-concurrency "${CONC:-4}" --skip-judge   --pi-thinking-level high --node-max-old-space-size-mb 8192 --corpus-dir "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty")
+# rg guard as in p2_dci (7361). dr_dci's fork does honor
+# DCI_BASH_DEFAULT_TIMEOUT_SECONDS=30, but a working rg is still the
+# difference between fast scans and 30s-timeout spam in every trajectory.
+command -v rg >/dev/null || { echo "FATAL: rg not on PATH (see common.sh tools/bin)"; exit 4; }
 pi_smoke_gate "$DATA/dcilite_datasets/popqa_cap1500.jsonl" "$RAW.smoke" "${HARNESS[@]}" || exit 5
 "${HARNESS[@]}" \
   --dataset "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \

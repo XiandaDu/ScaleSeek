@@ -56,6 +56,9 @@ export OPENAI_API_KEY=dummy
 # Build the invocation once so the smoke question and the full run are
 # provably the same command apart from --dataset/--output-root.
 HARNESS=("$PY" scripts/run_official_baseline.py dci --repo-root "$OFFICIAL_ROOT"   --full-eval --model-revision "$GEN_REV"   --record results/phase2/popqa_dci.run.json --   --model Qwen/Qwen3.5-9B --provider vllm   --max-turns 300 --runtime-context-level level3   --tools read,bash --max-concurrency "${CONC:-2}"   --judge-model Qwen/Qwen3.5-9B --corpus-dir "$DATA/dci_wiki_corpus")
+# The official prompt tells the model to use rg; without it on PATH the agent
+# falls back to unbounded `grep -r` over 14GB (7361: 4h49m on one question).
+command -v rg >/dev/null || { echo "FATAL: rg not on PATH (see common.sh tools/bin)"; exit 4; }
 pi_smoke_gate "$DATA/dcilite_datasets/popqa_cap1500.jsonl" "$RAW.smoke" "${HARNESS[@]}" || exit 5
 "${HARNESS[@]}" \
   --dataset "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
