@@ -28,10 +28,18 @@ assert_raw_not_poisoned "$RAW" || exit 4
 [ -d "$DATA/dci_wiki_corpus" ] && [ -n "$(ls -A "$DATA/dci_wiki_corpus" 2>/dev/null)" ] || {
   echo "FATAL: expanded DCI corpus missing; p0_dci_corpus must run first"; exit 4; }
 # Pi rejects tool_choice:"auto" unless the server advertises tool calling;
-# without these it fails with `400 status code (no body)`
-# (dr_dci assets/docs/setup.md, and BASELINE_SOURCES.md already noted it).
+# without these it fails with `400 status code (no body)`.
+# The parser must match the MODEL's chat template, not the harness docs:
+# Qwen3.5's template emits XML function calls (<tool_call><function=...>) and its
+# model card (README "Tool Call") prescribes `--tool-call-parser qwen3_coder`.
+# The dr_dci setup.md said `hermes`, but that was written for the JSON
+# <tool_call> format of the Qwen3-era generator the authors used. With hermes,
+# vLLM consumed every tool call and emitted no tool_calls delta, so Pi saw
+# stop-reason "stop" with content "\n\n" and recorded a "completed" run with an
+# empty final_text at turn 1 -- the whole 7340/7341/7351/7354/7355/7359/7360
+# blank-answer family.
 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
-  --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser hermes
+  --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
 waitp "$PORT" 3600
 
 # The Pi agent ignores OPENAI_BASE_URL; it resolves providers from

@@ -221,6 +221,10 @@ pi_smoke_gate() {  # pi_smoke_gate <dataset.jsonl> <smoke_out_dir> <harness cmd.
     echo "FATAL: the smoke question came back with an EMPTY final_text."
     echo "       The agent runs but answers nothing -- exactly the state that"
     echo "       produced 1500 blank rows on 7340/7341/7351/7354/7355."
+    echo "       First suspect: --tool-call-parser not matching the model's chat"
+    echo "       template (Qwen3.5 emits XML function calls -> qwen3_coder; the"
+    echo "       hermes parser silently swallows them: 7359/7360). Check the"
+    echo "       conversation_full.json for turn_count 1 + content '\\n\\n'."
     echo "       Inspect: $out/*/result.json and $out/*/stderr.txt"
     grep -oE '"(turn_count|request_count|run_error)": *("[^"]{0,120}"|[0-9]+|null)' "$res" | head -3
     return 1
@@ -327,7 +331,7 @@ PIEOF
     2>&1) || {
       echo "FATAL: the model endpoint rejected a tool_choice=auto request."
       echo "       Pi sends exactly this and fails with '400 (no body)' when vLLM"
-      echo "       lacks --enable-auto-tool-choice --tool-call-parser hermes."
+      echo "       lacks --enable-auto-tool-choice --tool-call-parser <parser>."
       echo "       response: ${probe:0:400}"
       return 1; }
   echo "[pi] tool-calling probe OK"

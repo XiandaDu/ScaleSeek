@@ -60,10 +60,13 @@ curl -sf -X POST "http://127.0.0.1:$PULL_PORT/retrieve" \
 echo
 
 # Pi rejects tool_choice:"auto" unless the server advertises tool calling;
-# without these it fails with `400 status code (no body)`
-# (dr_dci assets/docs/setup.md, and BASELINE_SOURCES.md already noted it).
+# without these it fails with `400 status code (no body)`.
+# qwen3_coder, NOT the setup.md's hermes: the parser must match the model's
+# chat template. Qwen3.5 emits XML function calls and its model card prescribes
+# `--tool-call-parser qwen3_coder`; setup.md's hermes was written for the JSON
+# format of the Qwen3-era generator. Full rationale in p2_dci.sbatch.
 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
-  --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser hermes
+  --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
 waitp "$PORT" 3600
 
 # The Pi agent ignores OPENAI_BASE_URL; it resolves providers from
