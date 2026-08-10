@@ -26,6 +26,26 @@ mkdir -p "$REPO/logs" "$OFFICIAL_ROOT"
 echo "== official repo checkouts (commit-pinned) =="
 python scripts/bootstrap_official_repos.py --root "$OFFICIAL_ROOT"
 
+echo "== refs/main pins for offline by-name model loads =="
+# Models are prefetched at pinned SHAs, but several official harnesses load
+# tokenizers/models BY NAME (no revision). Offline resolution of "main" needs
+# refs/main in the cache, which `hf download --revision <sha>` does not write.
+# Pin main == the frozen revision (job 18752420 died on exactly this).
+HUB=${HF_HUB_CACHE:-/scratch/a32du/data/hf_cache/hub}
+while read -r repo sha; do
+  d=$HUB/$repo
+  [ -d "$d/snapshots/$sha" ] || { echo "warn: snapshot missing for $repo@$sha"; continue; }
+  mkdir -p "$d/refs"; printf '%s' "$sha" > "$d/refs/main"
+done <<'REFEOF'
+models--Qwen--Qwen3.5-9B c202236235762e1c871ad0ccb60c8ee5ba337b9a
+models--PeterJinGo--SearchR1-nq_hotpotqa_train-qwen2.5-7b-em-grpo-v0.3 395b18f1fecee52f1b51fb22f898c220f0a08ec3
+models--PeterJinGo--SearchR1-nq_hotpotqa_train-qwen2.5-14b-em-grpo-v0.3 d65f11c88d3c129a01466f0c154aaad7d9b09225
+models--alireza7--GrepSeek-Qwen3.5-9B-GRPO a79563970cfdd2ced3cc5fde481737d0ebea6fa4
+models--Tevatron--AgentIR-4B e31abb637caa227c4b7d04176a24ecff1bcb10f4
+models--intfloat--e5-base-v2 f52bf8ec8c7124536f0efb74aca902b2995e5bcd
+models--Qwen--Qwen3-Embedding-4B 5cf2132abc99cad020ac570b19d031efec650f2b
+REFEOF
+
 echo "== node =="
 NODE_ROOT=/scratch/a32du/tools/node
 if [ ! -x "$NODE_ROOT/bin/node" ]; then
