@@ -4,6 +4,7 @@
 #SBATCH --gres=gpu:2
 #SBATCH -c 16
 #SBATCH --mem=56G
+#SBATCH --exclude=octal25,octal30,octal31,octal35
 #SBATCH -t 14-00:00:00
 #SBATCH --requeue
 #SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
@@ -65,6 +66,15 @@ echo
 # chat template. Qwen3.5 emits XML function calls and its model card prescribes
 # `--tool-call-parser qwen3_coder`; setup.md's hermes was written for the JSON
 # format of the Qwen3-era generator. Full rationale in p2_dci.sbatch.
+#
+# 131072, not the lane-default 32768: a 300-turn DR-DCI trajectory with
+# rank-aware previews overflows 32k fast -- 7377's smoke died at request 46
+# with "maximum context length is 32768 ... you requested 8192 output tokens"
+# AFTER it had already found the right answer. Exported (not inline) because
+# pi_vllm_provider must declare the same number as contextWindow in
+# models.json. Needs L40S nodes (see --exclude): 131k of KV does not fit
+# beside the weights on a 24G A5000.
+export VLLM_MAX_LEN=131072
 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
 waitp "$PORT" 3600

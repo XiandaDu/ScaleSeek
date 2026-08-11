@@ -4,6 +4,7 @@
 #SBATCH --gres=gpu:2
 #SBATCH -c 16
 #SBATCH --mem=200G
+#SBATCH --exclude=octal25,octal30,octal31,octal35
 #SBATCH -t 14-00:00:00
 #SBATCH --requeue
 #SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
@@ -16,7 +17,7 @@
 # tmpfs below (~125G: 21M files x 4K page + dentry/inode slab), and cgroup v2
 # charges tmpfs pages to the job that wrote them.
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
-LOCAL_CORPUS=/tmp/mofengra_dci_wiki_corpus
+LOCAL_CORPUS=/dev/shm/mofengra_dci_wiki_corpus
 cleanup_local_corpus() { rm -rf "$LOCAL_CORPUS" 2>/dev/null || true; }
 trap 'code=$?; stop_vllm; cleanup_tmpdir; cleanup_local_corpus; advance_lane; exit $code' EXIT
 assert_gpus_usable || exit 4
@@ -42,13 +43,20 @@ assert_raw_not_poisoned "$RAW" || exit 4
 # the shared filer. Rebuilding the tree in tmpfs with the SAME official
 # expand script costs ~15min once and makes scans RAM-speed. Same files, same
 # layout, same tools -- storage locality is environment, not method.
-# (This deliberately exploits the tmpfs /tmp that bit us on octal30 logs.)
-[ "$(stat -f -c %T /tmp)" = tmpfs ] || {
-  echo "FATAL: /tmp on $(hostname) is not tmpfs; local corpus staging needs it."
-  echo "       Resubmit with --nodelist=octal40,octal41 (252G tmpfs, 503G RAM)."; exit 4; }
-TMP_AVAIL_G=$(df -BG --output=avail /tmp | tail -1 | tr -dc 0-9)
-[ "${TMP_AVAIL_G:-0}" -ge 160 ] || {
-  echo "FATAL: /tmp has only ${TMP_AVAIL_G}G free; the staged corpus needs ~130G."; exit 4; }
+# /dev/shm, NOT /tmp: octal41 mounts /tmp with nr_inodes=1048576, and the tree
+# needs ~42M inodes (21M leaf dirs + 21M files) -- 7381 died ENOSPC at shard
+# 00193 with 252G of bytes still free. /dev/shm has no inode cap beyond the
+# default (66M on octal41, probe job 7382).
+SHM=$(dirname "$LOCAL_CORPUS")
+[ "$(stat -f -c %T "$SHM")" = tmpfs ] || {
+  echo "FATAL: $SHM on $(hostname) is not tmpfs; local corpus staging needs it."; exit 4; }
+SHM_AVAIL_G=$(df -BG --output=avail "$SHM" | tail -1 | tr -dc 0-9)
+SHM_IFREE=$(df -i --output=iavail "$SHM" | tail -1 | tr -dc 0-9)
+[ "${SHM_AVAIL_G:-0}" -ge 160 ] || {
+  echo "FATAL: $SHM has only ${SHM_AVAIL_G}G free; the staged corpus needs ~130G."; exit 4; }
+[ "${SHM_IFREE:-0}" -ge 45000000 ] || {
+  echo "FATAL: $SHM has only ${SHM_IFREE} free inodes; the tree needs ~42M."
+  echo "       (/tmp-style nr_inodes caps kill the staging: 7381.)"; exit 4; }
 EXPECT_DOCS=21015324
 Q=5253831   # EXPECT_DOCS/4 exactly, same split as p0_dci_corpus
 echo "== staging corpus into $LOCAL_CORPUS (official expand script, 4 workers) =="
@@ -86,6 +94,10 @@ echo "== staged: $SHARDS shards in $LOCAL_CORPUS =="
 # stop-reason "stop" with content "\n\n" and recorded a "completed" run with an
 # empty final_text at turn 1 -- the whole 7340/7341/7351/7354/7355/7359/7360
 # blank-answer family.
+# 131072 window: 32k dies mid-trajectory on long agent runs (7377 request 46,
+# see p2_dr_dci.sbatch); exported so pi_vllm_provider declares the same
+# contextWindow in models.json.
+export VLLM_MAX_LEN=131072
 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
 waitp "$PORT" 3600

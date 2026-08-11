@@ -313,7 +313,7 @@ pi_vllm_provider() {  # pi_vllm_provider <port> [model] -- point the Pi agent at
           "id": "$model",
           "name": "Qwen3.5-9B (local vLLM)",
           "reasoning": true,
-          "contextWindow": 32768,
+          "contextWindow": ${VLLM_MAX_LEN:-32768},
           "maxTokens": 8192
         }
       ]
