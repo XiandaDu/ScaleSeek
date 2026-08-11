@@ -51,7 +51,7 @@ SHM=$(dirname "$LOCAL_CORPUS")
 [ "$(stat -f -c %T "$SHM")" = tmpfs ] || {
   echo "FATAL: $SHM on $(hostname) is not tmpfs; local corpus staging needs it."; exit 4; }
 SHM_AVAIL_G=$(df -BG --output=avail "$SHM" | tail -1 | tr -dc 0-9)
-SHM_IFREE=$(df -i --output=iavail "$SHM" | tail -1 | tr -dc 0-9)
+SHM_IFREE=$(df --output=iavail "$SHM" | tail -1 | tr -dc 0-9)
 [ "${SHM_AVAIL_G:-0}" -ge 160 ] || {
   echo "FATAL: $SHM has only ${SHM_AVAIL_G}G free; the staged corpus needs ~130G."; exit 4; }
 [ "${SHM_IFREE:-0}" -ge 45000000 ] || {
