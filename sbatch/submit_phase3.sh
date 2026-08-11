@@ -88,7 +88,16 @@ else
   ASSETS=$(sub p0_assets --export="$EXP" $(dep $BM25 $E5) sbatch/p0_assets.sbatch)
   ACCEPT=$(sub p1_accept --export="$EXP" $(dep $ASSETS) sbatch/p1_accept.sbatch)
 fi
-RISETOC=$(sub p1_rise_toc --export="$EXP" $(dep $RISEART $ASSETS) sbatch/p1_rise_toc.sbatch)
+# RISE TOC is sharded 4x (~0.07 docs/s per 2-GPU server; 98,582 candidates
+# would be ~16 days serially). Shards share the persistent TOC_DIR and skip
+# already-structured articles, so re-running any of them is safe.
+TOCDEPS=""
+for i in 0 1 2 3; do
+  T=$(sub p1_rise_toc$i --export="$EXP,CAND_SHARD=$i,CAND_NSHARDS=4,TOC_WORKERS=24" \
+      $(dep $RISEART $ASSETS) sbatch/p1_rise_toc.sbatch)
+  TOCDEPS="$TOCDEPS $T"
+done
+RISETOC=$TOCDEPS
 
 echo "== wave 3: the $DS matrix (one small backfill-friendly job per cell) =="
 # Rorqual queue reality: a whole-node 4-GPU 4-day job waits ~2 weeks in
