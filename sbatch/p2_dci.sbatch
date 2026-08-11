@@ -3,7 +3,7 @@
 #SBATCH -p rali
 #SBATCH --gres=gpu:2
 #SBATCH -c 16
-#SBATCH --mem=56G
+#SBATCH --mem=200G
 #SBATCH -t 14-00:00:00
 #SBATCH --requeue
 #SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
@@ -11,8 +11,14 @@
 # materialized Wiki-18 corpus with Qwen3.5-9B served via vLLM.
 # TMPDIR redirection in common.sh is load-bearing here: Pi writes every bash
 # tool stdout to os.tmpdir(), which on octal30 is tmpfs (RAM).
+#
+# --mem=200G, NOT the 56G a 9B server needs: the corpus is staged into node
+# tmpfs below (~125G: 21M files x 4K page + dentry/inode slab), and cgroup v2
+# charges tmpfs pages to the job that wrote them.
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
-trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
+LOCAL_CORPUS=/tmp/mofengra_dci_wiki_corpus
+cleanup_local_corpus() { rm -rf "$LOCAL_CORPUS" 2>/dev/null || true; }
+trap 'code=$?; stop_vllm; cleanup_tmpdir; cleanup_local_corpus; advance_lane; exit $code' EXIT
 assert_gpus_usable || exit 4
 export PATH=/data/rech/mofengra/tools/node/bin:$PATH
 PORT=$((10000 + SLURM_JOB_ID % 20000))
@@ -27,6 +33,48 @@ assert_raw_not_poisoned "$RAW" || exit 4
 
 [ -d "$DATA/dci_wiki_corpus" ] && [ -n "$(ls -A "$DATA/dci_wiki_corpus" 2>/dev/null)" ] || {
   echo "FATAL: expanded DCI corpus missing; p0_dci_corpus must run first"; exit 4; }
+
+# --- Stage the corpus into node-local tmpfs ---------------------------------
+# The 21,015,324-file official layout is unusable over NFS: close-to-open
+# consistency makes every open() a GETATTR round-trip, so ONE bare rg scan
+# takes ~50min warm and 3h30m cold (7376 measured both). At 1-3 scans per
+# question x 1500 questions that is months, and a sustained metadata storm on
+# the shared filer. Rebuilding the tree in tmpfs with the SAME official
+# expand script costs ~15min once and makes scans RAM-speed. Same files, same
+# layout, same tools -- storage locality is environment, not method.
+# (This deliberately exploits the tmpfs /tmp that bit us on octal30 logs.)
+[ "$(stat -f -c %T /tmp)" = tmpfs ] || {
+  echo "FATAL: /tmp on $(hostname) is not tmpfs; local corpus staging needs it."
+  echo "       Resubmit with --nodelist=octal40,octal41 (252G tmpfs, 503G RAM)."; exit 4; }
+TMP_AVAIL_G=$(df -BG --output=avail /tmp | tail -1 | tr -dc 0-9)
+[ "${TMP_AVAIL_G:-0}" -ge 160 ] || {
+  echo "FATAL: /tmp has only ${TMP_AVAIL_G}G free; the staged corpus needs ~130G."; exit 4; }
+EXPECT_DOCS=21015324
+Q=5253831   # EXPECT_DOCS/4 exactly, same split as p0_dci_corpus
+echo "== staging corpus into $LOCAL_CORPUS (official expand script, 4 workers) =="
+mkdir -p "$LOCAL_CORPUS"
+( cd "$OFFICIAL_ROOT/dr_dci"
+  PIDS=()
+  for i in 0 1 2 3; do
+    uv run python scripts/qa/expand_wiki18_jsonl_to_files.py \
+      --input "$CORPUS_FILE" --output-dir "$LOCAL_CORPUS" \
+      --start-offset $((i * Q)) --limit $Q \
+      --resume --progress-every 2000000 \
+      > "$REPO/logs/dci_local_expand_${SLURM_JOB_ID}_$i.log" 2>&1 &
+    PIDS+=($!)
+  done
+  FAIL=0
+  for pid in "${PIDS[@]}"; do wait "$pid" || FAIL=1; done
+  exit $FAIL ) || {
+    echo "FATAL: local corpus staging failed; see logs/dci_local_expand_${SLURM_JOB_ID}_*.log"
+    tail -3 "$REPO"/logs/dci_local_expand_${SLURM_JOB_ID}_*.log; exit 4; }
+# Top-level shard count is a cheap structural check (full find over 21M tmpfs
+# files would burn minutes for little extra assurance; the expand script's own
+# exit codes cover per-range completeness).
+SHARDS=$(ls "$LOCAL_CORPUS" | wc -l)
+[ "$SHARDS" -ge 21016 ] || {
+  echo "FATAL: staged corpus has $SHARDS top-level shards, expected >=21016"; exit 4; }
+echo "== staged: $SHARDS shards in $LOCAL_CORPUS =="
 # Pi rejects tool_choice:"auto" unless the server advertises tool calling;
 # without these it fails with `400 status code (no body)`.
 # The parser must match the MODEL's chat template, not the harness docs:
@@ -55,7 +103,7 @@ export OPENAI_API_KEY=dummy
 # verifies the produced id set against the subset manifest (--expect-ids).
 # Build the invocation once so the smoke question and the full run are
 # provably the same command apart from --dataset/--output-root.
-HARNESS=("$PY" scripts/run_official_baseline.py dci --repo-root "$OFFICIAL_ROOT"   --full-eval --model-revision "$GEN_REV"   --record results/phase2/popqa_dci.run.json --   --model Qwen/Qwen3.5-9B --provider vllm   --max-turns 300 --runtime-context-level level3   --tools read,bash --max-concurrency "${CONC:-2}"   --judge-model Qwen/Qwen3.5-9B --corpus-dir "$DATA/dci_wiki_corpus")
+HARNESS=("$PY" scripts/run_official_baseline.py dci --repo-root "$OFFICIAL_ROOT"   --full-eval --model-revision "$GEN_REV"   --record results/phase2/popqa_dci.run.json --   --model Qwen/Qwen3.5-9B --provider vllm   --max-turns 300 --runtime-context-level level3   --tools read,bash --max-concurrency "${CONC:-2}"   --judge-model Qwen/Qwen3.5-9B --corpus-dir "$LOCAL_CORPUS")
 # The official prompt tells the model to use rg; without it on PATH the agent
 # falls back to unbounded `grep -r` over 14GB (7361: 4h49m on one question).
 command -v rg >/dev/null || { echo "FATAL: rg not on PATH (see common.sh tools/bin)"; exit 4; }
