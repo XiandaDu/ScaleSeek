@@ -125,6 +125,52 @@ HARNESS=("$PY" scripts/run_official_baseline.py dci --repo-root "$OFFICIAL_ROOT"
 # falls back to unbounded `grep -r` over 14GB (7361: 4h49m on one question).
 command -v rg >/dev/null || { echo "FATAL: rg not on PATH (see common.sh tools/bin)"; exit 4; }
 pi_smoke_gate "$DATA/dcilite_datasets/popqa_cap1500.jsonl" "$RAW.smoke" "${HARNESS[@]}" || exit 5
+
+# Resume seal: the outer script only skips a completed question dir if its
+# JUDGE succeeded, and our judge can never succeed (hardcoded api.openai.com,
+# always 401). Unsealed, every resume relaunches completed dirs, the inner
+# launcher exits 2 ("Cannot resume completed run"), and good answers become
+# error rows -- 7351's poison, and 45/50 of 7385's rows were headed the same
+# way. Synthesize a judge verdict (is_correct=false, never read by our popqa
+# EM/F1) so judge_result_succeeded() passes; the real 401 record is kept as
+# eval_result.judgefail.json. Result-format adaptation only; idempotent.
+"$PY" - "$RAW" <<'SEALEOF'
+import json, pathlib, sys
+raw = pathlib.Path(sys.argv[1])
+sealed = 0
+for qd in (p for p in raw.iterdir() if p.is_dir()) if raw.is_dir() else []:
+    try:
+        state = json.loads((qd / "state.json").read_text())
+        row = json.loads((qd / "result.json").read_text())
+    except (OSError, ValueError):
+        continue
+    if state.get("status") != "completed" or not (row.get("final_text") or "").strip():
+        continue
+    ev = qd / "eval_result.json"
+    try:
+        j = json.loads(ev.read_text())
+    except (OSError, ValueError):
+        j = None
+    if isinstance(j, dict) and not j.get("error") and isinstance(j.get("is_correct"), bool):
+        continue
+    if isinstance(j, dict):
+        (qd / "eval_result.judgefail.json").write_text(json.dumps(j, indent=2))
+    ev.write_text(json.dumps({
+        "judge_model": "offline-seal",
+        "judged_at": "1970-01-01T00:00:00+00:00",
+        "judge_status": "completed",
+        "is_correct": False,
+        "normalized_prediction": None,
+        "reason": "synthetic seal so resume skips this completed dir; real judge "
+                  "record in eval_result.judgefail.json; popqa scoring ignores judges",
+        "error": None, "attempt_count": 0, "usage": {},
+        "cost_estimate_usd": {"input_cost": 0.0, "cached_input_cost": 0.0,
+                              "output_cost": 0.0, "total_cost": 0.0},
+    }, indent=2))
+    sealed += 1
+print(f"[resume-seal] sealed {sealed} completed dirs against judge-failure re-runs")
+SEALEOF
+
 "${HARNESS[@]}" \
   --dataset "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
   --output-root "$RAW"
