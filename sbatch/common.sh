@@ -97,7 +97,16 @@ assert_gpus_usable() {  # assert_gpus_usable [expected_count]
   if [ -n "$want" ] && [ "$got" -lt "$want" ]; then
     echo "FATAL: $(hostname) exposes $got GPU(s), need $want"; return 1
   fi
-  echo "[gpu] $(hostname): $got GPU(s) visible"
+  # Counting is not enough: octal35 lists its GPUs in nvidia-smi while every
+  # CUDA context creation dies with "CUDA unknown error" (7336/7337, 7347/7348,
+  # and 7420 again after the count check passed). Prove init actually works.
+  if ! "$PY" -c "import torch; torch.zeros(1, device='cuda')" >/dev/null 2>&1; then
+    echo "FATAL: nvidia-smi lists GPUs but CUDA init fails on $(hostname) --"
+    echo "       the known octal35-class node fault. Resubmit with"
+    echo "       --exclude=$(hostname) and report the node."
+    return 1
+  fi
+  echo "[gpu] $(hostname): $got GPU(s) visible, CUDA init OK"
 }
 
 VLLM_PID=""

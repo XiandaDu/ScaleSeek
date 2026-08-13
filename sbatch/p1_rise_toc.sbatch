@@ -6,6 +6,7 @@
 #SBATCH --mem=48G
 #SBATCH -t 14-00:00:00
 #SBATCH --requeue
+#SBATCH --exclude=octal35
 #SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
 # RISE prerequisite: structure every reconstructed Wiki-18 article with the
 # official RISE sectioning core (SECTION_PROMPT/validate/build_final imported
