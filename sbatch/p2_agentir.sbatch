@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 #SBATCH -J p2_agentir
 #SBATCH -p rali
-#SBATCH -w octal30
+# octal31, not octal30: same 257G RAM class, and octal30 has been `down` in
+# sinfo since at least 2026-08-12 (7413 sat on ReqNodeNotAvail).
+#SBATCH -w octal31
 #SBATCH --gres=gpu:3
 #SBATCH -c 24
 #SBATCH --mem=230G

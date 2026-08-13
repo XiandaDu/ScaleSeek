@@ -115,7 +115,12 @@ export OPENAI_API_KEY=dummy
 # verifies the produced id set against the subset manifest (--expect-ids).
 # Build the invocation once so the smoke question and the full run are
 # provably the same command apart from --dataset/--output-root.
-HARNESS=("$PY" scripts/run_official_baseline.py dci --repo-root "$OFFICIAL_ROOT"   --full-eval --model-revision "$GEN_REV"   --record results/phase2/popqa_dci.run.json --   --model Qwen/Qwen3.5-9B --provider vllm   --max-turns 300 --runtime-context-level level3   --tools read,bash --max-concurrency "${CONC:-2}"   --judge-model Qwen/Qwen3.5-9B --corpus-dir "$LOCAL_CORPUS")
+HARNESS=("$PY" scripts/run_official_baseline.py dci --repo-root "$OFFICIAL_ROOT"   --full-eval --model-revision "$GEN_REV"   --record results/phase2/popqa_dci.run.json --   --model Qwen/Qwen3.5-9B --provider vllm   --max-turns 300 --runtime-context-level level3   --tools read,bash --max-concurrency "${CONC:-8}"   --node-max-old-space-size-mb 8192   --judge-model Qwen/Qwen3.5-9B --corpus-dir "$LOCAL_CORPUS")
+# CONC default 8, not 2: DCI trajectories are heavy-tailed (median 82s but
+# mean 1750s, max 17h over the first 50 questions of 7385) -- at conc 2 one
+# monster question idles half the run, 27 days projected. 8 lanes drown the
+# tail (~4 days). node-max-old-space matches the dr_dci scripts; two of the
+# first 50 questions died with "RPC process exited unexpectedly" node crashes.
 # The official prompt tells the model to use rg; without it on PATH the agent
 # falls back to unbounded `grep -r` over 14GB (7361: 4h49m on one question).
 command -v rg >/dev/null || { echo "FATAL: rg not on PATH (see common.sh tools/bin)"; exit 4; }
