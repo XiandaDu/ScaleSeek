@@ -187,8 +187,18 @@ actor_rollout_ref:
       full_determinism: true
       seed: 42
       wrap_policy:
+        # Qwen3.5 的解码层是 Qwen3_5DecoderLayer（带下划线）。曾写成 Qwen3 的
+        # Qwen3DecoderLayer，4 段 RL 作业各在 3 分钟内死于
+        # "Could not find the transformer layer class to wrap in the model."
+        # （2026-08-12，作业 19453415-8）。
+        #
+        # 不能靠"删掉这项、回落到模型的 _no_split_modules"来免维护：那个列表是
+        # ['Qwen3_5DecoderLayer', 'Qwen3_5VisionBlock']，而本 checkpoint 虽是
+        # ForConditionalGeneration 架构却没有实例化视觉塔（实测
+        # get_module_class_from_name(model,'Qwen3_5VisionBlock') 返回 None），
+        # verl 对列表里任一找不到的类都会抛同一个异常。所以只列真实存在的那个。
         transformer_layer_cls_to_wrap:
-          - Qwen3DecoderLayer
+          - Qwen3_5DecoderLayer
       param_offload: true
       grad_offload: true
       optimizer_offload: true

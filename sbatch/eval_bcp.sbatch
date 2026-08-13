@@ -61,6 +61,7 @@ echo "[vllm] serving $MODEL on :$LLM_PORT as '$LLM_MODEL' (log: $VLLM_LOG)"
     --max-model-len "${VLLM_MAX_LEN:-32768}" \
     --gpu-memory-utilization "${VLLM_MEM_UTIL:-0.90}" \
     --enable-auto-tool-choice --tool-call-parser hermes \
+    --reasoning-parser qwen3 \
     > "$VLLM_LOG" 2>&1 &
 VLLM_PID=$!
 waitp "$LLM_PORT" 2400
