@@ -134,12 +134,21 @@ echo "== normalize + metrics =="
 # find's first hit can be a per-question events.jsonl rather than the aggregate.
 if [ -f "$RAW/results.jsonl" ]; then INPUT=$RAW/results.jsonl
 else INPUT=$(find "$RAW" -name "*.jsonl" -print -quit); fi
+# Same field mapping as p2_dr_dci (7383's all-null lesson). No answer-regex:
+# the official DCI benchmark prompt requests no answer format, so final_text
+# is free prose -- the official metric for it is an LLM judge, and strict
+# EM against prose is a known caveat to raise in the phase-2 report, not
+# something to paper over with an invented extractor.
 "$PY" scripts/normalize_official_results.py --method dci \
   --input "$INPUT" \
   --run-record results/phase2/popqa_dci.run.json \
   --dataset-manifest "$POPQA_MANIFEST" \
   --dataset-jsonl "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
   --id-field query_id \
+  --prediction-field final_text \
+  --gold-field gold_answer --gold-split ' / ' \
+  --finish-field run_status --turns-field turn_count \
+  --tool-calls-field tool_metrics.call_count \
   --output results/phase2/popqa_dci.jsonl
 sane results/phase2/popqa_dci.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_dci.jsonl \

@@ -72,4 +72,8 @@ if [ "$FAIL" = 1 ]; then
 fi
 ls -lh "$OUT"/corpus.*.pkl
 echo "ALL_P2_AGENTIR_ENCODE_DONE"
-submit_retry sbatch/p2_agentir.sbatch
+# $REPO-absolute: this script cd's into the official checkout for tevatron,
+# so a relative path here resolves against the WRONG directory. 7346 finished
+# a 2-day encode and then burned its whole 1h retry budget on "Unable to open
+# file sbatch/p2_agentir.sbatch" -- same cwd trap as advance_lane/7303.
+submit_retry "$REPO/sbatch/p2_agentir.sbatch"

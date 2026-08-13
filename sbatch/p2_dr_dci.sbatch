@@ -115,12 +115,22 @@ echo "== normalize + metrics =="
 # find's first hit can be a per-question events.jsonl rather than the aggregate.
 if [ -f "$RAW/results.jsonl" ]; then INPUT=$RAW/results.jsonl
 else INPUT=$(find "$RAW" -name "*.jsonl" -print -quit); fi
+# Field mapping matters: the Pi harness rows say final_text/gold_answer/
+# turn_count, not the normalizer defaults -- 7383 produced 1500 perfect
+# trajectories and then normalized every prediction to null for lack of
+# these flags. gold-split undoes the ' / ' join from make_dcilite_datasets;
+# answer-regex extracts the official 'Exact Answer:' line of the DR-DCI
+# answer format (last match; rows keep answer_extracted for audit).
 "$PY" scripts/normalize_official_results.py --method dr_dci \
   --input "$INPUT" \
   --run-record results/phase2/popqa_dr_dci.run.json \
   --dataset-manifest "$POPQA_MANIFEST" \
   --dataset-jsonl "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
   --id-field query_id \
+  --prediction-field final_text --answer-regex '^\**Exact Answer\**:\s*(.+?)\s*$' \
+  --gold-field gold_answer --gold-split ' / ' \
+  --finish-field run_status --turns-field turn_count \
+  --tool-calls-field tool_metrics.call_count \
   --output results/phase2/popqa_dr_dci.jsonl
 sane results/phase2/popqa_dr_dci.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_dr_dci.jsonl \

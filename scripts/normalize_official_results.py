@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -66,11 +67,25 @@ def main() -> None:
                              "for harnesses fed our own converted datasets.")
     parser.add_argument("--question-field", default="question")
     parser.add_argument("--gold-field", default="gold_answers")
+    parser.add_argument("--gold-split", default="",
+                        help="Separator to split a joined gold string back into a "
+                             "list. The dci-lite dataset conversion joins multiple "
+                             "golds with ' / ' into one answer string, and the "
+                             "harness echoes it verbatim; scoring against the "
+                             "joined string would fail every multi-gold question.")
     parser.add_argument("--prediction-field", default="prediction")
+    parser.add_argument("--answer-regex", default="",
+                        help="Multiline regex whose group(1), from the LAST match, "
+                             "becomes the prediction (e.g. the official DR-DCI "
+                             "answer format's '^Exact Answer: ...' line). No match "
+                             "keeps the full text; answer_extracted records which "
+                             "path was taken. Format conversion only -- the raw "
+                             "final_text stays in the trajectory files.")
     parser.add_argument("--finish-field", default="finish_reason")
     parser.add_argument("--turns-field", default="turns")
     parser.add_argument("--tool-calls-field", default="n_tool_calls")
     args = parser.parse_args()
+    answer_re = re.compile(args.answer_regex, re.MULTILINE) if args.answer_regex else None
     run_record = json.loads(args.run_record.read_text())
     dataset_manifest = json.loads(args.dataset_manifest.read_text())
     config = resolved_method(args.method)
@@ -81,14 +96,29 @@ def main() -> None:
         gold = get(row, args.gold_field, [])
         if isinstance(gold, str):
             gold = [gold]
+        if args.gold_split:
+            gold = [part.strip() for g in gold for part in g.split(args.gold_split)
+                    if part.strip()]
+        prediction = get(row, args.prediction_field)
+        answer_extracted = False
+        if answer_re is not None and isinstance(prediction, str):
+            matches = answer_re.findall(prediction)
+            if matches:
+                prediction = matches[-1].strip()
+                answer_extracted = True
         turns = get(row, args.turns_field, []) or []
+        if isinstance(turns, int):
+            n_turns, turns = turns, []
+        else:
+            n_turns = len(turns) if isinstance(turns, list) else 0
         output.append({
             "id": _canonical_id(str(get(row, args.id_field, "")), args.id_prefix),
             "question": get(row, args.question_field, ""),
             "gold_answers": gold,
-            "prediction": get(row, args.prediction_field),
+            "prediction": prediction,
+            "answer_extracted": answer_extracted,
             "finish_reason": get(row, args.finish_field, "unknown"),
-            "n_turns": len(turns) if isinstance(turns, list) else 0,
+            "n_turns": n_turns,
             "n_tool_calls": int(get(row, args.tool_calls_field, 0) or 0),
             "turns": turns,
             "trajectory_path": source,
