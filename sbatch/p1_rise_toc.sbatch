@@ -11,9 +11,12 @@
 # official RISE sectioning core (SECTION_PROMPT/validate/build_final imported
 # unchanged) using vLLM-served Qwen3.5-9B for throughput. Resumable: already
 # structured articles are skipped, so requeues lose nothing.
-# max-model-len 49152: the official call requests max_tokens=32768, so the
-# server must admit prompt+32768; very long articles beyond that are recorded
-# as failures in the audit rather than crashing the run.
+# max-model-len 131072 (was 49152): the official call requests
+# max_tokens=32768, so the prompt budget is max-model-len minus that. At
+# 49152 the budget was 16k tokens and 4/500 probe articles 400'd on length
+# (7414); at 131072 the budget is ~98k, beyond the official truncate_for_llm
+# cap, so length failures disappear. KV for 131k fits L40S tp=2 beside 9B
+# weights.
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
 assert_gpus_usable || exit 4
@@ -23,7 +26,7 @@ OUT=$DATA/rise_wiki_articles_structured
 [ -f "$ART/passage_article_mapping.jsonl" ] || {
   echo "FATAL: article corpus missing; p0_rise_articles must finish first"; exit 4; }
 
-VLLM_MAX_LEN=49152 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B
+VLLM_MAX_LEN=131072 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B
 waitp "$PORT" 3600
 export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"
 export OPENAI_API_KEY=dummy
@@ -62,8 +65,23 @@ fi
 echo "== probe: 500 candidate articles for rate + anchor validation =="
 "$PY" scripts/build_wiki_toc.py --articles-dir "$ART" --out-dir "$OUT" \
   --candidates "$CAND" --workers 96 --limit 500
-echo "== full pass (LLM for candidates, empty-TOC passthrough for the rest) =="
-"$PY" scripts/build_wiki_toc.py --articles-dir "$ART" --out-dir "$OUT" \
-  --candidates "$CAND" --workers 96
+echo "== full pass: 12 sharded processes (GIL -> processes, see --shard help) =="
+NPROC=12
+PIDS=()
+for k in $(seq 0 $((NPROC - 1))); do
+  "$PY" scripts/build_wiki_toc.py --articles-dir "$ART" --out-dir "$OUT" \
+    --candidates "$CAND" --workers 8 --shard "$k/$NPROC" \
+    --audit "$OUT/audit.shard${k}of${NPROC}.jsonl" \
+    > "$REPO/logs/rise_toc_shard_${SLURM_JOB_ID}_$k.log" 2>&1 &
+  PIDS+=($!)
+done
+FAIL=0
+for pid in "${PIDS[@]}"; do wait "$pid" || FAIL=1; done
+tail -1 "$REPO"/logs/rise_toc_shard_${SLURM_JOB_ID}_*.log
+[ "$FAIL" = 0 ] || { echo "FATAL: at least one TOC shard failed its gate"; exit 1; }
+# Merge shard audits into the single audit.jsonl that p2_rise gates on.
+for k in $(seq 0 $((NPROC - 1))); do
+  cat "$OUT/audit.shard${k}of${NPROC}.jsonl" >> "$OUT/audit.jsonl"
+done
 stop_vllm
 echo "ALL_P1_RISE_TOC_DONE"

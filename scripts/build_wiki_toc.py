@@ -39,7 +39,21 @@ def main() -> None:
                              "unchanged. Without this flag the whole corpus is "
                              "sectioned: ~3.2M LLM calls, 24-72 days.")
     parser.add_argument("--audit", type=Path, default=None)
+    parser.add_argument("--shard", default=None,
+                        help="'k/n': process only every n-th pending/passthrough "
+                             "article starting at k. Sharding across OS processes "
+                             "is what actually parallelises this: the per-doc "
+                             "postprocessing (validate_and_locate/build_final) is "
+                             "pure-Python string work, so threads in one process "
+                             "serialise on the GIL -- 7414's 500-doc probe ran 96 "
+                             "threads yet the server never saw more than ~10 "
+                             "requests in flight (0.08 docs/s, 20 days projected).")
     args = parser.parse_args()
+    shard_k = shard_n = None
+    if args.shard:
+        shard_k, shard_n = (int(x) for x in args.shard.split("/"))
+        if not (0 <= shard_k < shard_n):
+            sys.exit(f"--shard {args.shard}: need 0 <= k < n")
 
     sys.path.insert(0, str(args.rise_repo / "src"))
     sys.path.insert(0, str(args.rise_repo / "scripts" / "structured"))
@@ -67,6 +81,12 @@ def main() -> None:
         header["candidate_set"] = str(args.candidates)
         header["n_candidates"] = len(candidates)
 
+    # One directory stream, not one exists() per article: 3.2M individual
+    # GETATTRs over NFS cost 7414 ~2h of D-state before any work started.
+    existing: set[str] = set()
+    if args.out_dir.is_dir():
+        with os.scandir(args.out_dir) as it:
+            existing = {e.name for e in it if e.name.endswith(".md")}
     pending = []       # LLM-sectioned
     passthrough = []   # emitted with an empty TOC, no model call
     done = 0
@@ -74,7 +94,7 @@ def main() -> None:
         for entry in it:
             if not entry.name.endswith(".md"):
                 continue
-            if (args.out_dir / entry.name).exists():
+            if entry.name in existing:
                 done += 1
                 continue
             if candidates is not None and entry.name not in candidates:
@@ -83,6 +103,10 @@ def main() -> None:
                 pending.append(entry.name)
     pending.sort()
     passthrough.sort()
+    if shard_n is not None:
+        pending = pending[shard_k::shard_n]
+        passthrough = passthrough[shard_k::shard_n]
+        header["shard"] = args.shard
     if args.limit is not None:
         pending = pending[: args.limit]
         passthrough = []          # probe mode measures the LLM path only
