@@ -3,7 +3,7 @@
 #SBATCH -p rali
 #SBATCH --gres=gpu:2
 #SBATCH -c 16
-#SBATCH --mem=200G
+#SBATCH --mem=300G
 #SBATCH --exclude=octal25,octal30,octal31,octal35
 #SBATCH -t 14-00:00:00
 #SBATCH --requeue
@@ -13,9 +13,15 @@
 # TMPDIR redirection in common.sh is load-bearing here: Pi writes every bash
 # tool stdout to os.tmpdir(), which on octal30 is tmpfs (RAM).
 #
-# --mem=200G, NOT the 56G a 9B server needs: the corpus is staged into node
-# tmpfs below (~125G: 21M files x 4K page + dentry/inode slab), and cgroup v2
-# charges tmpfs pages to the job that wrote them.
+# --mem=300G, NOT the 56G a 9B server needs: the corpus is staged into node
+# tmpfs below (~125G: 21M files x 4K page + dentry/inode slab, unreclaimable),
+# and cgroup v2 charges tmpfs pages to the job that wrote them. 200G was NOT
+# enough on top of that: vLLM host RSS (~35G) + 8 node agents (8G heap each,
+# buffering 100s-of-MB event streams) live at the ceiling, and the kernel then
+# fails socket-buffer allocation mid-RPC -- 7417 decayed from 6.8 to 2.0
+# completions/h with 11% of rows dead on `write ENOBUFS` node crashes and
+# ~51.5KB "Unterminated string" truncations (the same ENOBUFS-as-JSON-
+# truncation disguise first seen on octal30's tmpfs /tmp).
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 LOCAL_CORPUS=/dev/shm/mofengra_dci_wiki_corpus
 cleanup_local_corpus() { rm -rf "$LOCAL_CORPUS" 2>/dev/null || true; }
