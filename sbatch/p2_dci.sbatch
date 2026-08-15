@@ -24,8 +24,13 @@
 # truncation disguise first seen on octal30's tmpfs /tmp).
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 LOCAL_CORPUS=/dev/shm/mofengra_dci_wiki_corpus
-cleanup_local_corpus() { rm -rf "$LOCAL_CORPUS" 2>/dev/null || true; }
-trap 'code=$?; stop_vllm; cleanup_tmpdir; cleanup_local_corpus; advance_lane; exit $code' EXIT
+# The staged tree is deliberately NOT deleted in this trap: removing 42M tmpfs
+# inodes takes minutes and SLURM's kill grace is shorter, so 7417's exit left
+# a half-deleted orphan that tripped 7441's inode gate. The tree is instead
+# reused across restarts (expand --resume skips existing files) and removed
+# after a successful finish below. If phase-2 ends abnormally, clean
+# /dev/shm/mofengra_* on octal40/41 by hand.
+trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
 assert_gpus_usable || exit 4
 export PATH=/data/rech/mofengra/tools/node/bin:$PATH
 PORT=$((10000 + SLURM_JOB_ID % 20000))
@@ -58,10 +63,22 @@ SHM=$(dirname "$LOCAL_CORPUS")
   echo "FATAL: $SHM on $(hostname) is not tmpfs; local corpus staging needs it."; exit 4; }
 SHM_AVAIL_G=$(df -BG --output=avail "$SHM" | tail -1 | tr -dc 0-9)
 SHM_IFREE=$(df --output=iavail "$SHM" | tail -1 | tr -dc 0-9)
-[ "${SHM_AVAIL_G:-0}" -ge 160 ] || {
-  echo "FATAL: $SHM has only ${SHM_AVAIL_G}G free; the staged corpus needs ~130G."; exit 4; }
-[ "${SHM_IFREE:-0}" -ge 45000000 ] || {
-  echo "FATAL: $SHM has only ${SHM_IFREE} free inodes; the tree needs ~42M."
+SHM_IUSED=$(df --output=iused "$SHM" | tail -1 | tr -dc 0-9)
+# Demand only what staging still has to CREATE: inodes already used on the
+# mount are overwhelmingly our own reusable tree (expand --resume skips
+# them). A fixed >=42M-free demand rejected exactly the healthy-restart case
+# (7441: 41.6M already ours, 24.4M free, nothing close to exhaustion). The
+# 2M floor keeps slack for stragglers and non-corpus tenants.
+NEED_INODES=$(( 45000000 - ${SHM_IUSED:-0} ))
+[ "$NEED_INODES" -lt 2000000 ] && NEED_INODES=2000000
+if [ -d "$LOCAL_CORPUS" ]; then
+  echo "[shm] reusing existing $LOCAL_CORPUS (${SHM_IUSED} inodes used on $SHM)"
+else
+  [ "${SHM_AVAIL_G:-0}" -ge 160 ] || {
+    echo "FATAL: $SHM has only ${SHM_AVAIL_G}G free; the staged corpus needs ~130G."; exit 4; }
+fi
+[ "${SHM_IFREE:-0}" -ge "$NEED_INODES" ] || {
+  echo "FATAL: $SHM has ${SHM_IFREE} free inodes; staging still needs ~${NEED_INODES}."
   echo "       (/tmp-style nr_inodes caps kill the staging: 7381.)"; exit 4; }
 EXPECT_DOCS=21015324
 Q=5253831   # EXPECT_DOCS/4 exactly, same split as p0_dci_corpus
@@ -211,4 +228,9 @@ sane results/phase2/popqa_dci.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_dci.jsonl \
   --dataset popqa --agent dci --expect-ids "$DATA/dcilite_datasets/popqa_cap1500.manifest.json" \
   --out results/phase2/popqa_dci.metrics.json
+# Only now is the 125G/42M-inode tree disposable; deleting it here in the
+# FOREGROUND (job still running, no kill deadline) is what neither the EXIT
+# trap nor a backgrounded rm -- killed with the job's process group at exit
+# -- could ever finish. Takes minutes; phase-3 restages in ~15min anyway.
+rm -rf "$LOCAL_CORPUS"
 echo "ALL_DONE popqa_dci"
