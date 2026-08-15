@@ -117,6 +117,24 @@ class ScaleSeekDataset(_DatasetBase):
     def __len__(self) -> int:
         return len(self.examples)
 
+    @classmethod
+    async def process_vision_info(cls, messages: list[dict], image_patch_size,
+                                  config) -> tuple[list, list]:
+        """No-op vision extraction: ScaleSeek trajectories are text-only.
+
+        verl's AgentLoop calls `dataset_cls.process_vision_info(...)` before
+        apply_chat_template whenever the model is a VL architecture — and
+        Qwen3.5 is one (`Qwen3_5ForConditionalGeneration`, config carries a
+        vision_config) even though this checkpoint instantiates no vision
+        tower. Without this the rollout dies with
+        `AttributeError: type object 'ScaleSeekDataset' has no attribute
+        'process_vision_info'` (2026-08-13, jobs 19724569-72).
+
+        Signature mirrors RLHFDataset.process_vision_info; returning two empty
+        lists is the correct answer for text-only messages.
+        """
+        return [], []
+
     def __getitem__(self, idx: int) -> dict[str, Any]:
         ex = self.examples[idx]
         qid = str(ex.get("id", idx))

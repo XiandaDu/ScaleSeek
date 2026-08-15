@@ -50,6 +50,10 @@ echo "[eval_bcp] model=$MODEL"
 echo "[eval_bcp] index=$BM25_INDEX_DIR  n=$N  out=$OUT"
 
 # --- vLLM 服务本地 checkpoint ---
+# max-model-len 128k 而非 common.sh 的默认 32768：BCP 文档平均 5.2k 词，几篇进
+# workspace 就撑爆 32k，2026-08-13 的 60 题里 44 题因此被 400 拒
+# （"prompt contains at least 32... tokens"）。模型本身
+# max_position_embeddings=262144，128k 留一半余量给 KV cache。
 # 不用 common.sh 的 start_vllm：它固定传 --revision "$rev"，而本地路径没有
 # HF revision，传空串会让 vLLM 报错。common.sh 是 baseline 共用的，不动它。
 VLLM_LOG=$REPO/logs/vllm_${SLURM_JOB_NAME}_${SLURM_JOB_ID}.log
@@ -58,7 +62,7 @@ echo "[vllm] serving $MODEL on :$LLM_PORT as '$LLM_MODEL' (log: $VLLM_LOG)"
     --model "$MODEL" --dtype bfloat16 \
     --host 127.0.0.1 --port "$LLM_PORT" --tensor-parallel-size 1 \
     --served-model-name "$LLM_MODEL" \
-    --max-model-len "${VLLM_MAX_LEN:-32768}" \
+    --max-model-len "${VLLM_MAX_LEN:-131072}" \
     --gpu-memory-utilization "${VLLM_MEM_UTIL:-0.90}" \
     --enable-auto-tool-choice --tool-call-parser hermes \
     --reasoning-parser qwen3 \
