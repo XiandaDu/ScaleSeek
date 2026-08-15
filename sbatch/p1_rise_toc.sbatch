@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH -J p1_rise_toc
 #SBATCH --account=def-amirhk_gpu
-#SBATCH --gres=gpu:h100:2
+#SBATCH --gres=gpu:h100:1
 #SBATCH -c 16
 #SBATCH --mem=48G
 #SBATCH -t 7-00:00:00
@@ -43,7 +43,7 @@ cp -n "$META/passage_article_mapping.jsonl" "$ART/" 2>/dev/null || true
 
 # 131072: probe run 18753874 lost 8/500 articles to 49152-token overflow; the
 # official call still requests max_tokens=32768, so prompts up to ~98k now fit.
-VLLM_MAX_LEN=131072 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B
+VLLM_MAX_LEN=131072 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 1 Qwen/Qwen3.5-9B
 waitp "$PORT" 3600
 export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"
 export OPENAI_API_KEY=dummy

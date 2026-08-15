@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH -J p2_dr_dci
 #SBATCH --account=def-amirhk_gpu
-#SBATCH --gres=gpu:h100:2
+#SBATCH --gres=gpu:h100:1
 #SBATCH -c 16
 #SBATCH --mem=100G
 #SBATCH -t 7-00:00:00
@@ -71,7 +71,7 @@ echo
 # Pi rejects tool_choice:"auto" unless the server advertises tool calling;
 # without these it fails with `400 status code (no body)`
 # (dr_dci assets/docs/setup.md, and BASELINE_SOURCES.md already noted it).
-start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
+start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 1 Qwen/Qwen3.5-9B \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_xml
 waitp "$PORT" 3600
 

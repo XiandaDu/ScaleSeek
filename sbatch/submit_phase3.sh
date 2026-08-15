@@ -91,11 +91,11 @@ fi
 # RISE TOC is sharded 4x (~0.07 docs/s per 2-GPU server; 98,582 candidates
 # would be ~16 days serially). Shards share the persistent TOC_DIR and skip
 # already-structured articles, so re-running any of them is safe.
-# 8 shards x 60h instead of 4 x 7d: the 7-day requests sat unscheduled for a
+# 12 x 1-GPU x 60h shards (TP=1; single-GPU jobs backfill far better): the 7-day requests sat unscheduled for a
 # day in the small b5 bucket; 60h lands in b4 (twice the nodes, backfills).
 TOCDEPS=""
-for i in 0 1 2 3 4 5 6 7; do
-  T=$(sub p1_rise_toc$i --export="$EXP,CAND_SHARD=$i,CAND_NSHARDS=8,TOC_WORKERS=24" \
+for i in 0 1 2 3 4 5 6 7 8 9 10 11; do
+  T=$(sub p1_rise_toc$i --export="$EXP,CAND_SHARD=$i,CAND_NSHARDS=12,TOC_WORKERS=24" \
       -t 60:00:00 $(dep $RISEART $ASSETS) sbatch/p1_rise_toc.sbatch)
   TOCDEPS="$TOCDEPS $T"
 done

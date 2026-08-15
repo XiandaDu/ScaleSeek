@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH -J p2_agentir
 #SBATCH --account=def-amirhk_gpu
-#SBATCH --gres=gpu:h100:3
+#SBATCH --gres=gpu:h100:2
 #SBATCH -c 24
 #SBATCH --mem=230G
 #SBATCH -t 7-00:00:00
@@ -20,12 +20,12 @@ mkdir -p "$RESULTS_DIR" "$OUT"
 ls "$DATA"/agentir_official_index/corpus.*.pkl >/dev/null 2>&1 || {
   echo "FATAL: official AgentIR pkl shards missing; run p2_agentir_encode first"; exit 4; }
 
-export VLLM_GPUS=0,1
-start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B --reasoning-parser qwen3
+export VLLM_GPUS=0
+start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 1 Qwen/Qwen3.5-9B --reasoning-parser qwen3
 waitp "$PORT" 3600
 
 cd "$REPO"
-CUDA_VISIBLE_DEVICES=2 "$PY" scripts/run_official_baseline.py agentir \
+CUDA_VISIBLE_DEVICES=1 "$PY" scripts/run_official_baseline.py agentir \
   --repo-root "$OFFICIAL_ROOT" --full-eval --model-revision "$GEN_REV" \
   --record $RESULTS_DIR/${DS}_agentir.run.json -- \
   --model Qwen/Qwen3.5-9B --model-url "http://127.0.0.1:$PORT/v1" \
