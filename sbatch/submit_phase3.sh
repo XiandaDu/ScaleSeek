@@ -91,12 +91,13 @@ fi
 # RISE TOC is sharded 4x (~0.07 docs/s per 2-GPU server; 98,582 candidates
 # would be ~16 days serially). Shards share the persistent TOC_DIR and skip
 # already-structured articles, so re-running any of them is safe.
-# 12 x 1-GPU x 60h shards (TP=1; single-GPU jobs backfill far better): the 7-day requests sat unscheduled for a
-# day in the small b5 bucket; 60h lands in b4 (twice the nodes, backfills).
+# 12 x 1-GPU x 12h shards: even 60h single-GPU jobs sat 3 days unscheduled.
+# 12h windows backfill readily; per-article resume + babysitter requeue means a
+# shard that outgrows one window simply continues in the next.
 TOCDEPS=""
 for i in 0 1 2 3 4 5 6 7 8 9 10 11; do
   T=$(sub p1_rise_toc$i --export="$EXP,CAND_SHARD=$i,CAND_NSHARDS=12,TOC_WORKERS=24" \
-      -t 60:00:00 $(dep $RISEART $ASSETS) sbatch/p1_rise_toc.sbatch)
+      -t 12:00:00 $(dep $RISEART $ASSETS) sbatch/p1_rise_toc.sbatch)
   TOCDEPS="$TOCDEPS $T"
 done
 RISETOC=$TOCDEPS
@@ -134,9 +135,9 @@ cell search_o1_qwen3emb     search_o1 qwen3_emb_4b "" 2
 cell search_r1_7b_qwen3emb  search_r1 qwen3_emb_4b 7b 2
 cell search_r1_14b_qwen3emb search_r1 qwen3_emb_4b 14b 2
 [ -f "results/$PHASE/${DS}_grepseek.metrics.json" ] && echo "done    p3_grepseek" >&2 || sub p3_grepseek --export="$EXP" $(dep $ACCEPT) sbatch/p2_grepseek.sbatch >/dev/null
-[ -f "results/$PHASE/${DS}_dr_dci.metrics.json" ] && echo "done    p3_dr_dci" >&2 || sub p3_dr_dci   --export="$EXP" $(dep $ACCEPT) sbatch/p2_dr_dci.sbatch >/dev/null
+[ -f "results/$PHASE/${DS}_dr_dci.metrics.json" ] && echo "done    p3_dr_dci" >&2 || sub p3_dr_dci   -t 72:00:00 --export="$EXP" $(dep $ACCEPT) sbatch/p2_dr_dci.sbatch >/dev/null
 [ -f "results/$PHASE/${DS}_agentir.metrics.json" ] && echo "done    p3_agentir" >&2 || sub p3_agentir  --export="$EXP" $(dep $ACCEPT $AIRENC) sbatch/p2_agentir.sbatch >/dev/null
-[ -f "results/$PHASE/${DS}_dci.metrics.json" ] && echo "done    p3_dci" >&2 || sub p3_dci      --export="$EXP" $(dep $ACCEPT $DCICORP) sbatch/p2_dci.sbatch >/dev/null
+[ -f "results/$PHASE/${DS}_dci.metrics.json" ] && echo "done    p3_dci" >&2 || sub p3_dci      -t 72:00:00 --export="$EXP" $(dep $ACCEPT $DCICORP) sbatch/p2_dci.sbatch >/dev/null
 [ -f "results/$PHASE/${DS}_rise.metrics.json" ] && echo "done    p3_rise" >&2 || sub p3_rise     --export="$EXP" $(dep $ACCEPT $RISETOC) sbatch/p2_rise.sbatch >/dev/null
 
 squeue -u "$USER" -o "%.9i %.22j %.9T %.12r %.20E"
