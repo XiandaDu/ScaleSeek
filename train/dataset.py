@@ -119,7 +119,7 @@ class ScaleSeekDataset(_DatasetBase):
 
     @classmethod
     async def process_vision_info(cls, messages: list[dict], image_patch_size,
-                                  config) -> tuple[list, list]:
+                                  config) -> tuple[None, None]:
         """No-op vision extraction: ScaleSeek trajectories are text-only.
 
         verl's AgentLoop calls `dataset_cls.process_vision_info(...)` before
@@ -130,10 +130,14 @@ class ScaleSeekDataset(_DatasetBase):
         `AttributeError: type object 'ScaleSeekDataset' has no attribute
         'process_vision_info'` (2026-08-13, jobs 19724569-72).
 
-        Signature mirrors RLHFDataset.process_vision_info; returning two empty
-        lists is the correct answer for text-only messages.
+        Returns (None, None), NOT ([], []): the caller does
+        `videos, video_metadatas = zip(*videos)` guarded only by
+        `if videos is not None`, and `zip(*[])` yields nothing, so an empty
+        list dies with `ValueError: not enough values to unpack (expected 2,
+        got 0)` (2026-08-15, jobs 19879914-17). None is the "no vision data"
+        sentinel throughout that code path.
         """
-        return [], []
+        return None, None
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         ex = self.examples[idx]
