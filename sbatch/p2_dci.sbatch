@@ -128,6 +128,16 @@ waitp "$PORT" 3600
 # The Pi agent ignores OPENAI_BASE_URL; it resolves providers from
 # $PI_CODING_AGENT_DIR/models.json. pi_vllm_provider writes that file.
 pi_vllm_provider "$PORT" Qwen/Qwen3.5-9B "$OFFICIAL_ROOT/dci_agent_lite"
+# TASK.md's 30s per-command budget, via Pi's supported settings.shellPath
+# (the Lite checkout has NO bash timeout; the env var run_official_baseline
+# sets is a dr_dci-fork-only knob). 7442 wedged: one rg blocked 32h on 10s
+# of CPU, five agents stuck 1-2 days, zero completions in 6h. Only for DCI:
+# the dr_dci fork honors the env var natively.
+chmod +x /data/rech/mofengra/tools/bin/dci_bash_timeout30
+cat > "$PI_CODING_AGENT_DIR/settings.json" <<'PISET'
+{ "shellPath": "/data/rech/mofengra/tools/bin/dci_bash_timeout30" }
+PISET
+echo "[pi] settings.json -> shellPath dci_bash_timeout30 (30s per command)"
 export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"   # for the Python-side tools
 export OPENAI_API_KEY=dummy
 
@@ -138,7 +148,7 @@ export OPENAI_API_KEY=dummy
 # verifies the produced id set against the subset manifest (--expect-ids).
 # Build the invocation once so the smoke question and the full run are
 # provably the same command apart from --dataset/--output-root.
-HARNESS=("$PY" scripts/run_official_baseline.py dci --repo-root "$OFFICIAL_ROOT"   --full-eval --model-revision "$GEN_REV"   --record results/phase2/popqa_dci.run.json --   --model Qwen/Qwen3.5-9B --provider vllm   --max-turns 300 --runtime-context-level level3   --tools read,bash --max-concurrency "${CONC:-8}"   --node-max-old-space-size-mb 8192   --judge-model Qwen/Qwen3.5-9B --corpus-dir "$LOCAL_CORPUS")
+HARNESS=("$PY" scripts/run_official_baseline.py dci --repo-root "$OFFICIAL_ROOT"   --full-eval --model-revision "$GEN_REV"   --record results/phase2/popqa_dci.run.json --   --model Qwen/Qwen3.5-9B --provider vllm   --max-turns 300 --runtime-context-level level3   --tools read,bash --max-concurrency "${CONC:-8}"   --node-max-old-space-size-mb 12288   --judge-model Qwen/Qwen3.5-9B --corpus-dir "$LOCAL_CORPUS")
 # CONC default 8, not 2: DCI trajectories are heavy-tailed (median 82s but
 # mean 1750s, max 17h over the first 50 questions of 7385) -- at conc 2 one
 # monster question idles half the run, 27 days projected. 8 lanes drown the
