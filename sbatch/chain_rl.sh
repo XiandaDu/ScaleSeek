@@ -10,14 +10,20 @@
 set -euo pipefail
 cd /home/a32du/ScaleSeek
 N="${1:-4}"
+# 段长：实测每段固定 ~71min 初始化开销（vLLM 加载 + Ray + FSDP 恢复），每步 ~11min。
+#   3h -> 有效 109min / 10 步 / 开销 39%
+#   6h -> 有效 289min / 26 步 / 开销 20%   <- 默认
+#   12h-> 有效 649min / 59 步 / 开销 10%，但排队惩罚重（>6h 档积压 3214 个作业，
+#         3-6h 档只有 278 个；上次 12h 请求被排到 3.5 天后）
+WALL="${RL_WALL:-6:00:00}"
 RUN="${RL_RUN_NAME:-grpo_9b}"
 DEP=""
 for i in $(seq 1 "$N"); do
   # shellcheck disable=SC2086
-  JID=$(sbatch --parsable $DEP \
+  JID=$(sbatch --parsable $DEP --time="$WALL" \
         --export=ALL,RL_RUN_NAME="$RUN",RL_SKIP_FORMAT_GATE=1 \
         sbatch/rl_train.sbatch)
-  echo "[chain] 第 $i/$N 段 -> $JID${DEP:+  ($DEP)}"
+  echo "[chain] 第 $i/$N 段 -> $JID  wall=$WALL${DEP:+  ($DEP)}"
   DEP="--dependency=afterany:$JID"
 done
 echo

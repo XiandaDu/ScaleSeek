@@ -23,10 +23,11 @@
 # 整节点）；4 卡能从 mix 节点回填，调度容易得多。
 # ULYSSES_SP 与 RL_ROLLOUT_TP 都必须整除 GPU 数（4 % 2 == 0）。
 #
-# 墙钟 3h（b1 档）而非长跑：4 卡这档也排着 49 个作业，12h 请求被调度器排到
-# 3.5 天后（Reason=Priority，不是资源形状问题 —— 换 GPU 数救不了）。短墙钟能
-# 吃回填，配合 save_freq + resume_mode=auto 用作业链推进，总吞吐远高于赌一次长跑。
-#   bash sbatch/chain_rl.sh 6      # 挂 6 段 = 18h 训练
+# 短墙钟续跑链而非一次长跑：12h 请求曾被排到 3.5 天后（Reason=Priority，不是
+# 资源形状问题 —— 换 GPU 数救不了）。配合 save_freq + resume_mode=auto，作业链
+# 的总吞吐远高于赌一次长跑。段长由 chain_rl.sh 传入（默认 6h，那里有实测的
+# 开销/排队权衡表）；本文件的 3h 只是单独提交时的保守默认。
+#   bash sbatch/chain_rl.sh 6      # 挂 6 段 6h = 36h 墙钟 / 约 158 步
 #SBATCH --account=def-amirhk_gpu
 #SBATCH --job-name=ss_rl
 #SBATCH --gres=gpu:h100:4
@@ -125,7 +126,7 @@ RL_WORKERS=$(( ${SLURM_CPUS_PER_TASK:-8} < 8 ? ${SLURM_CPUS_PER_TASK:-8} : 8 ))
 #      从"无限挂起"变成"立即报错或走缓存"。
 #   2. 看门狗：每 15 分钟打时间戳 + GPU 利用率 + 主进程 py-spy 栈 —— 再挂死时
 #      日志里直接有挂在哪一行的证据。
-#   3. 断路器：RL_STALL_MIN（默认 75 分钟；短墙钟续跑模式下 150 分钟太宽）内日志
+#   3. 断路器：RL_STALL_MIN（默认 100 分钟 —— 实测每段初始化就要 71 分钟）内日志
 #      没出现任何 step: 就主动自杀，把节点还回去而不是烧满墙钟。
 export HF_HUB_OFFLINE=1
 export RAY_DEDUP_LOGS=0
@@ -145,7 +146,7 @@ bash scripts/run_rl.sh \
     "$@" &
 MAIN_PID=$!
 
-STALL_MIN="${RL_STALL_MIN:-75}"
+STALL_MIN="${RL_STALL_MIN:-100}"
 (
   t=0
   while kill -0 "$MAIN_PID" 2>/dev/null; do
