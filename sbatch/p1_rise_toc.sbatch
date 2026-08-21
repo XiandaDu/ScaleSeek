@@ -78,7 +78,11 @@ for k in $(seq 0 $((NPROC - 1))); do
 done
 FAIL=0
 for pid in "${PIDS[@]}"; do wait "$pid" || FAIL=1; done
-tail -1 "$REPO"/logs/rise_toc_shard_${SLURM_JOB_ID}_*.log
+# tail -n 1, NOT the obsolete `tail -1`: GNU tail rejects the short form with
+# multiple file operands ("option used in invalid context"), and under set -e
+# that one cosmetic line FAILED job 7422 *after* all 12 shards had finished a
+# 3-day sectioning pass -- skipping the audit merge below.
+tail -n 1 "$REPO"/logs/rise_toc_shard_${SLURM_JOB_ID}_*.log
 [ "$FAIL" = 0 ] || { echo "FATAL: at least one TOC shard failed its gate"; exit 1; }
 # Merge shard audits into the single audit.jsonl that p2_rise gates on.
 for k in $(seq 0 $((NPROC - 1))); do

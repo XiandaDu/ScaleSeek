@@ -17,14 +17,24 @@ source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 trap 'stop_vllm; cleanup_tmpdir' EXIT
 PORT=$((10000 + SLURM_JOB_ID % 20000))
 SNAP=$HF_HUB_CACHE/models--Tevatron--AgentIR-4B/snapshots/e31abb637caa227c4b7d04176a24ecff1bcb10f4
-OUT=results/phase2/agentir_raw
+# ABSOLUTE: run_official_baseline runs the harness with cwd=<official
+# checkout>, so a relative --output-dir lands inside the agentir repo. 7416's
+# 14,267 outputs went to $OFFICIAL_ROOT/agentir/results/... and normalize then
+# read the empty project-side dir (same trap as grepseek 2026-08-02).
+OUT=$REPO/results/phase2/agentir_raw
 mkdir -p results/phase2 "$OUT"
 
 ls "$DATA"/agentir_official_index/corpus.*.pkl >/dev/null 2>&1 || {
   echo "FATAL: official AgentIR pkl shards missing; run p2_agentir_encode first"; exit 4; }
 
 export VLLM_GPUS=0,1
-start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B --reasoning-parser qwen3
+# Tool parser flags are load-bearing: the oss_client drives the agent loop
+# through the OpenAI tools API, and without them vLLM returns the model's
+# <tool_call> XML as plain text -- the search is never executed and every
+# query "completes" after one turn with retrieved_docids=[] (7416: 714/714
+# sampled rows, 9h of garbage). Same root cause as DCI/DR-DCI (e7bdb03).
+start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
+  --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
 waitp "$PORT" 3600
 
 cd "$REPO"
