@@ -97,7 +97,12 @@ data:
   # for, and the truncated tail is the output-format/tool section. 2048 leaves
   # ~1000 tokens of headroom; re-measure if the prompt grows.
   max_prompt_length: 2048       # system prompt (1015) + question + template
-  max_response_length: 12288    # 2048 + 12288 = 14336 total context
+  max_response_length: 18432    # 2048 + 18432 = 20480 total context
+  # 20480 而非原来的 14336：多轮 agent 的 prompt 逐轮累积，最坏情况是
+  # system 1015 + question ~200 + 7 轮 x (工具响应 2048 + 推理 ~300) = 17651，
+  # 本来就超 14336。不是偶发 —— 第 4 段在 step 130 附近死于
+  # "Prompt length (14382) exceeds the model's maximum context length (14336)"
+  # （2026-08-21，作业 20095986）。20480 留 2.8k 余量。
 
   return_raw_chat: true
   prompt_key: prompt
@@ -138,15 +143,15 @@ actor_rollout_ref:
     top_p: 1.0
     top_k: -1
 
-    max_model_len: 14336          # = prompt_length + response_length
+    max_model_len: 20480          # = prompt_length + response_length
     prompt_length: 2048
-    response_length: 12288
+    response_length: 18432
 
     max_num_seqs: 16
-    max_num_batched_tokens: 16384
+    max_num_batched_tokens: 20480
     log_prob_micro_batch_size_per_gpu: 1
     log_prob_use_dynamic_bsz: false
-    log_prob_max_token_len_per_gpu: 14336
+    log_prob_max_token_len_per_gpu: 20480
 
     multi_turn:
       enable: true
@@ -179,7 +184,7 @@ actor_rollout_ref:
       load_contents: ['model', 'optimizer', 'extra']
     ppo_mini_batch_size: 16
     ppo_micro_batch_size_per_gpu: 1
-    ppo_max_token_len_per_gpu: 14336
+    ppo_max_token_len_per_gpu: 20480
     use_dynamic_bsz: true
     use_kl_loss: false
     kl_loss_coef: 0.0
@@ -222,7 +227,7 @@ actor_rollout_ref:
   ref:
     strategy: fsdp
     log_prob_micro_batch_size_per_gpu: 2
-    log_prob_max_token_len_per_gpu: 14336
+    log_prob_max_token_len_per_gpu: 20480
     fsdp_config:
       full_determinism: true
       seed: 42
