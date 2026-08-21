@@ -30,17 +30,23 @@ mkdir -p results/phase2 "$RAW"
 assert_raw_not_poisoned "$RAW" || exit 4
 [ -f "$DOCS/audit.jsonl" ] || { echo "FATAL: structured corpus missing (run p1_rise_toc)"; exit 4; }
 
+# The official tooling consumes a (docid, text) parquet -- feeding it the .md
+# directory dies in pyarrow open_input_file (7502, 5m51s) -- and the repo's
+# build_filename_docid_map.py is a documentation STUB (SystemExit(__doc__))
+# that tells the corpus exporter to emit the map. Our exporter counterpart
+# packages the TOC'd tree into both artifacts; official build_bm25_index.py
+# then builds the index unchanged (project k1=1.2 override recorded in YAML).
+PARQUET=$DATA/rise_bm25_index_wiki/wiki_articles_structured.parquet
 cd "$OFFICIAL_ROOT/rise"
-if [ ! -d "$RISE_INDEX" ] || [ -z "$(ls -A "$RISE_INDEX" 2>/dev/null)" ]; then
-  uv run python scripts/build_bm25_index.py --help > "$REPO/logs/rise_bm25_help.txt" 2>&1 || exit 4
-  uv run python scripts/build_bm25_index.py --corpus "$DOCS" \
-    --out "$RISE_INDEX" --k1 1.2 --b 0.75 || {
-      echo "FATAL: bm25s index build failed; check flags vs logs/rise_bm25_help.txt"; exit 4; }
+if [ ! -f "$PARQUET" ] || [ ! -f "$MAP" ]; then
+  uv run python "$REPO/scripts/build_rise_wiki_parquet.py" \
+    --docs-dir "$DOCS" --parquet-out "$PARQUET" --map-out "$MAP" || {
+      echo "FATAL: corpus parquet/map packaging failed"; exit 4; }
 fi
-if [ ! -f "$MAP" ]; then
-  uv run python scripts/build_filename_docid_map.py --help > "$REPO/logs/rise_map_help.txt" 2>&1 || exit 4
-  uv run python scripts/build_filename_docid_map.py --corpus "$DOCS" --out "$MAP" || {
-      echo "FATAL: filename map build failed; check flags vs logs/rise_map_help.txt"; exit 4; }
+if [ ! -d "$RISE_INDEX/bm25_index" ]; then
+  uv run python scripts/build_bm25_index.py --corpus "$PARQUET" \
+    --out "$RISE_INDEX" --k1 1.2 --b 0.75 || {
+      echo "FATAL: bm25s index build failed"; exit 4; }
 fi
 cd "$REPO"
 
