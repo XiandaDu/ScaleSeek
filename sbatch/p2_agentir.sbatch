@@ -6,13 +6,18 @@
 #SBATCH -w octal31
 #SBATCH --gres=gpu:3
 #SBATCH -c 24
-#SBATCH --mem=230G
+#SBATCH --mem=250G
 #SBATCH -t 7-00:00:00
 #SBATCH --requeue
 #SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
 # Phase-2 AgentIR: official reasoning-aware OSS agent loop. vLLM Qwen3.5-9B on
 # GPUs 0-1; the AgentIR-4B query encoder takes GPU 2. The flat FAISS index over
-# 21M x 2560 float32 embeddings needs most of octal30's RAM, hence --mem=230G.
+# 21M x 2560 float32 embeddings = ~215G resident. 230G survived 7416 only
+# because its broken tool parser meant vLLM never actually served an agent
+# loop; under real load (7511) the server frontend + 8 threads x 100-iteration
+# conversations pushed past the cgroup at t+4.5h with zero results written
+# (OOM kill). 250G is the practical ceiling of octal31's 257000MB RealMemory;
+# CONC=4 halves the client-side conversation buffers as the second lever.
 source /data/rech/mofengra/ScaleSeek/sbatch/common.sh
 trap 'stop_vllm; cleanup_tmpdir' EXIT
 PORT=$((10000 + SLURM_JOB_ID % 20000))
