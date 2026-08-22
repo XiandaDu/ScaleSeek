@@ -50,7 +50,13 @@ if [ ! -d "$RISE_INDEX/bm25_index" ]; then
 fi
 cd "$REPO"
 
-start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B
+# Tool-parser flags: the official RISE runner drives search/bash/read through
+# the OpenAI tools API with tool_choice auto; without them every request 400s
+# ('"auto" tool choice requires --enable-auto-tool-choice...') and 7513
+# "finished" 1500 queries in 1s each with zero model calls. Fourth member of
+# the same family (DCI e7bdb03, DR-DCI, agentir a829a45).
+start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
+  --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
 waitp "$PORT" 10800   # 3h: glacier NFS contention starved 1h loads (7503/7505/7504)
 export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"
 export OPENAI_API_KEY=dummy
@@ -79,20 +85,21 @@ unset XIAOMI_API_KEY DEEPSEEK_API_KEY 2>/dev/null || true
 stop_vllm
 
 echo "== normalize + metrics =="
-# Pick the aggregate file explicitly, and never pipe find into head.
-# `find ... | head -1` sends SIGPIPE upstream when head closes; under
-# `set -o pipefail` that exits 141 and kills the job AFTER the evaluation has
-# already finished. dci (7340) and dr_dci (7341) both died exactly this way on
-# 2026-08-08 with complete 1,500-row outputs on disk. It was also non-deterministic:
-# find's first hit can be a per-question events.jsonl rather than the aggregate.
-if [ -f "$RAW/results.jsonl" ]; then INPUT=$RAW/results.jsonl
-else INPUT=$(find "$RAW" -name '*.jsonl' -printf '%T@ %p\n' | sort -rn | awk 'NR==1{sub(/^[^ ]* /,"");print}'); fi
+# The RISE runner writes one JSON per query under _per_query/ (there is no
+# aggregate results.jsonl; 7513's find over '*.jsonl' fed normalize an empty
+# path). Point normalize at that directory alone -- $RAW also holds
+# _summary.json and _traces/*/single.json that must not be swept in. The
+# answer format is the official 'Exact Answer:' block (same as DR-DCI);
+# gold_answer carries make_dcilite_datasets' ' / ' join.
 "$PY" scripts/normalize_official_results.py --method rise \
-  --input "$INPUT" \
+  --input "$RAW/_per_query" \
   --run-record results/phase2/popqa_rise.run.json \
   --dataset-manifest "$POPQA_MANIFEST" \
   --dataset-jsonl "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
   --id-field query_id \
+  --prediction-field final_text --answer-regex '^\**Exact Answer\**:\s*(.+?)\s*$' \
+  --gold-field gold_answer --gold-split ' / ' \
+  --finish-field terminated_by --turns-field n_turns \
   --output results/phase2/popqa_rise.jsonl
 sane results/phase2/popqa_rise.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_rise.jsonl \
