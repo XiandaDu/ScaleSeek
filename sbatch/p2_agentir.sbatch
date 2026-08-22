@@ -35,7 +35,11 @@ export VLLM_GPUS=0,1
 # sampled rows, 9h of garbage). Same root cause as DCI/DR-DCI (e7bdb03).
 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
-waitp "$PORT" 3600
+# 10800, not 3600: weight loading shares the glacier NFS with whatever else
+# is running -- 7503/7505 both starved past the 1h mark (0/4 shards at t+65min)
+# while p2_rise packaged 3.2M files on the same filer. Generous timeout costs
+# nothing when the filer is quiet.
+waitp "$PORT" 10800
 
 cd "$REPO"
 CUDA_VISIBLE_DEVICES=2 "$PY" scripts/run_official_baseline.py agentir \
