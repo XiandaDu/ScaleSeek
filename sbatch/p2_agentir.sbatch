@@ -7,7 +7,8 @@
 # (7511 OOMed at t+4.5h mid-load under the NFS storm; 7518 OOMed in 30min
 # warm-cache at the same point). octal41 has 503G, and its 48G L40S run the
 # 9B server at tp=1, so two GPUs suffice: vLLM on 0, AgentIR-4B encoder on 1.
-#SBATCH -w octal41
+# (pinned to whichever L40S node is not admin-drained: 41 drained 08-20 "update")
+#SBATCH -w octal40
 #SBATCH --gres=gpu:2
 #SBATCH -c 24
 #SBATCH --mem=450G
