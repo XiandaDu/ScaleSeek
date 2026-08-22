@@ -6,7 +6,7 @@
 #SBATCH -w octal31
 #SBATCH --gres=gpu:3
 #SBATCH -c 24
-#SBATCH --mem=250G
+#SBATCH --mem=255900M
 #SBATCH -t 7-00:00:00
 #SBATCH --requeue
 #SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
