@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 #SBATCH -J p2_agentir
 #SBATCH -p rali
-# octal31, not octal30: same 257G RAM class, and octal30 has been `down` in
-# sinfo since at least 2026-08-12 (7413 sat on ReqNodeNotAvail).
-#SBATCH -w octal31
-#SBATCH --gres=gpu:3
+# octal41, and no smaller node can work: the official loader's faiss add()
+# duplicates each shard while inserting, so the load PEAK is ~204G(faiss) +
+# 51G(numpy shard) = 255G -- physically above the 257G-class octal30/31
+# (7511 OOMed at t+4.5h mid-load under the NFS storm; 7518 OOMed in 30min
+# warm-cache at the same point). octal41 has 503G, and its 48G L40S run the
+# 9B server at tp=1, so two GPUs suffice: vLLM on 0, AgentIR-4B encoder on 1.
+#SBATCH -w octal41
+#SBATCH --gres=gpu:2
 #SBATCH -c 24
-#SBATCH --mem=255900M
+#SBATCH --mem=450G
 #SBATCH -t 7-00:00:00
 #SBATCH --requeue
 #SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
@@ -32,13 +36,13 @@ mkdir -p results/phase2 "$OUT"
 ls "$DATA"/agentir_official_index/corpus.*.pkl >/dev/null 2>&1 || {
   echo "FATAL: official AgentIR pkl shards missing; run p2_agentir_encode first"; exit 4; }
 
-export VLLM_GPUS=0,1
+export VLLM_GPUS=0
 # Tool parser flags are load-bearing: the oss_client drives the agent loop
 # through the OpenAI tools API, and without them vLLM returns the model's
 # <tool_call> XML as plain text -- the search is never executed and every
 # query "completes" after one turn with retrieved_docids=[] (7416: 714/714
 # sampled rows, 9h of garbage). Same root cause as DCI/DR-DCI (e7bdb03).
-start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
+start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 1 Qwen/Qwen3.5-9B \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
 # 10800, not 3600: weight loading shares the glacier NFS with whatever else
 # is running -- 7503/7505 both starved past the 1h mark (0/4 shards at t+65min)
@@ -47,7 +51,7 @@ start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
 waitp "$PORT" 10800
 
 cd "$REPO"
-CUDA_VISIBLE_DEVICES=2 "$PY" scripts/run_official_baseline.py agentir \
+CUDA_VISIBLE_DEVICES=1 "$PY" scripts/run_official_baseline.py agentir \
   --repo-root "$OFFICIAL_ROOT" --full-eval --model-revision "$GEN_REV" \
   --record results/phase2/popqa_agentir.run.json -- \
   --model Qwen/Qwen3.5-9B --model-url "http://127.0.0.1:$PORT/v1" \
