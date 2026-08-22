@@ -123,7 +123,7 @@ echo "== staged: $SHARDS shards in $LOCAL_CORPUS =="
 export VLLM_MAX_LEN=131072
 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
-waitp "$PORT" 3600
+waitp "$PORT" 10800   # 3h: glacier NFS contention starved 1h loads (7503/7505/7504)
 
 # The Pi agent ignores OPENAI_BASE_URL; it resolves providers from
 # $PI_CODING_AGENT_DIR/models.json. pi_vllm_provider writes that file.

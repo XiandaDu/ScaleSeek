@@ -28,7 +28,7 @@ OUT=$DATA/rise_wiki_articles_structured
   echo "FATAL: article corpus missing; p0_rise_articles must finish first"; exit 4; }
 
 VLLM_MAX_LEN=131072 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B
-waitp "$PORT" 3600
+waitp "$PORT" 10800   # 3h: glacier NFS contention starved 1h loads (7503/7505/7504)
 export OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1"
 export OPENAI_API_KEY=dummy
 export SECTION_MODEL=Qwen/Qwen3.5-9B
