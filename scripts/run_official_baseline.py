@@ -135,6 +135,12 @@ def main() -> None:
         if args.dataset_manifest is None:
             sys.exit("rise --full-eval requires --dataset-manifest")
         manifest = json.loads(args.dataset_manifest.read_text())
+        # RISE is one of the three call-bound methods under TASK.md's approved
+        # 评测规模上限, so the canonical query file is the capped subset and the
+        # right reference is its subset manifest (subset_n + an ID-set hash),
+        # not the full-split manifest's count/unique_ids. Both schemas accepted;
+        # 7512 failed here holding a perfectly sanctioned 1,500-row file against
+        # the 14,267 full-split numbers.
         mini = Path(_value(forwarded, "--mini-dev"))
         qids: set[str] = set()
         rows = 0
@@ -143,7 +149,14 @@ def main() -> None:
                 if line.strip():
                     rows += 1
                     qids.add(str(json.loads(line)["query_id"]))
-        if rows != manifest["count"] or len(qids) != manifest["unique_ids"]:
+        if "subset_n" in manifest:
+            sys.path.insert(0, str(ROOT))
+            from eval import subsets
+            ok, msg = subsets.verify(qids, manifest)
+            if not ok or rows != len(qids):
+                sys.exit(f"--mini-dev {mini}: {msg}"
+                         + ("" if rows == len(qids) else f" ({rows} rows)"))
+        elif rows != manifest["count"] or len(qids) != manifest["unique_ids"]:
             sys.exit(f"--mini-dev {mini} has {rows} rows / {len(qids)} unique ids; "
                      f"manifest requires {manifest['count']} / {manifest['unique_ids']}")
     if args.full_eval and args.method == "agentir":

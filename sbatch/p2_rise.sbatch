@@ -61,9 +61,12 @@ unset XIAOMI_API_KEY DEEPSEEK_API_KEY 2>/dev/null || true
 # any further --limit/-n/--offset and pins the frozen model/revision -- so the
 # two together mean "run the entire capped file, unsliced". compute_metrics then
 # verifies the produced id set against the subset manifest (--expect-ids).
+# The subset manifest, not $POPQA_MANIFEST: RISE runs the sanctioned capped
+# file, so the launcher must hold --mini-dev against subset_n/ids_sha256
+# (7512 died holding the 1,500-row file against the 14,267 full-split count).
 "$PY" scripts/run_official_baseline.py rise --repo-root "$OFFICIAL_ROOT" \
   --full-eval --model-revision "$GEN_REV" \
-  --dataset-manifest "$POPQA_MANIFEST" \
+  --dataset-manifest "$DATA/dcilite_datasets/popqa_cap1500.manifest.json" \
   --record results/phase2/popqa_rise.run.json -- \
   --model Qwen/Qwen3.5-9B \
   --mini-dev "$DATA/dcilite_datasets/popqa_cap1500.jsonl" \
