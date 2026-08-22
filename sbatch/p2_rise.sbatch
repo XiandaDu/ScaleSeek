@@ -6,7 +6,7 @@
 #SBATCH --mem=100G
 #SBATCH -t 14-00:00:00
 #SBATCH --requeue
-#SBATCH --exclude=octal35
+#SBATCH --exclude=octal35,octal40
 #SBATCH -o /data/rech/mofengra/ScaleSeek/logs/%x-%j.out
 # Phase-2 RISE: official run_rise.py at the frozen commit over the structured
 # Wiki article corpus. Index and filename map are built with the official repo
