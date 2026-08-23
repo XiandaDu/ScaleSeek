@@ -55,6 +55,11 @@ cd "$REPO"
 # ('"auto" tool choice requires --enable-auto-tool-choice...') and 7513
 # "finished" 1500 queries in 1s each with zero model calls. Fourth member of
 # the same family (DCI e7bdb03, DR-DCI, agentir a829a45).
+# 131072: the official runner requests max_output_tokens=32000 per call, so a
+# 32768 window rejects EVERY request before the first token (7524: 1500/1500
+# api_error rows in 37min). Long multi-turn trajectories need the headroom on
+# top of that output budget anyway (the DR-DCI request-46 lesson).
+export VLLM_MAX_LEN=131072
 start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 2 Qwen/Qwen3.5-9B \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
 waitp "$PORT" 10800   # 3h: glacier NFS contention starved 1h loads (7503/7505/7504)

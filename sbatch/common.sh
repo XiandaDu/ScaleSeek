@@ -56,12 +56,13 @@ if [ -z "${CUDA_HOME:-}" ]; then
   exit 1
 fi
 
-# L40S (sm_89, octal40/41): flashinfer's JIT is built against mismatched CUDA
-# headers and breaks sampling; torch-native sampling works (commit 1be8033).
-if nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -qiE "l40|ls40"; then
-  export VLLM_USE_FLASHINFER_SAMPLER=0
-  echo "[common] L40S detected -> VLLM_USE_FLASHINFER_SAMPLER=0"
-fi
+# Unconditional, no longer L40S-only: flashinfer's sampling JIT needs CUDA
+# headers that match the driver/toolkit, and the nodes keep drifting under
+# maintenance -- octal31 lost /opt/cuda in the 08-2x "update" wave, CUDA_HOME
+# fell back to the pip cu13 tree, and the JIT ninja build then failed on
+# sm_86 A5000s too (7526: engine core died before the port opened). Torch-
+# native sampling is a small perf cost and never wrong (1be8033).
+export VLLM_USE_FLASHINFER_SAMPLER=0
 
 export TMPDIR=/var/tmp/mofengra/${SLURM_JOB_ID:-manual}
 mkdir -p "$TMPDIR"
