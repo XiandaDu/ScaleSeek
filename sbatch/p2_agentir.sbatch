@@ -54,6 +54,11 @@ start_vllm Qwen/Qwen3.5-9B "$GEN_REV" "$PORT" 1 Qwen/Qwen3.5-9B \
 waitp "$PORT" 10800
 
 cd "$REPO"
+# OMP explicitly wide for the CLIENT only: its faiss flat-IP searches scan the
+# 215G index per query (10+ searches/query) and 7531 crawled at 73s/query with
+# the client stuck near ~3 cores while vLLM sat idle -- search, not the LLM,
+# is the bottleneck. Not exported globally: vLLM manages its own thread pools.
+OMP_NUM_THREADS=20 MKL_NUM_THREADS=20 \
 CUDA_VISIBLE_DEVICES=1 "$PY" scripts/run_official_baseline.py agentir \
   --repo-root "$OFFICIAL_ROOT" --full-eval --model-revision "$GEN_REV" \
   --record results/phase2/popqa_agentir.run.json -- \
@@ -63,7 +68,7 @@ CUDA_VISIBLE_DEVICES=1 "$PY" scripts/run_official_baseline.py agentir \
   --k 5 --max-iterations 100 \
   --query "$DATA/agentir_queries/popqa_full.tsv" \
   --QA-jsonl "$DATA/agentir_queries/popqa_full_qa.jsonl" \
-  --num-threads "${CONC:-4}" \
+  --num-threads "${CONC:-8}" \
   --output-dir "$OUT"
 stop_vllm
 
