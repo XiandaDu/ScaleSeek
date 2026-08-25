@@ -273,6 +273,14 @@ def load_bright(tasks: Optional[list[str]] = None,
                 if not line.strip():
                     continue
                 obj = json.loads(line)
+                # Tag the source task. BRIGHT retrieval is per-task by protocol:
+                # each task ships its own *_documents.jsonl and its gold ids only
+                # exist in that pool, so one merged index would both leak across
+                # tasks and inflate the pool ~10x. run_eval uses this to pick the
+                # matching per-task index. Taken from the FILENAME, not parsed out
+                # of the id: ids look like "bright_theoremqa_questions_3", and
+                # splitting on "_" would truncate the multi-word task names.
+                obj.setdefault("task", task)
                 rows.append(obj)
     rows = rows[offset:]
     if limit is not None:

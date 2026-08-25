@@ -198,15 +198,41 @@ def run_eval(args: argparse.Namespace) -> None:
     retriever = None
     retriever_manifest = None
     need_bm25 = args.agent in ("scaleseek", "rag", "search_r1", "search_o1")
+    # BRIGHT retrieves per task: each task has its own document pool and a
+    # query's golden_doc_ids live only in that pool, so one shared index would
+    # both leak across domains and inflate the pool ~10x. Indexes are built by
+    # scripts/build_bright_indexes.py under $BRIGHT_INDEX_ROOT/<task>/index.
+    # Cached because a Lucene searcher is expensive to open and the eval walks
+    # tasks in file order, not interleaved.
+    bright_retrievers: dict = {}
+
+    def _bright_retriever(task: str):
+        if task not in bright_retrievers:
+            from .bm25_retriever import BM25Retriever
+            root = os.environ.get("BRIGHT_INDEX_ROOT")
+            if not root:
+                sys.exit("BRIGHT needs $BRIGHT_INDEX_ROOT (see scripts/build_bright_indexes.py)")
+            tdir = Path(root) / task
+            if not (tdir / "index").is_dir():
+                sys.exit(f"no BRIGHT index for task {task!r} at {tdir}/index")
+            bright_retrievers[task] = BM25Retriever(index_dir=str(tdir))
+        return bright_retrievers[task]
+
     if need_bm25:
         if args.agent == "scaleseek":
-            from .bm25_retriever import BM25Retriever
-            retriever = BM25Retriever()
+            # BRIGHT resolves its retriever per example below; every other
+            # dataset uses the single index from $BM25_INDEX_DIR.
+            if args.dataset != "bright":
+                from .bm25_retriever import BM25Retriever
+                retriever = BM25Retriever()
         else:
             from .retrievers import build_retriever
             retriever = build_retriever(args.retriever, device=args.retriever_device)
         print(f"Retriever: {args.retriever if args.agent != 'scaleseek' else 'bm25-adaptive'}")
-        retriever_manifest = retriever.metadata
+        if retriever is None:  # BRIGHT: representative manifest from the first task
+            retriever_manifest = _bright_retriever(examples[0]["task"]).metadata
+        else:
+            retriever_manifest = retriever.metadata
         if args.full_eval and (retriever_manifest.get("manifest_missing")
                                or retriever_manifest.get("partial_smoke")
                                or not retriever_manifest.get("corpus_manifest_id")):
@@ -258,7 +284,9 @@ def run_eval(args: argparse.Namespace) -> None:
             # max_assistant_turns or max_new_tokens changed nothing.
             mcfg = method_cfg["method"]
             return run_agent(
-                ex, client=client, model=model, retriever=retriever,
+                ex, client=client, model=model,
+                retriever=(_bright_retriever(ex["task"]) if args.dataset == "bright"
+                           else retriever),
                 max_turns=mcfg["max_assistant_turns"],
                 max_tokens=mcfg["max_new_tokens"],
                 thinking_token_budget=mcfg.get("thinking_token_budget"),
