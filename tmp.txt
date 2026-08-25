@@ -1,0 +1,169 @@
+\textbf{Baselines.}
+We compare ScaleSeek with baselines under different corpus-access and training settings. (1) \textbf{Direct Output} generates answers using only the backbone LLM's parametric knowledge. (2) \textbf{RAG} follow a standard retrieve-then-generate pipeline, where a fixed set of top-$k$ documents is retrieved once and provided to the LLM as prompt context. (3) \textbf{Search-o1} and \textbf{Search-R1} represent iterative retrieval methods that alternate between reasoning and search. (4) \textbf{DCI} is a prompt-based agent that directly searches the full corpus without a first-stage retriever, while \textbf{DR-DCI} dynamically retrieves documents and adds them to an external workspace during inference. (5)\textbf{GrepSeek} is a training-based agent that searches a static full-corpus environment using grep-style operations. (6) \textbf{RISE-Ext} first constructs a bounded workspace with a retriever and then allows the agent to inspect the retrieved documents using grep and file-reading tools.  We provide implementation details in Appendix~\ref{app:baseline_details}.
+
+
+% NQ column filled from Narval Phase-3 runs (branch cluster-packing-and-decile-scope-Narval),
+% values are EM x100. Full split n=3,610 except DR-DCI/DCI/RISE (sanctioned cap, n=1,500).
+% Search-R1 rows use the official 7B v0.3 checkpoint; 14B v0.3 numbers (EM):
+%   BM25 40.4 / E5 50.3 / Qwen3-4B 49.3  -- side-by-side table goes in the appendix.
+% AgentIR (official loop, EM 21.9) has no row in this table layout.
+%
+% TriviaQA column filled from Rorqual Phase-3 runs (branch cluster-packing-and-decile-scope-Rorqual),
+% values are EM x100. Full split n=11,313 except DCI/DR-DCI/RISE (sanctioned cap, n=1,500; all ongoing).
+% Search-R1 rows use the official 7B v0.3 checkpoint; 14B v0.3 numbers (EM):
+%   BM25 67.6 / E5 69.5 / Qwen3-4B ongoing  -- side-by-side table goes in the appendix.
+% AgentIR ongoing (no row in this table layout).
+% Search-O1 rows ongoing (10,546 / 11,041 / 9,800 of 11,313 rows on disk, resume queued).
+\begin{table*}[t]
+\centering
+\label{tab:qa_performance}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{llcccccccc}
+\toprule
+\multirow{2}{*}{\textbf{Method}}
+& \multirow{2}{*}{\textbf{Retriever}}
+& \multicolumn{3}{c}{\textbf{Single-hop}}
+& \multicolumn{4}{c}{\textbf{Multi-hop}}
+& \multirow{2}{*}{\begin{tabular}[c]{@{}c@{}}\textbf{Average}\\ (micro)\end{tabular}} \\
+\cmidrule(lr){3-5}
+\cmidrule(lr){6-9}
+&
+& \textbf{NQ}$^{*}$
+& \textbf{TriviaQA}
+& \textbf{PopQA}
+& \textbf{HotpotQA}$^{*}$
+& \textbf{2Wiki}
+& \textbf{MuSiQue}
+& \textbf{Bamboogle}
+& \\
+\midrule
+
+\rowcolor{blue!10} & \multicolumn{9}{c}{\textit{\textbf{Traditional Retrieval Interface}}}  \\
+
+Direct
+& --- & 24.7 & 57.8 & & & & & & \\
+
+\midrule
+
+\multirow{3}{*}{RAG}
+& BM25     & 32.8 & 66.6 & & & & & & \\
+& E5-110M  & 42.3 & 68.4 & & & & & & \\
+& Qwen3-4B & 40.8 & 68.0 & & & & & & \\
+\midrule
+
+\multirow{3}{*}{Search-O1}
+& BM25     & 32.1 & ongoing & & & & & & \\
+& E5-110M  & 37.8 & ongoing & & & & & & \\
+& Qwen3-4B & 37.0 & ongoing & & & & & & \\
+\midrule
+
+\multirow{3}{*}{Search-R1}
+& BM25     & 33.1 & 60.4 & & & & & & \\
+& E5-110M  & 46.7 & 63.7 & & & & & & \\
+& Qwen3-4B & 45.1 & ongoing & & & & & & \\
+
+\midrule
+\rowcolor{orange!10} & \multicolumn{9}{c}{\textit{\textbf{Direct Coprus Interaction Interface}}}  \\
+
+DCI & --- & ongoing & ongoing & & & & & & \\
+\midrule
+
+DR-DCI & --- & 12.8 & ongoing & & & & & & \\ % n=1,500 capped subset
+\midrule
+
+RISE & BM25 & ongoing & ongoing & & & & & & \\
+
+\midrule
+GrepSeek & --- & 40.3 & 70.4 & & & & & & \\
+
+\midrule
+ScaleSeek & --- & 26.5 & 59.6 & & & & & & \\ % pre-RL prompt baseline (untrained)
+
+\bottomrule
+\end{tabular}
+}
+\caption{Performance (EM scores) across multiple QA datasets.
+Superscript $^{*}$ shows the datasets included in the training set, while all others are evaluated out-of-distribution.
+Superscript $\uparrow$ indicates a statistically significant improvement, while $\downarrow$ denotes a statistically significant decrease compared to the best-performing baseline.}
+\end{table*}
+
+
+% NQ column filled from the same runs, values are F1 x100.
+% Search-R1 = official 7B v0.3; 14B v0.3 (F1): BM25 49.8 / E5 58.8 / Qwen3-4B 57.8.
+% AgentIR F1 35.1 (no row in this layout).
+%
+% TriviaQA column filled from the same Rorqual runs, values are F1 x100.
+% Search-R1 = official 7B v0.3; 14B v0.3 (F1): BM25 74.8 / E5 76.7 / Qwen3-4B ongoing.
+% AgentIR ongoing (no row in this layout).
+\begin{table*}[t]
+\centering
+\label{tab:qa_performance}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{llcccccccc}
+\toprule
+\multirow{2}{*}{\textbf{Method}}
+& \multirow{2}{*}{\textbf{Retriever}}
+& \multicolumn{3}{c}{\textbf{Single-hop}}
+& \multicolumn{4}{c}{\textbf{Multi-hop}}
+& \multirow{2}{*}{\begin{tabular}[c]{@{}c@{}}\textbf{Average}\\ (micro)\end{tabular}} \\
+\cmidrule(lr){3-5}
+\cmidrule(lr){6-9}
+&
+& \textbf{NQ}$^{*}$
+& \textbf{TriviaQA}
+& \textbf{PopQA}
+& \textbf{HotpotQA}$^{*}$
+& \textbf{2Wiki}
+& \textbf{MuSiQue}
+& \textbf{Bamboogle}
+& \\
+\midrule
+
+\rowcolor{blue!10} & \multicolumn{9}{c}{\textit{\textbf{Traditional Retrieval Interface}}}  \\
+
+Direct
+& --- & 35.8 & 65.1 & & & & & & \\
+
+\midrule
+
+\multirow{3}{*}{RAG}
+& BM25     & 44.7 & 75.1 & & & & & & \\
+& E5-110M  & 55.0 & 77.0 & & & & & & \\
+& Qwen3-4B & 53.4 & 76.9 & & & & & & \\
+\midrule
+
+\multirow{3}{*}{Search-O1}
+& BM25     & 44.1 & ongoing & & & & & & \\
+& E5-110M  & 49.8 & ongoing & & & & & & \\
+& Qwen3-4B & 48.9 & ongoing & & & & & & \\
+\midrule
+
+\multirow{3}{*}{Search-R1}
+& BM25     & 41.7 & 67.8 & & & & & & \\
+& E5-110M  & 55.3 & 71.3 & & & & & & \\
+& Qwen3-4B & 54.0 & ongoing & & & & & & \\
+
+\midrule
+\rowcolor{orange!10} & \multicolumn{9}{c}{\textit{\textbf{Direct Coprus Interaction Interface}}}  \\
+
+DCI & --- & ongoing & ongoing & & & & & & \\
+\midrule
+
+DR-DCI & --- & 28.6 & ongoing & & & & & & \\ % n=1,500 capped subset
+\midrule
+
+RISE & BM25 & ongoing & ongoing & & & & & & \\
+
+\midrule
+GrepSeek & --- & 51.8 & 77.7 & & & & & & \\
+
+\midrule
+ScaleSeek & --- & 37.6 & 69.2 & & & & & & \\ % pre-RL prompt baseline (untrained)
+
+\bottomrule
+\end{tabular}
+}
+\caption{Performance (F1 scores) across multiple QA datasets.
+Superscript $^{*}$ shows the datasets included in the training set, while all others are evaluated out-of-distribution.
+Superscript $\uparrow$ indicates a statistically significant improvement, while $\downarrow$ denotes a statistically significant decrease compared to the best-performing baseline.}
+\end{table*}

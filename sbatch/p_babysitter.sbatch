@@ -18,7 +18,13 @@ cd /home/a32du/ScaleSeek
 export DS=${DS:-triviaqa}
 export PHASE=${PHASE:-phase3}
 
+START=$SECONDS
 while true; do
+  # Self-succession: this job dies at its own 7-day wall (it did twice, and the
+  # DAG then loses its healer). Hand off to a fresh copy at day 6.5.
+  if [ $((SECONDS - START)) -gt 561600 ]; then
+    sbatch /home/a32du/ScaleSeek/sbatch/p_babysitter.sbatch && exit 0
+  fi
   {
     echo "===== babysitter cycle $(date '+%F %T') ====="
     DS=$DS PHASE=$PHASE bash sbatch/submit_phase3.sh 2>&1 | grep -E "submit|reuse|skipping" || true
