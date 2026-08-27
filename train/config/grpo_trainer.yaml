@@ -42,8 +42,15 @@ trainer:
   resume_mode: auto
   resume_from_path: null
   del_local_ckpt_after_load: false
-  val_before_train: true
+  # 关掉：续跑链里每段恢复后都会重跑一次全 dev 验证（2000 条，实测 34 分钟），
+  # 而验的是上一段刚存的同一个 step —— 纯重复。加上 ~71 分钟初始化，3h 段的
+  # 固定开销就到 105 分钟，只剩 75 分钟训练（2026-08-26 作业 20501423/20501426
+  # 各跑满 3h 却只推进 1 步，step 130 原地踏步）。
+  # 定期验证仍由 test_freq 负责。
+  val_before_train: false
   val_only: false
+  # 注意：save_freq 被 rl_train.sbatch 的 RL_SAVE_FREQ（默认 10）覆盖，
+  # 续跑链要求每段至少存一次 checkpoint。这里的值只在直接调 run_rl.sh 时生效。
   test_freq: 40
   save_freq: 40
   log_val_generations: 8
