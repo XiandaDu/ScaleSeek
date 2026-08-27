@@ -81,6 +81,8 @@ else INPUT=$(find "$RAW" -name "*.jsonl" -print -quit); fi
   --dataset-manifest "$DS_MANIFEST" \
   --dataset-jsonl "$DATA/dcilite_datasets/${DS}_cap1500.jsonl" \
   --id-field query_id \
+  --prediction-field final_text --finish-field run_status \
+  --tool-calls-field tool_metrics.call_count \
   --output $RESULTS_DIR/${DS}_dci.jsonl
 sane $RESULTS_DIR/${DS}_dci.jsonl
 "$PY" scripts/compute_metrics.py --results $RESULTS_DIR/${DS}_dci.jsonl \
