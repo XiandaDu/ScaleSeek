@@ -11,6 +11,9 @@
 # materialized Wiki-18 corpus with Qwen3.5-9B served via vLLM.
 # TMPDIR redirection in common.sh is load-bearing here: Pi writes every bash
 # tool stdout to os.tmpdir(), which on octal30 is tmpfs (RAM).
+# CONC default 16 on Rorqual: the corpus greps run on node-local NVMe, not the
+# shared disk that forced CONC=2 on RALI; at 2 the 1,500-question set is ~24
+# days (74 done in 28h, job 19191673), at 16 it fits the 72h wall with resume.
 source /home/a32du/ScaleSeek/sbatch/common.sh
 trap 'code=$?; stop_vllm; cleanup_tmpdir; advance_lane; exit $code' EXIT
 export PATH=/scratch/a32du/tools/node/bin:$PATH
@@ -59,7 +62,7 @@ export OPENAI_API_KEY=dummy
   --model Qwen/Qwen3.5-9B --provider vllm \
   --agent-dir "$PI_CODING_AGENT_DIR" \
   --max-turns 300 --runtime-context-level level3 \
-  --tools read,bash --max-concurrency "${CONC:-2}" \
+  --tools read,bash --max-concurrency "${CONC:-16}" \
   --judge-model Qwen/Qwen3.5-9B \
   --dataset "$DATA/dcilite_datasets/${DS}_cap1500.jsonl" \
   --corpus-dir "$DCI_CORPUS" \
