@@ -148,13 +148,26 @@ MAIN_PID=$!
 
 STALL_MIN="${RL_STALL_MIN:-100}"
 (
+  # set -e 必须在这个子 shell 里关掉。2026-08-28 作业 20657741/20657743 各烧满
+  # 6h 零训练步：看门狗在 +30min 打完最后一行后就静默死了，断路器再没机会检查
+  # "有没有训练步"。
+  #
+  # 机制是继承自外层的 `set -euo pipefail` 撞上看门狗里两处必然非零的构造
+  # （两者都实测复现过）：
+  #   * `"$PYSPY" dump ... | head -25` —— head 读够就关管道，py-spy 收 SIGPIPE
+  #     退出 141，pipefail 把它变成整条管道的状态，set -e 随即退出子 shell。
+  #   * `util=$(nvidia-smi ... | paste)` —— 简单赋值的退出码就是命令替换的退出码。
+  # （注：`for p in $(pgrep ...)` 反而是安全的 —— 命令替换的状态不构成 for 的
+  #  状态，无匹配时循环迭代零次并成功。）
+  # 看门狗全是"允许失败"的探针，正确做法是整段关掉 errexit。
+  set +e
   t=0
   while kill -0 "$MAIN_PID" 2>/dev/null; do
     sleep 900; t=$((t+15))
     util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | paste -sd, -)
     echo "[watchdog] +${t}min gpu_util=[${util}]"
     if [ -x "$PYSPY" ]; then
-      for p in $(pgrep -f "ray::TaskRunner|verl.trainer.main_ppo" | head -2); do
+      for p in $(pgrep -f "ray::TaskRunner|verl.trainer.main_ppo" 2>/dev/null | head -2); do
         echo "[watchdog] py-spy dump pid=$p:"
         "$PYSPY" dump --pid "$p" 2>&1 | head -25
       done
