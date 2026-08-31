@@ -64,19 +64,57 @@ CUDA_VISIBLE_DEVICES=1 "$PY" scripts/run_official_baseline.py agentir \
   --record results/phase2/popqa_agentir.run.json -- \
   --model Qwen/Qwen3.5-9B --model-url "http://127.0.0.1:$PORT/v1" \
   --searcher-type faiss --index-path "$DATA/agentir_official_index/resharded/corpus.reshard.*.pkl" \
+  --dataset-name json --data-files "$DATA/agentir_official_index/corpus_tevatron.jsonl" \
   --model-name "$SNAP" --reasoning-aware --normalize \
   --k 5 --max-iterations 100 \
   --query "$DATA/agentir_queries/popqa_full.tsv" \
   --QA-jsonl "$DATA/agentir_queries/popqa_full_qa.jsonl" \
   --num-threads "${CONC:-8}" \
-  --output-dir "$OUT"
+  --output-dir "$OUT" &
+HARNESS_PID=$!
+# Validity gate on the FIRST trajectories: 7571 ran three days of blind
+# retrieval because the searcher's docid->text lookup defaulted to the
+# BrowseComp-Plus corpus (--dataset-name default) against Wiki-18 docids --
+# 93% of trajectories carried "Text not found" in every snippet and the agent
+# answered from parametric knowledge. The explicit json/data-files args above
+# fix it; this gate makes any recurrence cost minutes, not days.
+(
+  while kill -0 "$HARNESS_PID" 2>/dev/null; do
+    early=$(ls "$OUT"/run_*.json 2>/dev/null | head -25)
+    n=$(printf '%s\n' "$early" | grep -c . || true)
+    if [ "${n:-0}" -ge 25 ]; then
+      bad=$(grep -l "Text not found" $early 2>/dev/null | wc -l)
+      if [ "$bad" -gt 5 ]; then
+        echo "FATAL: $bad/25 early trajectories hit 'Text not found' -- the"
+        echo "       docid->text lookup is broken again; killing the run now"
+        kill "$HARNESS_PID" 2>/dev/null
+      fi
+      break
+    fi
+    sleep 60
+  done
+) &
+GATE_PID=$!
+HR=0; wait "$HARNESS_PID" || HR=$?
+kill "$GATE_PID" 2>/dev/null || true
+[ "$HR" -eq 0 ] || { echo "FATAL: harness exited $HR"; exit 1; }
 stop_vllm
 
 echo "== normalize + metrics =="
+# The client echoes neither question nor golds and writes one Responses-style
+# json per query; the converter joins golds back from the canonical dataset
+# and takes the last output_text (7571 died here on default field names:
+# "empty or duplicate IDs"). Answer format is the official Exact Answer block,
+# same regex as DR-DCI/RISE.
+"$PY" scripts/convert_agentir_raw.py --raw-dir "$OUT" \
+  --dataset-jsonl "$POPQA_NORM" --output "$OUT/results.jsonl"
 "$PY" scripts/normalize_official_results.py --method agentir \
-  --input "$OUT" \
+  --input "$OUT/results.jsonl" \
   --run-record results/phase2/popqa_agentir.run.json \
   --dataset-manifest "$POPQA_MANIFEST" --dataset-jsonl "$POPQA_NORM" \
+  --id-field query_id \
+  --prediction-field final_text --answer-regex '^\**Exact Answer\**:\s*(.+?)\s*$' \
+  --finish-field status --turns-field n_turns \
   --output results/phase2/popqa_agentir.jsonl
 sane results/phase2/popqa_agentir.jsonl
 "$PY" scripts/compute_metrics.py --results results/phase2/popqa_agentir.jsonl \
