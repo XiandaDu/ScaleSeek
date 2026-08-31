@@ -53,9 +53,13 @@ import hashlib
 import json
 from typing import Any, Iterable, Sequence
 
-# The one sanctioned cap. Kept as a constant so a stray `--cap 300` cannot
-# quietly invent a third evaluation scope.
+# Sanctioned caps only, so a stray `--cap 300` cannot quietly invent an
+# undocumented evaluation scope. 1500: 2026-07-30 user approval (TASK.md
+# "评测规模上限"). 500: 2026-08-27 user decision for the remaining call-bound
+# rows (queue congestion made 1500 impractical); same SHA256-rank mechanism,
+# and the rank-order prefix property makes cap500 a strict subset of cap1500.
 MAX_EVAL_N = 1500
+SANCTIONED_CAPS = {500, 1500}
 
 
 def _rank_key(dataset: str, example_id: Any) -> str:

@@ -26,12 +26,12 @@ METHOD=${METHOD:?export METHOD=dci|dr_dci|rise|grepseek}
 RAW=$REPO/$RESULTS_DIR/${METHOD}_raw
 OUT=$REPO/$RESULTS_DIR/${DS}_${METHOD}.jsonl
 RUNREC=$REPO/$RESULTS_DIR/${DS}_${METHOD}.run.json
-CAP=$DATA/dcilite_datasets/${DS}_cap1500.jsonl
+CAP=$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.jsonl
 
 # The capped harnesses are scored against the subset; grepseek against the split.
 case "$METHOD" in
   # The Pi harness family names the id "query_id"; grepseek emits "id".
-  dci|dr_dci|rise) REF=$CAP; EXPECT=(--expect-ids "$DATA/dcilite_datasets/${DS}_cap1500.manifest.json"); EXTRA=(--id-field query_id --prediction-field final_text --finish-field run_status --tool-calls-field tool_metrics.call_count --gold-field gold_answer --gold-split ' / ' --prediction-regex 'Exact Answer[:*]*\s*(.+)');;
+  dci|dr_dci|rise) REF=$CAP; EXPECT=(--expect-ids "$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.manifest.json"); EXTRA=(--id-field query_id --prediction-field final_text --finish-field run_status --tool-calls-field tool_metrics.call_count --gold-field gold_answer --gold-split ' / ' --prediction-regex 'Exact Answer[:*]*\s*(.+)');;
   grepseek)        REF=$DS_NORM; EXPECT=(); EXTRA=(--id-prefix "${DS}_");;
   *) echo "FATAL: unknown METHOD=$METHOD"; exit 2;;
 esac

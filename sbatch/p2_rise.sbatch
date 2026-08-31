@@ -36,7 +36,8 @@ PORT=$((10000 + SLURM_JOB_ID % 20000))
 ARCHIVE=$DATA/rise_wiki_articles.tar.zst
 TOC_DIR=$DATA/rise_toc_structured
 META=$DATA/rise_wiki_articles_meta
-CAND=$META/candidates_${DS}.txt
+CAND=$META/candidates_${DS}_cap${CAP:-1500}.txt
+[ "${CAP:-1500}" = 1500 ] && [ ! -f "$CAND" ] && [ -f "$META/candidates_${DS}.txt" ] && CAND=$META/candidates_${DS}.txt
 DOCS=$TMPDIR/rise_wiki_articles_structured
 RISE_INDEX=$DATA/rise_bm25_index_wiki_${DS}
 MAP=$RISE_INDEX/filename_docid_map.json
@@ -85,7 +86,7 @@ cd "$REPO"
 # manifest is derived from the subset manifest's fingerprinted subset_n. The
 # real ID-set check happens in compute_metrics --expect-ids below.
 GATE_MANIFEST=$TMPDIR/rise_gate_manifest.json
-"$PY" - "$DATA/dcilite_datasets/${DS}_cap1500.manifest.json" "$GATE_MANIFEST" <<'PYEOF'
+"$PY" - "$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.manifest.json" "$GATE_MANIFEST" <<'PYEOF'
 import json, sys
 sub = json.load(open(sys.argv[1]))
 json.dump({"count": sub["subset_n"], "unique_ids": sub["subset_n"],
@@ -107,7 +108,7 @@ echo "== continuous scratch sync (results only; workspaces archived at end) =="
   --dataset-manifest "$GATE_MANIFEST" \
   --record $RESULTS_DIR/${DS}_rise.run.json -- \
   --model Qwen/Qwen3.5-9B \
-  --mini-dev "$DATA/dcilite_datasets/${DS}_cap1500.jsonl" \
+  --mini-dev "$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.jsonl" \
   --bm25-k 1000 --bm25-top-n-preview 10 --max-turns 100 \
   --bash-truncate-chars 4000 --read-default-limit 2000 \
   --structured-docs --index-dir "$RISE_INDEX" \
@@ -138,11 +139,11 @@ else INPUT=$(find "$RAW" -name '*.jsonl' -printf '%T@ %p\n' | sort -rn | awk 'NR
   --input "$INPUT" \
   --run-record $RESULTS_DIR/${DS}_rise.run.json \
   --dataset-manifest "$DS_MANIFEST" \
-  --dataset-jsonl "$DATA/dcilite_datasets/${DS}_cap1500.jsonl" \
+  --dataset-jsonl "$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.jsonl" \
   --id-field query_id \
   --output $RESULTS_DIR/${DS}_rise.jsonl
 sane $RESULTS_DIR/${DS}_rise.jsonl
 "$PY" scripts/compute_metrics.py --results $RESULTS_DIR/${DS}_rise.jsonl \
-  --dataset "$DS" --agent rise --expect-ids "$DATA/dcilite_datasets/${DS}_cap1500.manifest.json" \
+  --dataset "$DS" --agent rise --expect-ids "$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.manifest.json" \
   --out $RESULTS_DIR/${DS}_rise.metrics.json
 echo "ALL_DONE ${DS}_rise"

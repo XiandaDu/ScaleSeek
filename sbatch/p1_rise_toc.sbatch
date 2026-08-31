@@ -54,8 +54,9 @@ unset XIAOMI_API_KEY DEEPSEEK_API_KEY 2>/dev/null || true
 # articles reachable from the evaluated questions get an LLM-built TOC (the
 # empty-TOC passthrough for the rest happens inside p2_rise; the retrieval
 # boundary stays the full corpus).
-CAND=$META/candidates_${DS}.txt
-QSET=$DATA/dcilite_datasets/${DS}_cap1500.jsonl
+CAND=$META/candidates_${DS}_cap${CAP:-1500}.txt
+[ "${CAP:-1500}" = 1500 ] && [ ! -f "$CAND" ] && [ -f "$META/candidates_${DS}.txt" ] && CAND=$META/candidates_${DS}.txt
+QSET=$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.jsonl
 # Fail on the real cause. 7292 died here because this file did not exist yet
 # (p0_assets generates it), but the handler below blamed the cost gate and told
 # the operator to lower RISE_CAND_TOPK -- which would not have helped at all.

@@ -64,7 +64,7 @@ export OPENAI_API_KEY=dummy
   --max-turns 300 --runtime-context-level level3 \
   --tools read,bash --max-concurrency "${CONC:-16}" \
   --judge-model Qwen/Qwen3.5-9B \
-  --dataset "$DATA/dcilite_datasets/${DS}_cap1500.jsonl" \
+  --dataset "$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.jsonl" \
   --corpus-dir "$DCI_CORPUS" \
   --output-root "$RAW"
 stop_vllm
@@ -82,7 +82,7 @@ else INPUT=$(find "$RAW" -name "*.jsonl" -print -quit); fi
   --input "$INPUT" \
   --run-record $RESULTS_DIR/${DS}_dci.run.json \
   --dataset-manifest "$DS_MANIFEST" \
-  --dataset-jsonl "$DATA/dcilite_datasets/${DS}_cap1500.jsonl" \
+  --dataset-jsonl "$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.jsonl" \
   --id-field query_id \
   --prediction-field final_text --finish-field run_status \
   --tool-calls-field tool_metrics.call_count \
@@ -90,6 +90,6 @@ else INPUT=$(find "$RAW" -name "*.jsonl" -print -quit); fi
   --output $RESULTS_DIR/${DS}_dci.jsonl
 sane $RESULTS_DIR/${DS}_dci.jsonl
 "$PY" scripts/compute_metrics.py --results $RESULTS_DIR/${DS}_dci.jsonl \
-  --dataset "$DS" --agent dci --expect-ids "$DATA/dcilite_datasets/${DS}_cap1500.manifest.json" \
+  --dataset "$DS" --agent dci --expect-ids "$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.manifest.json" \
   --out $RESULTS_DIR/${DS}_dci.metrics.json
 echo "ALL_DONE ${DS}_dci"

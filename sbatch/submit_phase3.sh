@@ -34,7 +34,10 @@ for r in dci_agent_lite dr_dci rise agentir grepseek; do
     echo "FATAL: $OFFICIAL_ROOT/$r missing — run scripts/rorqual_login_setup.sh first"; exit 1; }
 done
 
-EXP=ALL,DS=$DS,PHASE=$PHASE
+# CAP=500 (2026-08-27 user decision): remaining call-bound rows evaluate the
+# deterministic SHA256-rank 500-subset; finished rows keep their n.
+export CAP=${CAP:-500}
+EXP=ALL,DS=$DS,PHASE=$PHASE,CAP=$CAP
 # Idempotent by JOB NAME: if a job of this name is already pending/running,
 # reuse its id for downstream dependencies instead of double-submitting (a
 # second copy of a resumable index build would fight the first one's
@@ -136,7 +139,7 @@ cell search_r1_7b_qwen3emb  search_r1 qwen3_emb_4b 7b 2
 cell search_r1_14b_qwen3emb search_r1 qwen3_emb_4b 14b 2
 [ -f "results/$PHASE/${DS}_grepseek.metrics.json" ] && echo "done    p3_grepseek" >&2 || sub p3_grepseek --export="$EXP" $(dep $ACCEPT) sbatch/p2_grepseek.sbatch >/dev/null
 [ -f "results/$PHASE/${DS}_dr_dci.metrics.json" ] && echo "done    p3_dr_dci" >&2 || sub p3_dr_dci   -t 72:00:00 --export="$EXP" $(dep $ACCEPT) sbatch/p2_dr_dci.sbatch >/dev/null
-[ -f "results/$PHASE/${DS}_agentir.metrics.json" ] && echo "done    p3_agentir" >&2 || sub p3_agentir  --export="$EXP" $(dep $ACCEPT $AIRENC) sbatch/p2_agentir.sbatch >/dev/null
+[ -f "results/$PHASE/${DS}_agentir.metrics.json" ] && echo "done    p3_agentir" >&2 || sub p3_agentir  --export="$EXP,SCOPE=cap${CAP}" $(dep $ACCEPT $AIRENC) sbatch/p2_agentir.sbatch >/dev/null
 [ -f "results/$PHASE/${DS}_dci.metrics.json" ] && echo "done    p3_dci" >&2 || sub p3_dci      -t 72:00:00 --export="$EXP" $(dep $ACCEPT $DCICORP) sbatch/p2_dci.sbatch >/dev/null
 [ -f "results/$PHASE/${DS}_rise.metrics.json" ] && echo "done    p3_rise" >&2 || sub p3_rise     --export="$EXP" $(dep $ACCEPT $RISETOC) sbatch/p2_rise.sbatch >/dev/null
 

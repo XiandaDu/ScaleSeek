@@ -106,7 +106,7 @@ mkdir -p "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty"
   --pull-preview-mode ranked --pull-preview-limit 20 \
   --max-concurrency "${CONC:-4}" --skip-judge \
   --pi-thinking-level high --node-max-old-space-size-mb 8192 \
-  --dataset "$DATA/dcilite_datasets/${DS}_cap1500.jsonl" \
+  --dataset "$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.jsonl" \
   --corpus-dir "$OFFICIAL_ROOT/dr_dci/corpus/wiki18_empty" \
   --output-root "$RAW_LOCAL"
 stop_vllm
@@ -134,7 +134,7 @@ else INPUT=$(find "$RAW" -name "*.jsonl" -print -quit); fi
   --input "$INPUT" \
   --run-record $RESULTS_DIR/${DS}_dr_dci.run.json \
   --dataset-manifest "$DS_MANIFEST" \
-  --dataset-jsonl "$DATA/dcilite_datasets/${DS}_cap1500.jsonl" \
+  --dataset-jsonl "$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.jsonl" \
   --id-field query_id \
   --prediction-field final_text --finish-field run_status \
   --tool-calls-field tool_metrics.call_count \
@@ -142,6 +142,6 @@ else INPUT=$(find "$RAW" -name "*.jsonl" -print -quit); fi
   --output $RESULTS_DIR/${DS}_dr_dci.jsonl
 sane $RESULTS_DIR/${DS}_dr_dci.jsonl
 "$PY" scripts/compute_metrics.py --results $RESULTS_DIR/${DS}_dr_dci.jsonl \
-  --dataset "$DS" --agent dr_dci --expect-ids "$DATA/dcilite_datasets/${DS}_cap1500.manifest.json" \
+  --dataset "$DS" --agent dr_dci --expect-ids "$DATA/dcilite_datasets/${DS}_cap${CAP:-1500}.manifest.json" \
   --out $RESULTS_DIR/${DS}_dr_dci.metrics.json
 echo "ALL_DONE ${DS}_dr_dci"

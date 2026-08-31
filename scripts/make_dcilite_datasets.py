@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from eval.datasets import load_dataset  # noqa: E402
-from eval.subsets import MAX_EVAL_N, select, subset_manifest  # noqa: E402
+from eval.subsets import MAX_EVAL_N, SANCTIONED_CAPS, select, subset_manifest  # noqa: E402
 
 OUT_DIR = Path("/data/rech/mofengra/dr_dci_official/data/dci-bench/data/_scaleseek")
 
@@ -46,8 +46,8 @@ def main() -> None:
     args = ap.parse_args()
     if args.cap is not None and args.n is not None:
         ap.error("--cap and -n are mutually exclusive")
-    if args.cap is not None and args.cap != MAX_EVAL_N:
-        ap.error(f"only --cap {MAX_EVAL_N} is sanctioned by TASK.md; a different "
+    if args.cap is not None and args.cap not in SANCTIONED_CAPS:
+        ap.error(f"only --cap in {sorted(SANCTIONED_CAPS)} is sanctioned; a different "
                  "cap would create an undocumented evaluation scope")
 
     out_dir = Path(args.out_dir)
