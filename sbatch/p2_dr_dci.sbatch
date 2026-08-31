@@ -138,6 +138,7 @@ else INPUT=$(find "$RAW" -name "*.jsonl" -print -quit); fi
   --id-field query_id \
   --prediction-field final_text --finish-field run_status \
   --tool-calls-field tool_metrics.call_count \
+  --gold-split ' / ' --prediction-regex 'Exact Answer[:*]*\s*(.+)' \
   --output $RESULTS_DIR/${DS}_dr_dci.jsonl
 sane $RESULTS_DIR/${DS}_dr_dci.jsonl
 "$PY" scripts/compute_metrics.py --results $RESULTS_DIR/${DS}_dr_dci.jsonl \

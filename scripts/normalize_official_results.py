@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -72,6 +73,15 @@ def main() -> None:
     parser.add_argument("--question-field", default="question")
     parser.add_argument("--gold-field", default="gold_answers")
     parser.add_argument("--prediction-field", default="prediction")
+    parser.add_argument("--prediction-regex", default=None,
+                        help="If set, extract group(1) of this regex from the prediction "
+                             "text (e.g. the DCI protocol's 'Exact Answer: ...' line); "
+                             "rows without a match keep the full text. Markdown bold "
+                             "asterisks around the captured answer are stripped.")
+    parser.add_argument("--gold-split", default=None,
+                        help="If set and the gold field is a single string, split it on "
+                             "this delimiter (the dci-lite conversion joins gold answers "
+                             "with ' / ').")
     parser.add_argument("--finish-field", default="finish_reason")
     parser.add_argument("--turns-field", default="turns")
     parser.add_argument("--tool-calls-field", default="n_tool_calls")
@@ -85,13 +95,19 @@ def main() -> None:
     for source, row in load_rows(args.input):
         gold = get(row, args.gold_field, [])
         if isinstance(gold, str):
-            gold = [gold]
+            gold = gold.split(args.gold_split) if args.gold_split else [gold]
+            gold = [g.strip() for g in gold if g.strip()]
         turns = get(row, args.turns_field, []) or []
+        prediction = get(row, args.prediction_field)
+        if args.prediction_regex and isinstance(prediction, str):
+            m = re.search(args.prediction_regex, prediction)
+            if m:
+                prediction = m.group(1).strip().strip("*").strip()
         output.append({
             "id": _canonical_id(str(get(row, args.id_field, "")), args.id_prefix),
             "question": get(row, args.question_field, ""),
             "gold_answers": gold,
-            "prediction": get(row, args.prediction_field),
+            "prediction": prediction,
             "finish_reason": get(row, args.finish_field, "unknown"),
             "n_turns": len(turns) if isinstance(turns, list) else 0,
             "n_tool_calls": int(get(row, args.tool_calls_field, 0) or 0),
