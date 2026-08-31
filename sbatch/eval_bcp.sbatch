@@ -34,7 +34,11 @@ export BM25_INDEX_DIR=$DATA/bcp_bm25_index
 [ -d "$BM25_INDEX_DIR/index" ] || { echo "FATAL: BCP 索引不存在 —— 先跑 sbatch/p0_bcp.sbatch"; exit 1; }
 
 # --- 解析 SFT checkpoint ---
+# EVAL_RL_STEP=<n> 评 RL checkpoint（自动合并 FSDP 分片）；不设则用最新 SFT
 MODEL="${EVAL_MODEL:-}"
+if [ -z "$MODEL" ] && [ -n "${EVAL_RL_STEP:-}" ]; then
+  MODEL=$(bash scripts/merge_rl_ckpt.sh "$EVAL_RL_STEP")
+fi
 if [ -z "$MODEL" ]; then
   MODEL=$(find "$SFT_CKPT_DIR" -type d -name huggingface -printf '%T@ %p\n' 2>/dev/null \
           | sort -n | tail -1 | cut -d' ' -f2-)

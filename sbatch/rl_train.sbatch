@@ -127,7 +127,7 @@ RL_WORKERS=$(( ${SLURM_CPUS_PER_TASK:-8} < 8 ? ${SLURM_CPUS_PER_TASK:-8} : 8 ))
 #   2. 看门狗：每 15 分钟打时间戳 + GPU 利用率 + 主进程 py-spy 栈 —— 再挂死时
 #      日志里直接有挂在哪一行的证据。
 #   3. 断路器：无训练步 **且** GPU 连续闲置才判挂死（RL_STALL_MIN，默认 100 分钟）；
-#      另有 RL_HARD_MAX（210 分钟）不看利用率的兜底。只看「有没有 step」会误杀
+#      另有 RL_HARD_MAX（210 分钟，利用率 <50%）兜底。只看「有没有 step」会误杀
 #      慢但健康的作业 —— 2026-08-31 就发生过。
 export HF_HUB_OFFLINE=1
 export RAY_DEDUP_LOGS=0
@@ -148,7 +148,7 @@ bash scripts/run_rl.sh \
 MAIN_PID=$!
 
 STALL_MIN="${RL_STALL_MIN:-100}"   # 配合 GPU 闲置判据
-HARD_MAX="${RL_HARD_MAX:-210}"     # 不看利用率的兜底（6h 段留 3h 训练余量）
+HARD_MAX="${RL_HARD_MAX:-210}"     # 兜底（仍要求 GPU 利用率 <50%）
 (
   # set -e 必须在这个子 shell 里关掉。2026-08-28 作业 20657741/20657743 各烧满
   # 6h 零训练步：看门狗在 +30min 打完最后一行后就静默死了，断路器再没机会检查
@@ -187,8 +187,10 @@ HARD_MAX="${RL_HARD_MAX:-210}"     # 不看利用率的兜底（6h 段留 3h 训
         kill -TERM "$MAIN_PID" 2>/dev/null; sleep 60; kill -KILL "$MAIN_PID" 2>/dev/null
         break
       fi
-      if [ "$t" -ge "$HARD_MAX" ]; then
-        echo "[watchdog] FATAL: ${HARD_MAX} 分钟仍无训练步（GPU 利用率 ${mean_util}%）—— 硬兜底终止"
+      # 硬兜底同样要看利用率，否则又变成误杀慢作业（首步实测已 >105 分钟）。
+      # 这里放宽到 <50%：真死锁不会持续吃满 GPU，而健康的 rollout 会。
+      if [ "$t" -ge "$HARD_MAX" ] && [ "${mean_util:-0}" -lt 50 ]; then
+        echo "[watchdog] FATAL: ${HARD_MAX} 分钟仍无训练步且 GPU 利用率仅 ${mean_util}% —— 硬兜底终止"
         kill -TERM "$MAIN_PID" 2>/dev/null; sleep 60; kill -KILL "$MAIN_PID" 2>/dev/null
         break
       fi

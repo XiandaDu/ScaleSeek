@@ -20,7 +20,11 @@ trap 'stop_vllm; cleanup_tmpdir' EXIT
 export BRIGHT_INDEX_ROOT="${BRIGHT_INDEX_ROOT:-$DATA/bright_indexes}"
 [ -d "$BRIGHT_INDEX_ROOT" ] || { echo "FATAL: 缺 BRIGHT 索引 — 先跑 sbatch/p0_bright.sbatch"; exit 1; }
 
+# EVAL_RL_STEP=<n> 评 RL checkpoint（自动合并 FSDP 分片）；不设则用最新 SFT
 MODEL="${EVAL_MODEL:-}"
+if [ -z "$MODEL" ] && [ -n "${EVAL_RL_STEP:-}" ]; then
+  MODEL=$(bash scripts/merge_rl_ckpt.sh "$EVAL_RL_STEP")
+fi
 if [ -z "$MODEL" ]; then
   MODEL=$(find "$SFT_CKPT_DIR" -type d -name huggingface -printf '%T@ %p\n' 2>/dev/null \
           | sort -n | tail -1 | cut -d' ' -f2-)

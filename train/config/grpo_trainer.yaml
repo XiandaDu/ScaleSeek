@@ -38,7 +38,9 @@ trainer:
   timestamp: ""
   experiment_name: scaleseek_grpo_${actor_rollout_ref.rollout.n}rollouts_bs${data.train_batch_size}${trainer.timestamp}
   total_epochs: 1
-  total_training_steps: 200      # TBD: tune once SFT warm-start is ready
+  # 200 是 SFT 就绪前拍的占位值，已在 2026-08-31 跑到 190。续跑链要继续推进就得
+  # 抬高它，否则后续段全部空转。500 步 = 32000 道题（数据集 202553 条，仍是部分 epoch）。
+  total_training_steps: 500
   resume_mode: auto
   resume_from_path: null
   del_local_ckpt_after_load: false
