@@ -5,11 +5,13 @@
 # a 257G node -- faiss IndexFlat.add() grows a std::vector, and the doubling
 # realloc needs old+new address space transiently (7530: std::bad_alloc at
 # piece 13/16, ~154G loaded). 215G of flat codes under a ~250G ceiling is
-# arithmetically impossible with an add()-only loader. This job PENDS until
-# the admins undrain octal41 ("update", since 08-20) and starts by itself;
-# octal40 stays banned (silently kills every job in ~30s: 7494/7522/7523).
+# arithmetically impossible with an add()-only loader. Eligible for BOTH
+# 500G nodes, first to free wins: octal40's silent-killer era (7494/7522/
+# 7523, still reproducible on 08-23 probe 7533) appears over -- a foreign
+# job has survived 14h+ on it on 08-30 -- and assert_gpus_usable plus the
+# text-lookup validity gate turn any relapse into a minutes-scale failure.
 # L40S 48G serve the 9B at tp=1: vLLM on GPU0, AgentIR-4B encoder on GPU1.
-#SBATCH -w octal41
+#SBATCH --exclude=octal25,octal30,octal31,octal35
 #SBATCH --gres=gpu:2
 #SBATCH -c 24
 #SBATCH --mem=450G
