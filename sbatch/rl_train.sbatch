@@ -126,8 +126,9 @@ RL_WORKERS=$(( ${SLURM_CPUS_PER_TASK:-8} < 8 ? ${SLURM_CPUS_PER_TASK:-8} : 8 ))
 #      从"无限挂起"变成"立即报错或走缓存"。
 #   2. 看门狗：每 15 分钟打时间戳 + GPU 利用率 + 主进程 py-spy 栈 —— 再挂死时
 #      日志里直接有挂在哪一行的证据。
-#   3. 断路器：RL_STALL_MIN（默认 100 分钟 —— 实测每段初始化就要 71 分钟）内日志
-#      没出现任何 step: 就主动自杀，把节点还回去而不是烧满墙钟。
+#   3. 断路器：无训练步 **且** GPU 连续闲置才判挂死（RL_STALL_MIN，默认 100 分钟）；
+#      另有 RL_HARD_MAX（210 分钟）不看利用率的兜底。只看「有没有 step」会误杀
+#      慢但健康的作业 —— 2026-08-31 就发生过。
 export HF_HUB_OFFLINE=1
 export RAY_DEDUP_LOGS=0
 export HYDRA_FULL_ERROR=1
@@ -146,7 +147,8 @@ bash scripts/run_rl.sh \
     "$@" &
 MAIN_PID=$!
 
-STALL_MIN="${RL_STALL_MIN:-100}"
+STALL_MIN="${RL_STALL_MIN:-100}"   # 配合 GPU 闲置判据
+HARD_MAX="${RL_HARD_MAX:-210}"     # 不看利用率的兜底（6h 段留 3h 训练余量）
 (
   # set -e 必须在这个子 shell 里关掉。2026-08-28 作业 20657741/20657743 各烧满
   # 6h 零训练步：看门狗在 +30min 打完最后一行后就静默死了，断路器再没机会检查
@@ -161,7 +163,7 @@ STALL_MIN="${RL_STALL_MIN:-100}"
   #  状态，无匹配时循环迭代零次并成功。）
   # 看门狗全是"允许失败"的探针，正确做法是整段关掉 errexit。
   set +e
-  t=0
+  t=0; idle=0
   while kill -0 "$MAIN_PID" 2>/dev/null; do
     sleep 900; t=$((t+15))
     util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | paste -sd, -)
@@ -172,10 +174,24 @@ STALL_MIN="${RL_STALL_MIN:-100}"
         "$PYSPY" dump --pid "$p" 2>&1 | head -25
       done
     fi
-    if [ "$t" -ge "$STALL_MIN" ] && ! grep -aq "step:" "$RL_LOG" 2>/dev/null; then
-      echo "[watchdog] FATAL: ${STALL_MIN} 分钟无任何训练步 —— 判定挂死，主动终止以释放节点"
-      kill -TERM "$MAIN_PID" 2>/dev/null; sleep 60; kill -KILL "$MAIN_PID" 2>/dev/null
-      break
+    # 「无训练步」单独不足以判定挂死 —— 它也可能只是慢。2026-08-31 作业
+    # 20839641 就被误杀：四张卡全程 40-100% 利用率明明在算 rollout，只是
+    # 20480 上下文让每序列 KV 大了 43%、并发下降，首步落到 100 分钟之后。
+    # 所以要求「无训练步」且「GPU 基本闲置」同时成立，再加一个不看利用率的
+    # 硬兜底，防止 GPU 空转式的死锁。
+    mean_util=$(echo "$util" | tr ',' '\n' | awk 'NF{s+=$1;n++} END{print (n?int(s/n):0)}')
+    if [ "${mean_util:-0}" -lt 10 ]; then idle=$((idle+1)); else idle=0; fi
+    if ! grep -aq "step:" "$RL_LOG" 2>/dev/null; then
+      if [ "$t" -ge "$STALL_MIN" ] && [ "$idle" -ge 3 ]; then
+        echo "[watchdog] FATAL: ${STALL_MIN} 分钟无训练步且 GPU 连续闲置 —— 判定挂死"
+        kill -TERM "$MAIN_PID" 2>/dev/null; sleep 60; kill -KILL "$MAIN_PID" 2>/dev/null
+        break
+      fi
+      if [ "$t" -ge "$HARD_MAX" ]; then
+        echo "[watchdog] FATAL: ${HARD_MAX} 分钟仍无训练步（GPU 利用率 ${mean_util}%）—— 硬兜底终止"
+        kill -TERM "$MAIN_PID" 2>/dev/null; sleep 60; kill -KILL "$MAIN_PID" 2>/dev/null
+        break
+      fi
     fi
   done
 ) &
