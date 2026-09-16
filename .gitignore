@@ -232,3 +232,8 @@ sbatch/queue_lane*.txt
 
 # hydra run dirs (verl sft_trainer)
 outputs/
+
+# Claude Code 本地配置（CLAUDE_CONFIG_DIR=$REPO/.claude，见 setup_env.sh）：
+# 只入库 skills/，运行时状态不入库
+.claude/*
+!.claude/skills/
