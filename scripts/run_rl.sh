@@ -110,7 +110,7 @@ print('BM25Retriever importable.')
 "
 
 echo "============================================================"
-echo "ScaleSeek GRPO training"
+echo "ScaleSeek GRPO training  (config: ${SCALESEEK_RL_CONFIG:-grpo_trainer})"
 echo "model:       ${SCALESEEK_MODEL_PATH}"
 echo "train:       ${SCALESEEK_TRAIN_FILES}"
 echo "val:         ${SCALESEEK_VAL_FILES}"
@@ -122,7 +122,7 @@ echo "============================================================"
 
 python -m verl.trainer.main_ppo \
     --config-path "${SCALESEEK_ROOT}/train/config" \
-    --config-name grpo_trainer \
+    --config-name "${SCALESEEK_RL_CONFIG:-grpo_trainer}" \
     "hydra.searchpath=[file://${GREPSEEK_VERL_DIR}/verl/trainer/config]" \
     trainer.n_gpus_per_node="${NPROC}" \
     ray_kwargs.ray_init.num_gpus="${NPROC}" \

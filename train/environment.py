@@ -155,13 +155,34 @@ class ScaleSeekEnv:
         self.workspace = Workspace()
         self.tokenizer = tokenizer
         self.max_response_tokens = max_response_tokens
+        # Union of every passage that ever entered the workspace (mode="replace"
+        # discards earlier hits from the workspace but not from this record), so
+        # the retrieval-process reward (eval/evidence.py) can ask "did the policy
+        # ever pull the supporting document", independent of the final answer.
+        self.seen_docs: dict[str, str] = {}
+        self.n_calls: dict[str, int] = {"bm25_retrieve": 0, "grep_workspace": 0, "read_doc": 0}
+        # Passages grep_workspace actually SHOWED the model (post response-budget), with
+        # the pattern that surfaced them. The v3 reward pays for "your grep pulled up a
+        # passage containing the answer", so it must score what the model saw, not what
+        # the workspace happened to hold.
+        self.grep_shown: list[tuple[str, str]] = []   # (pattern, rendered passage)
 
     def execute(self, tool_name: str, arguments: dict) -> dict:
         """Dispatch bm25_retrieve / grep_workspace / read_doc to eval/agent.execute_tool."""
-        return execute_tool(
+        result = execute_tool(
             tool_name, arguments, self.workspace, get_retriever(),
             tokenizer=self.tokenizer, max_response_tokens=self.max_response_tokens,
         )
+        if tool_name in self.n_calls and "error" not in result:
+            self.n_calls[tool_name] += 1
+        if tool_name == "bm25_retrieve":
+            for d in self.workspace.docs:
+                self.seen_docs.setdefault(d["doc_id"], d.get("text", ""))
+        elif tool_name == "grep_workspace" and "error" not in result:
+            pattern = str(arguments.get("pattern", ""))
+            for rendered in result.get("results", []) or []:
+                self.grep_shown.append((pattern, str(rendered)))
+        return result
 
     @property
     def workspace_size(self) -> int:
@@ -172,4 +193,23 @@ class ScaleSeekEnv:
         return {
             "workspace_size": self.workspace.size,
             "doc_ids": [d["doc_id"] for d in self.workspace.docs],
+            "n_seen_docs": len(self.seen_docs),
+            "n_grep_shown": len(self.grep_shown),
+            **{f"n_{k}": v for k, v in self.n_calls.items()},
         }
+
+    def grep_hits(self, phrases: list[str]) -> dict:
+        """Did a substantive grep pattern surface a passage containing one of `phrases`?
+
+        Returns {"grep_hit": 0/1, "grep_hit_broad": 0/1} — the second ignores the
+        catch-all-pattern guard, for logging how often the guard bites.
+        """
+        from eval.evidence import any_phrase_in, pattern_is_substantive
+        hit = broad = 0.0
+        for pattern, rendered in self.grep_shown:
+            if any_phrase_in(rendered, phrases):
+                broad = 1.0
+                if pattern_is_substantive(pattern):
+                    hit = 1.0
+                    break
+        return {"grep_hit": hit, "grep_hit_broad": broad}

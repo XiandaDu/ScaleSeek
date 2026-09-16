@@ -140,12 +140,15 @@ def load_local(name: str, split: Optional[str] = None,
                 continue
             ex = _normalize_row(obj, name, i)
             if ex:
+                if isinstance(obj.get("evidence"), dict) and obj["evidence"]:
+                    ex["evidence"] = obj["evidence"]
                 rows.append(ex)
     return rows
 
 
 def load_flashrag(name: str, split: Optional[str] = None,
-                  limit: Optional[int] = None, offset: int = 0) -> list[dict]:
+                  limit: Optional[int] = None, offset: int = 0,
+                  include_evidence: bool = False) -> list[dict]:
     """Download and load from HuggingFace (RUC-NLPIR/FlashRAG_datasets)."""
     from datasets import load_dataset as hf_load
 
@@ -170,6 +173,11 @@ def load_flashrag(name: str, split: Optional[str] = None,
             break
         ex = _normalize_row(dict(row), name, i)
         if ex:
+            if include_evidence:
+                from .evidence import extract_evidence
+                ev = extract_evidence(name, dict(row))
+                if ev:
+                    ex["evidence"] = ev
             rows.append(ex)
     return rows
 
@@ -179,11 +187,15 @@ def load_dataset(
     split: Optional[str] = None,
     limit: Optional[int] = None,
     offset: int = 0,
+    include_evidence: bool = False,
 ) -> list[dict]:
     """Load a dataset, preferring local cache then falling back to HuggingFace.
 
     Returns list of {"id", "question", "golden_answers"}.
-    For BRIGHT, also includes "golden_doc_ids".
+    For BRIGHT, also includes "golden_doc_ids". With include_evidence=True,
+    FlashRAG train rows that carry supporting-fact metadata also get an
+    "evidence" dict (eval/evidence.py) — used by the RL data builder only, so
+    the canonical evaluation files are unchanged.
     """
     if name == "bright":
         return load_bright(limit=limit, offset=offset)
@@ -221,7 +233,8 @@ def load_dataset(
     rows = load_local(name, split=split, limit=limit, offset=offset)
     if rows:
         return rows
-    return load_flashrag(name, split=split, limit=limit, offset=offset)
+    return load_flashrag(name, split=split, limit=limit, offset=offset,
+                         include_evidence=include_evidence)
 
 
 def validate_complete_dataset(name: str, rows: list[dict]) -> dict:

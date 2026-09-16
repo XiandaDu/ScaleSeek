@@ -1,0 +1,412 @@
+# GRPO training config for ScaleSeek — v3 (2026-09-16). The reward is rebuilt from
+# scratch on the user's instruction: a flat sum, nothing negative, nothing gated.
+#
+#   score = 1.0 * EM         correct final answer
+#         + 0.1 * format     balanced tags and an <answer> outside <think>
+#         + 0.3 * grep_hit   a substantive grep_workspace pattern surfaced a passage
+#                            containing the gold answer (only paid if the rollout answered)
+#
+# Gone from v2/v2.1: the workspace/bm25-call penalty, the multiplicative gate and the
+# support-title coverage term (still logged as reward/ret_coverage, just not paid for).
+# Kept from v2.1: the speed settings (response 8192, 48 seqs/replica, TP1, SP1, 16384
+# tok/GPU, actor params on GPU) and a light KL anchor to the SFT v2 reference.
+#
+# Original v2 header follows.
+# GRPO training config for ScaleSeek — v2 (2026-09-05), the reward/curriculum
+# redesign motivated by reports/rl_continuation_audit_2026-09-04.md.
+#
+# Differences from grpo_trainer.yaml (everything else identical):
+#   reward   penalty_mode=gated (penalties multiply, never negative), retrieval
+#            process credit 0.3 x support-title coverage, bm25-call/workspace
+#            thresholds widened so a multi-hop question is not taxed on call 2
+#   GRPO     n=8 rollouts, batch 48 questions (384 trajectories/step, ~ v1's 320)
+#   KL       small KL-to-reference (SFT) loss to anchor tool-use behaviour
+#   rollout  response budget 14336 (v1 18432: median rollout is <1k tokens and the
+#            18k tail set the step time), CUDA graphs on
+# Select with SCALESEEK_RL_CONFIG=grpo_trainer_v2 (scripts/run_rl.sh).
+#
+# Environment variables:
+#   SCALESEEK_ROOT        absolute path to this repo
+#   SCALESEEK_MODEL_PATH  SFT checkpoint or base model (HF format)
+#   SCALESEEK_TRAIN_FILES path to RL train JSONL
+#   SCALESEEK_VAL_FILES   path to RL dev JSONL
+#   SCALESEEK_OUTPUT_DIR  checkpoint output directory
+#   BM25_INDEX_DIR        path to Lucene index (with /index subdir)
+#                         defaults to $DATA/bm25_index from setup_env.sh
+#
+# Launch: bash scripts/run_rl.sh
+# Or manually:
+#   python -m verl.trainer.main_ppo \
+#       --config-path $SCALESEEK_ROOT/train/config \
+#       --config-name grpo_trainer \
+#       "hydra.searchpath=[file://$SCALESEEK_ROOT/../grepseek/verl/verl/trainer/config]"
+
+hydra:
+  searchpath:
+    - file://${oc.env:GREPSEEK_VERL_DIR}/verl/trainer/config
+
+defaults:
+  - actor@actor_rollout_ref.actor: dp_actor
+  - data@data: legacy_data
+  - ref@actor_rollout_ref.ref: dp_ref
+  - rollout@actor_rollout_ref.rollout: rollout
+  - model@actor_rollout_ref.model: hf_model
+  - reward@reward: reward
+  - algorithm@algorithm.rollout_correction: rollout_correction
+  - _self_
+
+# ─────────────────────────────────────────────
+# Trainer
+# ─────────────────────────────────────────────
+trainer:
+  project_name: scaleseek_grpo
+  timestamp: ""
+  experiment_name: scaleseek_grpo_${actor_rollout_ref.rollout.n}rollouts_bs${data.train_batch_size}${trainer.timestamp}
+  total_epochs: 1
+  # 200 是 SFT 就绪前拍的占位值，已在 2026-08-31 跑到 190。续跑链要继续推进就得
+  # 抬高它，否则后续段全部空转。500 步 = 32000 道题（数据集 202553 条，仍是部分 epoch）。
+  total_training_steps: 500
+  resume_mode: auto
+  resume_from_path: null
+  del_local_ckpt_after_load: false
+  # 关掉：续跑链里每段恢复后都会重跑一次全 dev 验证（2000 条，实测 34 分钟），
+  # 而验的是上一段刚存的同一个 step —— 纯重复。加上 ~71 分钟初始化，3h 段的
+  # 固定开销就到 105 分钟，只剩 75 分钟训练（2026-08-26 作业 20501423/20501426
+  # 各跑满 3h 却只推进 1 步，step 130 原地踏步）。
+  # 定期验证仍由 test_freq 负责。
+  val_before_train: false
+  val_only: false
+  # 注意：save_freq 被 rl_train.sbatch 的 RL_SAVE_FREQ（默认 10）覆盖，
+  # 续跑链要求每段至少存一次 checkpoint。这里的值只在直接调 run_rl.sh 时生效。
+  test_freq: 40
+  save_freq: 40
+  log_val_generations: 8
+  rollout_data_dir: ${trainer.default_local_dir}/train_rollouts
+  validation_data_dir: ${trainer.default_local_dir}/val_rollouts
+  balance_batch: true
+  default_local_dir: ${oc.env:SCALESEEK_OUTPUT_DIR,${oc.env:SCALESEEK_ROOT}/checkpoints/rl/${trainer.experiment_name}}
+  default_hdfs_dir: null
+  critic_warmup: 0
+  esi_redundant_time: 0
+  device: cuda
+  n_gpus_per_node: 4            # overridden by run_rl.sh (NPROC); 4×A5000 on octal30
+  nnodes: 1
+  seed: 42
+  logger:
+    - console
+
+wandb:
+  enable: false
+  project: ${trainer.project_name}
+  entity: ${oc.env:WANDB_ENTITY,null}
+  run_name: null
+
+# ─────────────────────────────────────────────
+# Data
+# ─────────────────────────────────────────────
+data:
+  custom_cls:
+    path: ${oc.env:SCALESEEK_ROOT}/train/dataset.py
+    name: ScaleSeekDataset
+
+  train_files: ${oc.env:SCALESEEK_TRAIN_FILES}
+  val_files: ${oc.env:SCALESEEK_VAL_FILES}
+
+  # TBD: dataset_name used for HF fallback when local files are absent.
+  # After prepare_rl_data.py runs, train_files / val_files will always exist.
+  dataset_name: hotpotqa
+  answerable_only: true
+
+  debug_mode_train: false
+  debug_num_samples: 32
+  debug_mode_val: false
+
+  # 128 questions × 5 rollouts = 640 trajectories/step.
+  # Sized for 4×A5000-24GB (lower than GrepSeek's A100 config).
+  # TBD: tune once SFT checkpoint is ready.
+  train_batch_size: 48
+  # ScaleSeek's system prompt alone is 1015 Qwen3.5 tokens (measured 2026-07-28).
+  # At the old 1024 the prompt fitted only for very short questions and silently
+  # truncated for longer ones — i.e. exactly the multi-hop examples this policy is
+  # for, and the truncated tail is the output-format/tool section. 2048 leaves
+  # ~1000 tokens of headroom; re-measure if the prompt grows.
+  max_prompt_length: 2048       # system prompt (1015) + question + template
+  max_response_length: 8192     # v2.1: median rollout 1.7k / mean 2.2k tokens; the 14k tail (one
+                                # trajectory ~600 s at eager decode) set the step time. Clipped share
+                                # rises from 2.9% to an estimated 5-6%, mostly 8-turn loops that score 0.
+  # 20480 而非原来的 14336：多轮 agent 的 prompt 逐轮累积，最坏情况是
+  # system 1015 + question ~200 + 7 轮 x (工具响应 2048 + 推理 ~300) = 17651，
+  # 本来就超 14336。不是偶发 —— 第 4 段在 step 130 附近死于
+  # "Prompt length (14382) exceeds the model's maximum context length (14336)"
+  # （2026-08-21，作业 20095986）。20480 留 2.8k 余量。
+
+  return_raw_chat: true
+  prompt_key: prompt
+  return_raw_input_ids: false
+  return_full_prompt: false
+  dataloader_num_workers: 1
+  train_drop_last: true
+
+# ─────────────────────────────────────────────
+# Actor / Rollout / Reference
+# ─────────────────────────────────────────────
+actor_rollout_ref:
+  hybrid_engine: true
+
+  model:
+    # Normally the SFT checkpoint (export SCALESEEK_MODEL_PATH). The fallback is
+    # the FROZEN evaluation generator, not a near neighbour: ScaleSeek is compared
+    # against prompt baselines run on Qwen3.5-9B, so a policy trained from
+    # Qwen3-8B would differ from them by base model as well as by method, and no
+    # row of that table would be attributable. Overriding to a smaller base is a
+    # legitimate compute decision — but it must then be stated in the results
+    # table, not inherited silently from a default.
+    # Memory note: 9B + FSDP full offload is tight on 4×A5000-24GB; if it OOMs,
+    # drop to Qwen3-8B *and* record the deviation.
+    path: ${oc.env:SCALESEEK_MODEL_PATH,Qwen/Qwen3.5-9B}
+    trust_remote_code: true
+    enable_gradient_checkpointing: true
+
+  rollout:
+    name: vllm
+    mode: async
+    load_format: safetensors
+    enforce_eager: true           # v2 tried false (CUDA graphs): both vLLM workers died silently in the
+                                  # profiling run under verl (2026-09-07, pilot attempts 1-2). Keep the
+                                  # known-good eager path; revisit with VLLM_USE_V1 compile flags later.
+    gpu_memory_utilization: 0.55   # FSDP offload frees most GPU mem for vLLM
+
+    n: 8                           # v2: 8 rollouts per question (fewer degenerate groups)
+    temperature: 1.0
+    top_p: 1.0
+    top_k: -1
+
+    max_model_len: 20480          # = prompt_length + response_length
+    prompt_length: 2048
+    response_length: 8192
+
+    max_num_seqs: 48
+    max_num_batched_tokens: 20480
+    log_prob_micro_batch_size_per_gpu: 1
+    log_prob_use_dynamic_bsz: false
+    log_prob_max_token_len_per_gpu: 16384
+
+    multi_turn:
+      enable: true
+      # Must match the evaluation loop, else the policy is trained under a
+      # tighter budget than it is scored under. baselines.yaml scaleseek:
+      # max_assistant_turns 8 = up to 7 tool calls + 1 answer turn.
+      max_user_turns: 7
+      max_assistant_turns: 8
+      max_parallel_calls: 1
+      format: hermes              # <tool_call>...</tool_call> XML format (matches eval)
+      tool_config_path: null      # ScaleSeekAgentLoop handles dispatch internally
+      interaction_config_path: null
+      # Backstop only. Primary truncation is a per-response token budget applied in
+      # ScaleSeekEnv.execute (default 2048, set SCALESEEK_MAX_TOOL_RESPONSE_TOKENS to
+      # override), which drops whole passages instead of cutting mid-JSON here.
+      max_tool_response_length: 50000
+      tool_response_truncate_side: right
+
+    agent:
+      agent_loop_manager_class: null
+      num_workers: 1
+      default_agent_loop: scaleseek_agent
+      agent_loop_config_path: ${oc.env:SCALESEEK_ROOT}/train/config/agent_loops.yaml
+
+  actor:
+    strategy: fsdp
+    freeze_vision_tower: true
+    checkpoint:
+      save_contents: ['model', 'optimizer', 'extra']
+      load_contents: ['model', 'optimizer', 'extra']
+    ppo_mini_batch_size: 16
+    ppo_micro_batch_size_per_gpu: 1
+    ppo_max_token_len_per_gpu: 16384   # step-1 profile at 12288/SP1: peak 52.8 GB, update 322 s -> raise
+    use_dynamic_bsz: true
+    use_kl_loss: true             # v2: anchor to the SFT reference
+    kl_loss_coef: 0.001   # v3: the reward no longer pays for fewer tool calls, so the
+                          # anchor only has to stop drift, not fight a perverse gradient
+    kl_loss_type: low_var_kl
+    fsdp_config:
+      full_determinism: true
+      seed: 42
+      wrap_policy:
+        # Qwen3.5 的解码层是 Qwen3_5DecoderLayer（带下划线）。曾写成 Qwen3 的
+        # Qwen3DecoderLayer，4 段 RL 作业各在 3 分钟内死于
+        # "Could not find the transformer layer class to wrap in the model."
+        # （2026-08-12，作业 19453415-8）。
+        #
+        # 不能靠"删掉这项、回落到模型的 _no_split_modules"来免维护：那个列表是
+        # ['Qwen3_5DecoderLayer', 'Qwen3_5VisionBlock']，而本 checkpoint 虽是
+        # ForConditionalGeneration 架构却没有实例化视觉塔（实测
+        # get_module_class_from_name(model,'Qwen3_5VisionBlock') 返回 None），
+        # verl 对列表里任一找不到的类都会抛同一个异常。所以只列真实存在的那个。
+        transformer_layer_cls_to_wrap:
+          - Qwen3_5DecoderLayer
+      param_offload: false    # v2.1: 80 GB cards, peak 52.8 GB at SP=1 -> keep sharded params on GPU
+      grad_offload: true
+      optimizer_offload: true
+      fsdp_size: 4
+      dtype: bfloat16
+      model_dtype: bfloat16
+      ulysses_sequence_parallel_size: 1
+    optim:
+      optimizer: AdamW
+      optimizer_impl: torch.optim
+      lr: 5.0e-6
+      weight_decay: 0.0
+      betas:
+        - 0.9
+        - 0.999
+      clip_grad: 1.0
+      lr_scheduler_type: constant
+      lr_warmup_steps_ratio: 0.05
+      lr_warmup_steps: -1
+
+  ref:
+    strategy: fsdp
+    # verl/workers/fsdp_workers.py reads config.ref.model.path when present; pin the
+    # KL anchor to the SFT checkpoint so warm-restarts do not move it.
+    model:
+      path: ${oc.env:SCALESEEK_REF_PATH,${actor_rollout_ref.model.path}}
+    log_prob_micro_batch_size_per_gpu: 2
+    log_prob_max_token_len_per_gpu: 16384
+    fsdp_config:
+      full_determinism: true
+      seed: 42
+      wrap_policy:
+        min_num_params: 0
+      param_offload: true
+      grad_offload: false
+      optimizer_offload: false
+      dtype: bfloat16
+      model_dtype: bfloat16
+      ulysses_sequence_parallel_size: 1
+
+# ─────────────────────────────────────────────
+# Critic — disabled (GRPO)
+# ─────────────────────────────────────────────
+critic:
+  enable: false
+  model:
+    enable: false
+  strategy: fsdp
+
+# ─────────────────────────────────────────────
+# Reward model — disabled; custom function below
+# ─────────────────────────────────────────────
+reward_model:
+  num_workers: null
+  enable: false
+  enable_resource_pool: false
+  use_reward_loop: true
+  n_gpus_per_node: 0
+  nnodes: 0
+  strategy: none
+  reward_manager: naive
+  reward_loop_source: register
+  reward_loop_module_path: null
+  reward_loop_class_name: null
+  launch_reward_fn_async: false
+  model:
+    path: null
+    input_tokenizer: null
+    external_lib: null
+    trust_remote_code: false
+    override_config: {}
+  rollout:
+    name: null
+
+reward_manager:
+  _target_: verl.trainer.config.config.RewardManagerConfig
+  source: register
+  name: ${oc.select:reward_model.reward_manager,naive}
+  module:
+    _target_: verl.trainer.config.config.ModuleConfig
+    path: null
+    name: custom_reward_manager
+
+# ─────────────────────────────────────────────
+# Custom reward: EM − length penalty (TBD workspace term)
+# ─────────────────────────────────────────────
+custom_reward_function:
+  path: ${oc.env:SCALESEEK_ROOT}/train/reward.py
+  name: scaleseek_reward
+  reward_kwargs:
+    # TBD: switch to f1 or a mix once SFT format is locked.
+    reward_shape: simple
+    em_coef: 1.0
+    format_coef: 0.1
+    grep_hit_coef: 0.3
+    grep_hit_source: gold      # "prediction" scores groundedness instead (needs no labels)
+    reward_metric: em
+    enable_length_decay: false
+    decay_type: linear
+    a: 0.1
+    L_max: ${data.max_response_length}
+    failed_rollout_reward: 0.0
+    # v2: score = (EM + 0.3 * ret_coverage) * (1 - workspace_penalty), floored at 0.
+    # ret_coverage = fraction of the question's supporting Wikipedia titles that
+    # ever entered the workspace (eval/evidence.py). Penalties start only beyond
+    # 10 workspace docs / 5 bm25 calls, so 2-4 retrievals for a multi-hop
+    # question cost nothing; brute-force top_k=50 x 8 calls still does.
+    penalty_mode: gated        # ignored when reward_shape=simple
+    retrieval_coef: 0.0        # ignored when reward_shape=simple
+    enable_workspace_penalty: false
+    workspace_target: 10
+    max_workspace_size: 30
+    max_bm25_calls: 5
+    workspace_coef: 0.2
+    bm25_call_coef: 0.1
+
+# ─────────────────────────────────────────────
+# Algorithm: GRPO
+# ─────────────────────────────────────────────
+algorithm:
+  gamma: 1.0
+  lam: 1.0
+  adv_estimator: grpo
+  norm_adv_by_std_in_grpo: true
+  ppo_epochs: 1
+  clip_ratio: 0.2
+  value_clip: false
+  use_kl_in_reward: false
+  kl_penalty: kl
+  kl_ctrl:
+    type: fixed
+    kl_coef: 0.0
+
+sandbox_fusion:
+  url: null
+  max_concurrent: null
+  memory_limit_mb: null
+
+transfer_queue:
+  enable: false
+  backend:
+    storage_backend: SimpleStorage
+    SimpleStorage:
+      total_storage_size: 100000
+      num_data_storage_units: 8
+
+# ─────────────────────────────────────────────
+# Ray
+# ─────────────────────────────────────────────
+ray_kwargs:
+  ray_init:
+    ignore_reinit_error: true
+    num_cpus: 16
+    num_gpus: 4
+    include_dashboard: false
+  ray_remote:
+    num_cpus: 1
+  timeline_json_file: null
+
+global_profiler:
+  _target_: verl.utils.profiler.ProfilerConfig
+  tool: null
+  steps: null
+  profile_continuous_steps: false
+  save_path: null
+  global_tool_config: {}

@@ -33,6 +33,7 @@ TBD decisions:
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import os
 import random
@@ -70,9 +71,70 @@ _SOURCES: list[tuple[str, str, bool]] = [
 _OOD_EVAL_DATASETS = ["popqa", "triviaqa", "bamboogle"]
 
 
-def _load(name: str, split: str | None, limit: int | None) -> list[dict]:
+def _parse_counts(items: list[str] | None) -> dict[str, int] | None:
+    if not items:
+        return None
+    out = {}
+    for it in items:
+        for part in it.split(","):
+            if not part.strip():
+                continue
+            k, v = part.split("=")
+            out[k.strip()] = int(v)
+    return out
+
+
+def _sample_per_source(rows: list[dict], counts: dict[str, int], rng: random.Random) -> list[dict]:
+    by = {}
+    for r in rows:
+        by.setdefault(r["source"], []).append(r)
+    out = []
+    for src, n in counts.items():
+        pool = list(by.get(src, []))
+        rng.shuffle(pool)
+        out.extend(pool[:n])
+    rng.shuffle(out)
+    return out
+
+
+def _apply_screen(rows: list[dict], stats_path: str, band: str, keep_hard: int) -> tuple[list[dict], dict]:
+    """Keep the learnable band (lo < pass_rate < hi) plus reachable hard multi-hop.
+
+    A GRPO group whose rollouts all score the same has zero advantage; pass_rate 0
+    or 1 under the current policy is wasted compute unless the question is a hard
+    multi-hop one whose supporting docs BM25 can actually surface (then the
+    retrieval-process credit can still create a gradient).
+    """
+    lo, hi = (float(x) for x in band.split(","))
+    stats = {}
+    for l in open(stats_path, encoding="utf-8"):
+        if l.strip():
+            s = json.loads(l); stats[str(s["id"])] = s
+    band_rows, hard_rows, unscreened = [], [], 0
+    for r in rows:
+        s = stats.get(str(r["id"]))
+        if s is None:
+            unscreened += 1
+            continue
+        p = float(s.get("pass_rate", 0.0))
+        if lo < p < hi:
+            band_rows.append(r)
+        elif p <= lo and s.get("multi_hop") and float(s.get("reachable_coverage", 0.0)) >= 0.5:
+            hard_rows.append(r)
+    hard_rows = hard_rows[:keep_hard]
+    kept = band_rows + hard_rows
+    summary = {"stats_file": stats_path, "band": [lo, hi], "screened": len(rows) - unscreened,
+               "unscreened_dropped": unscreened, "in_band": len(band_rows),
+               "hard_multihop_kept": len(hard_rows), "kept": len(kept),
+               "band_sources": dict(collections.Counter(r["source"] for r in band_rows)),
+               "hard_sources": dict(collections.Counter(r["source"] for r in hard_rows))}
+    print(f"  screen: {summary}")
+    return kept, summary
+
+
+def _load(name: str, split: str | None, limit: int | None, include_evidence: bool = False) -> list[dict]:
     """Load via eval.datasets (local first, HF fallback)."""
-    rows = load_dataset(name, split=split, limit=limit)
+    rows = load_dataset(name, split=split, limit=limit, include_evidence=include_evidence)
     for r in rows:
         r["source"] = name
     return rows
@@ -101,6 +163,30 @@ def main() -> None:
                    help="Override dataset list. Default: nq hotpotqa 2wikimultihopqa musique")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--no_shuffle", action="store_true")
+    # ---- v2 options (2026-09-05). None of them change the output when absent, so
+    # the v1 command in DATA_PROVENANCE.md still reproduces its sha256. ----
+    p.add_argument("--with-evidence", action="store_true",
+                   help="attach supporting titles / sub-answers (eval/evidence.py) to every row "
+                        "that has them; needed by the v2 retrieval-process reward")
+    p.add_argument("--mix", nargs="*", default=None, metavar="SRC=N",
+                   help="per-source train caps after shuffling, e.g. 2wikimultihopqa=14000 musique=15000 "
+                        "hotpotqa=15000 nq=6000 (multi-hop-heavy curriculum). Default: everything.")
+    p.add_argument("--dev-ids", default=None,
+                   help="reuse the dev ids of an existing dev.jsonl (keeps validation comparable "
+                        "across data versions); these ids are excluded from train")
+    p.add_argument("--sft-questions", nargs="*", default=None, metavar="SRC=N",
+                   help="also write sft_questions.jsonl sampled per source from the train pool")
+    p.add_argument("--screen-pool", nargs="*", default=None, metavar="SRC=N",
+                   help="also write screen_pool.jsonl (per-source sample of the train pool) for "
+                        "scripts/screen_difficulty.py")
+    p.add_argument("--screen", default=None,
+                   help="screen_stats.jsonl from scripts/screen_difficulty.py; train keeps only "
+                        "questions in the learnable band plus reachable hard multi-hop ones")
+    p.add_argument("--band", default="0.0,1.0",
+                   help="keep questions with lo < pass_rate < hi (exclusive), default 0.0,1.0")
+    p.add_argument("--keep-hard-multihop", type=int, default=1500,
+                   help="additionally keep up to N pass_rate==0 multi-hop questions whose supporting "
+                        "docs BM25 can reach (reachable_coverage >= 0.5)")
     args = p.parse_args()
 
     rng = random.Random(args.seed)
@@ -113,6 +199,13 @@ def main() -> None:
         sources = [(n, s, h) for n, s, h in _SOURCES if n in name_set]
 
     val_per = args.val_limit_per_source or None
+    mix = _parse_counts(args.mix)
+    dev_ids = None
+    if args.dev_ids:
+        dev_ids = {str(json.loads(l)["id"]) for l in open(args.dev_ids, encoding="utf-8") if l.strip()}
+        print(f"Dev ids           : {len(dev_ids)} reused from {args.dev_ids}")
+    if mix:
+        print(f"Train mix caps    : {mix}")
 
     print(f"\nRL data directory : {out_dir}")
     print(f"Sources           : {[n for n,_,_ in sources]}")
@@ -130,11 +223,17 @@ def main() -> None:
         if not has_train:
             print(f"  [{name}] no train split available; skipping")
             continue
-        rows = _load(name, split="train", limit=None)
+        rows = _load(name, split="train", limit=None, include_evidence=args.with_evidence)
         rows = [r for r in rows if r.get("golden_answers")]
         rng.shuffle(rows)                       # held-out choice must not track file order
-        n_val = min(val_per or 0, len(rows) // 10) if val_per else 0
-        held, kept = rows[:n_val], rows[n_val:]
+        if dev_ids is not None:
+            held = [r for r in rows if str(r["id"]) in dev_ids]
+            kept = [r for r in rows if str(r["id"]) not in dev_ids]
+        else:
+            n_val = min(val_per or 0, len(rows) // 10) if val_per else 0
+            held, kept = rows[:n_val], rows[n_val:]
+        if mix is not None:
+            kept = kept[:mix.get(name, len(kept))]
         val_rows.extend(held)
         train_rows.extend(kept)
         print(f"  [{name}] train: {len(kept):,} rows  (+{len(held):,} held out for val; "
@@ -145,6 +244,18 @@ def main() -> None:
         rng.shuffle(val_rows)
     if args.train_limit:
         train_rows = train_rows[:args.train_limit]
+    if dev_ids is not None:
+        # keep the exact v1 dev order so validation curves line up row for row
+        order = {}
+        for i, l in enumerate(open(args.dev_ids, encoding="utf-8")):
+            if l.strip():
+                order[str(json.loads(l)["id"])] = i
+        val_rows.sort(key=lambda r: order.get(str(r["id"]), 1 << 30))
+
+    pool_rows = list(train_rows)   # before screening: the curriculum pool
+    screen_summary = None
+    if args.screen:
+        train_rows, screen_summary = _apply_screen(train_rows, args.screen, args.band, args.keep_hard_multihop)
 
     # Hard guard: a train/val id collision would silently restore the leak.
     train_ids = {str(r["id"]) for r in train_rows}
@@ -156,6 +267,12 @@ def main() -> None:
 
     print(f"\nTotal train: {len(train_rows):,}")
     _write_jsonl(train_rows, out_dir / "train.jsonl")
+    if args.mix or args.screen or args.sft_questions or args.screen_pool:
+        _write_jsonl(pool_rows, out_dir / "pool.jsonl")
+    for flag, fname in ((args.sft_questions, "sft_questions.jsonl"), (args.screen_pool, "screen_pool.jsonl")):
+        counts = _parse_counts(flag)
+        if counts:
+            _write_jsonl(_sample_per_source(pool_rows, counts, random.Random(args.seed + 1)), out_dir / fname)
     print(f"Total val  : {len(val_rows):,}  (held out of train; NOT the eval split)")
     _write_jsonl(val_rows, out_dir / "dev.jsonl")
 
@@ -175,6 +292,10 @@ def main() -> None:
         "eval_splits_never_read": {n: s for n, s, _ in sources},
         "in_domain_eval_datasets": [n for n, _, h in sources if h],
         "ood_eval_datasets": _OOD_EVAL_DATASETS,
+        "with_evidence": args.with_evidence,
+        "mix": mix, "dev_ids_from": args.dev_ids,
+        "train_sources": dict(collections.Counter(r["source"] for r in train_rows)),
+        "screen": screen_summary,
     }
     summary_path = out_dir / "build_summary.json"
     with open(summary_path, "w") as f:

@@ -157,6 +157,9 @@ class ScaleSeekDataset(_DatasetBase):
                 "qid": qid,
                 "question": question,
                 "golden_answers": golden_answers,
+                # supporting titles / sub-answers (eval/evidence.py) for the
+                # retrieval-process reward; {} when the source has none (nq)
+                "evidence": dict(ex.get("evidence") or {}),
                 "is_validation": not self.is_train,
                 "sample_index": idx,
             },

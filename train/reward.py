@@ -179,6 +179,30 @@ def scaleseek_reward(
     max_bm25_calls: int = 3,
     workspace_coef: float = 0.2,
     bm25_call_coef: float = 0.1,
+    # How penalties combine with the base signal:
+    #   "additive": score = base - p(L) - workspace_penalty   (original GrepSeek
+    #               port; can go NEGATIVE for a wrong answer, so in a GRPO group
+    #               where every rollout is wrong the only surviving signal is
+    #               "fewer calls / smaller workspace" — the mechanism behind the
+    #               step-190 collapse to one default top-3 retrieval, see
+    #               reports/rl_continuation_audit_2026-09-04.md)
+    #   "gated":    score = (base + retrieval_coef * ret_coverage) * (1 - p(L) -
+    #               workspace_penalty), floored at 0. A wrong answer with no
+    #               evidence is 0 regardless of how cheaply it was reached.
+    # v3 (2026-09-16) replaces the whole penalty machinery with a flat sum; see
+    # `reward_shape` below. "penalty" keeps the v1/v2 behaviour for reproducing the audit.
+    reward_shape: str = "penalty",      # "penalty" | "simple" | "f1_gated"
+    em_coef: float = 1.0,               # simple: a correct answer is worth exactly this
+    format_coef: float = 0.1,           # simple: well-formed trajectory ending in <answer>
+    grep_hit_coef: float = 0.3,         # simple: a grep surfaced a passage containing the answer
+    grep_hit_source: str = "gold",      # "gold": grep showed a GOLD answer (retrieval succeeded)
+                                        # "prediction": grep showed the rollout's OWN answer (grounding)
+    penalty_mode: str = "additive",
+    # Retrieval-process credit: fraction of the question's supporting documents
+    # (eval/evidence.py; computed by ScaleSeekAgentLoop over every passage the
+    # rollout ever retrieved) — dense-ish signal in all-wrong groups that points
+    # at "find the evidence", not "call fewer tools". 0 disables it.
+    retrieval_coef: float = 0.0,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Compute ScaleSeek reward for one rollout.
@@ -199,9 +223,20 @@ def scaleseek_reward(
     workspace_size = int(extra_info.get("workspace_size", 0))
     is_validation = bool(extra_info.get("is_validation", False))
 
+    grep_hit = float(extra_info.get("grep_hit", 0.0) or 0.0)
+    grep_hit_broad = float(extra_info.get("grep_hit_broad", 0.0) or 0.0)
+    grep_hit_prediction = float(extra_info.get("grep_hit_prediction", 0.0) or 0.0)
+    ret_coverage = float(extra_info.get("ret_coverage", 0.0) or 0.0)
+    gold_in_ws = float(extra_info.get("gold_in_ws", 0.0) or 0.0)
+    n_grep_calls = int(extra_info.get("n_grep_calls", 0) or 0)
+    n_read_calls = int(extra_info.get("n_read_calls", 0) or 0)
+    n_seen_docs = int(extra_info.get("n_seen_docs", 0) or 0)
+
     if is_validation:
+        # validation reports plain EM, comparable across reward variants
         enable_length_decay = False
         enable_workspace_penalty = False
+        retrieval_coef = 0.0
 
     golden_answers: list[str] = ground_truth.get("golden_answers", [])
 
@@ -214,14 +249,77 @@ def scaleseek_reward(
             "reward/workspace_penalty": 0.0,
             "reward/format_pass": 0.0,
             "reward/failed_rollout": 0.0,
+            "reward/ret_coverage": ret_coverage,
+            "reward/grep_hit": grep_hit,
+            "reward/grep_hit_broad": grep_hit_broad,
+            "reward/grep_hit_prediction": grep_hit_prediction,
+            "reward/grep_credit": 0.0,
+            "reward/grep_reward": 0.0,
+            "reward/gold_in_ws": gold_in_ws,
+            "reward/retrieval_credit": 0.0,
             "reward/hit_max_context": float(hit_max_context),
             "reward/invalid_tool_request": float(invalid_tool),
             "metrics/response_token_count": L,
             "metrics/n_bm25_calls": n_bm25_calls,
             "metrics/workspace_size": workspace_size,
+            "metrics/n_grep_calls": n_grep_calls,
+            "metrics/n_read_calls": n_read_calls,
+            "metrics/n_seen_docs": n_seen_docs,
             "metrics/L_max": L_max,
             "metrics/a": a,
         }
+
+    # ── v3.1 "f1_gated" shape (GrepSeek-style multiplicative format gate) ─────
+    #   reward = format_valid * (token_f1(pred, gold) + 0.3 * grep_reward)
+    #   grep_reward = 1 only when the answer is EXACTLY right AND a grep surfaced the gold,
+    #                 i.e. the bonus pays for "you located the evidence you answered from",
+    #                 never for grepping around a wrong answer.
+    # Differences from "simple": partial credit via token F1 instead of binary EM (a near-miss
+    # like "Alexander I" for "Alexander I of Russia" is no longer worth the same as a wrong
+    # answer), format is a gate rather than a 0.1 bonus, and the grep term is conditioned on
+    # correctness.
+    if reward_shape == "f1_gated":
+        prediction = _extract_prediction(solution_str)
+        format_pass, _ = _check_format(solution_str)
+        em = 1.0 if (prediction and golden_answers and exact_match(prediction, golden_answers)) else 0.0
+        f1_val = compute_f1(prediction, golden_answers) if (prediction and golden_answers) else 0.0
+        g = grep_hit_prediction if grep_hit_source == "prediction" else grep_hit
+        grep_reward = float(em > 0.0 and g > 0.0)
+        grep_credit = grep_hit_coef * grep_reward
+        score = float(format_pass) * (f1_val + grep_credit)
+        if is_validation:
+            score = em      # validation reports plain EM, comparable across reward versions
+        m = _base_metrics()
+        m.update({"reward/em": em, "reward/f1": f1_val, "reward/base": f1_val,
+                  "reward/format_pass": float(format_pass),
+                  "reward/failed_rollout": float(not prediction),
+                  "reward/grep_reward": grep_reward, "reward/grep_credit": grep_credit})
+        return {"score": score, "reward/total": score, **m}
+
+    # ── v3 "simple" shape ────────────────────────────────────────────────────
+    # score = 1.0*EM + 0.1*format + 0.2*grep-found-the-answer. No penalties, no
+    # multiplicative gating, nothing can be negative. The v2 shape zeroed a rollout for a
+    # malformed tool call or an unbalanced tag and taxed every extra retrieval, which left
+    # most GRPO groups flat and (in v1) made "call fewer tools" the only surviving gradient.
+    # Here a wrong answer that still located the evidence keeps a positive, learnable score.
+    if reward_shape == "simple":
+        prediction = _extract_prediction(solution_str)
+        format_pass, _ = _check_format(solution_str)
+        em = 1.0 if (prediction and golden_answers and exact_match(prediction, golden_answers)) else 0.0
+        f1_val = compute_f1(prediction, golden_answers) if (prediction and golden_answers) else 0.0
+        g = grep_hit_prediction if grep_hit_source == "prediction" else grep_hit
+        # The grep bonus requires the rollout to have actually answered: otherwise
+        # "grep forever, never commit" would be the cheapest positive score on the board.
+        grep_credit = grep_hit_coef * g * float(format_pass)
+        score = em_coef * em + format_coef * float(format_pass) + grep_credit
+        if is_validation:
+            score = em      # validation reports plain EM, comparable across reward versions
+        m = _base_metrics()
+        m.update({"reward/em": em, "reward/f1": f1_val, "reward/base": em,
+                  "reward/format_pass": float(format_pass),
+                  "reward/failed_rollout": float(not prediction),
+                  "reward/grep_credit": grep_credit})
+        return {"score": score, "reward/total": score, **m}
 
     # 1. Invalid tool request.
     if invalid_tool:
@@ -259,7 +357,13 @@ def scaleseek_reward(
         if enable_workspace_penalty else 0.0
     )
 
-    raw_score = base - pen_L - pen_ws
+    credit = retrieval_coef * ret_coverage
+    if penalty_mode == "gated":
+        raw_score = (base + credit) * max(0.0, 1.0 - pen_L - pen_ws)
+    elif penalty_mode == "additive":
+        raw_score = base + credit - pen_L - pen_ws
+    else:
+        raise ValueError(f"Unknown penalty_mode: {penalty_mode!r}")
     score = raw_score if format_pass else 0.0
 
     m = _base_metrics()
@@ -270,5 +374,6 @@ def scaleseek_reward(
         "reward/length_decay": pen_L,
         "reward/workspace_penalty": pen_ws,
         "reward/format_pass": float(format_pass),
+        "reward/retrieval_credit": credit,
     })
     return {"score": score, "reward/total": score, **m}
