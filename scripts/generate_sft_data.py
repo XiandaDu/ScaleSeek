@@ -78,6 +78,9 @@ def main() -> None:
                          "target passage (empirically grounded); 'teacher': keep what the teacher emitted; "
                          "'race': race a (k1,b) config grid, keep the best-scoring trajectory as the "
                          "SFT positive and the losers as preference data (train/sft/bm25_race.py)")
+    ap.add_argument("--resume", action="store_true",
+                    help="append to --out, skipping question ids already written (lets a multi-hour "
+                         "run be paused/killed and continued; the summary is rebuilt over the whole file)")
     ap.add_argument("--race-width", type=int, default=4,
                     help="race mode: forward arms per question incl. the default baseline")
     ap.add_argument("--param-grid", choices=["auto", "short", "long"], default="auto",
@@ -137,18 +140,38 @@ def main() -> None:
 
     counts = {"ok": 0, "quality_fail": 0, "skipped": 0}
     n_written = 0
-    with out_path.open("w", encoding="utf-8") as fout:
-        for i, ex in enumerate(questions):
+    done_ids: set[str] = set()
+    if args.resume and out_path.exists():
+        with out_path.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # a line cut by a hard kill; the question is redone
+                if r.get("id") is not None:
+                    done_ids.add(str(r["id"]))
+                    counts[r.get("status", "skipped")] = counts.get(r.get("status", "skipped"), 0) + 1
+        if done_ids:
+            # drop a trailing partial line so the appended records stay well-formed
+            with out_path.open("rb+") as f:
+                data = f.read()
+                if data and not data.endswith(b"\n"):
+                    f.seek(data.rfind(b"\n") + 1); f.truncate()
+        print(f"[generate_sft_data] resume: {len(done_ids)} questions already in {out_path}")
+    todo = [ex for ex in questions if str(ex.get("id")) not in done_ids]
+    with out_path.open("a" if args.resume else "w", encoding="utf-8") as fout:
+        for i, ex in enumerate(todo):
             traj = build_trajectory(ex, teacher, retriever, tokenizer=tokenizer, cfg=cfg)
             counts[traj.status] = counts.get(traj.status, 0) + 1
             fout.write(json.dumps(traj.to_dict(), ensure_ascii=False) + "\n")
+            fout.flush()   # a pause/kill must not lose finished trajectories
             n_written += 1
-            print(f"  [{i+1}/{len(questions)}] {ex.get('id')}: {traj.status} "
+            print(f"  [{len(done_ids)+i+1}/{len(questions)}] {ex.get('id')}: {traj.status} "
                   f"(hops={traj.meta.get('n_hops')}, tools={traj.meta.get('n_tool_calls')}, "
-                  f"verified={traj.meta.get('all_hops_verified')})")
+                  f"verified={traj.meta.get('all_hops_verified')})", flush=True)
 
     summary = {
-        "questions": len(questions), "written": n_written, "counts": counts,
+        "questions": len(questions), "written": n_written + len(done_ids), "counts": counts,
         "teacher": args.teacher, "index_dir": args.index_dir,
         "kept_for_sft": counts.get("ok", 0),
     }

@@ -276,3 +276,77 @@ all index/doc-ID manifests, and verify a real-model search→tool→answer smoke
 each retained method. Phase 2 must run all 14,267 PopQA examples without any
 sampling flag. After reporting Phase-2 results, stop until the user approves
 Phase 3.
+
+## Local machine (/data/xianda, 4×A100-80G, no Slurm) — RL continuation
+
+`setup_env.sh` auto-detects the site (`SCALESEEK_SITE=local`) and points every
+path under `/data/xianda` (venv `/data/xianda/venvs/ScaleSeek`, data
+`/data/xianda/scaleseek_data/data`, checkpoints `/data/xianda/checkpoints/scaleseek`,
+HF cache shared with VIEScore2, `CLAUDE_CONFIG_DIR=$REPO/.claude`). The HF token
+is read from `$REPO/.env`.
+
+Differences forced by this box (all recorded in `scripts/setup_venv_local.sh`
+and the `local` block of `setup_env.sh`):
+
+- Driver 570 (CUDA 12.8): the frozen cu130 wheels cannot load, so the venv holds
+  torch 2.11.0+cu129 and vLLM 0.23.0+cu129 (same versions, different CUDA
+  suffix), flash-attn 2.8.3 built with nvcc 12.3 for sm_80.
+- PCIe A100s in two NVLink pairs with no cross-pair P2P: `NCCL_P2P_DISABLE=1`
+  **and** `NCCL_CUMEM_ENABLE=0` (Ray's single-visible-GPU workers make NCCL's
+  SHM transport go through cuMem handles, which also needs peer access).
+- Java 21 (Temurin) lives under `$SCALESEEK_DATA/jdk`; `sbatch/*` is not used.
+
+One-time preparation (already done on 2026-09-04; all idempotent):
+
+```bash
+source setup_env.sh
+bash scripts/setup_venv_local.sh
+$PY scripts/bootstrap_official_repos.py --root $OFFICIAL_ROOT --repo grepseek
+$PY $GREPSEEK_ROOT/sft/data_generation/download_corpus.py --dest $CORPUS_DIR
+$PY scripts/download_data.py
+$PY scripts/build_corpus_manifest.py --corpus $CORPUS_FILE --out $CORPUS_MANIFEST
+SCALESEEK_JVM_HEAP=32g $PY scripts/build_bm25_index.py --threads 32 --corpus-manifest $CORPUS_MANIFEST
+$PY scripts/prepare_rl_data.py --out_dir $RL_DATA_DIR      # sha256 must equal DATA_PROVENANCE.md
+$PY scripts/carve_rl_continuation.py --steps_done 190 --batch 64 \
+    --train $RL_DATA_DIR/train.jsonl --out $RL_DATA_DIR/train_from_step190.jsonl
+```
+
+The Nibi run stopped at global_step 190 of 500 and only its merged weights
+survive (`Allenda/ScaleSeek-Qwen3.5-9B-GRPO-step190`). The continuation is a
+fresh verl run warm-started from those weights on the remaining 190,393
+questions; its `global_step_k` is overall step `190+k`:
+
+```bash
+source setup_env.sh
+export SCALESEEK_MODEL_PATH=$($PY -c 'from huggingface_hub import snapshot_download as s;print(s("Allenda/ScaleSeek-Qwen3.5-9B-GRPO-step190"))')
+RL_RUN_NAME=grpo_9b_from190 RL_TOTAL_STEPS=310 RL_VAL_BEFORE_TRAIN=true \
+SCALESEEK_TRAIN_FILES=$RL_DATA_DIR/train_from_step190.jsonl \
+nohup bash scripts/run_rl_local.sh > logs/grpo_9b_from190.launcher.log 2>&1 &
+bash scripts/rl_progress.sh grpo_9b_from190          # per-step reward/EM/timing
+RL_RUN=grpo_9b_from190 bash scripts/merge_rl_ckpt.sh  # FSDP shards -> HF dir
+$PY scripts/upload_rl_ckpt_hf.py --merged ... --repo Allenda/... --overall-step 500 \
+    --train $RL_DATA_DIR/train.jsonl --continuation $RL_DATA_DIR/train_from_step190.jsonl
+```
+
+`run_rl_local.sh` keeps the sbatch watchdog/breaker and adds an outer loop that
+restarts with `resume_mode=auto` after a crash (stops after two attempts without
+checkpoint progress).
+
+### v2 optimisation chain (2026-09-05)
+
+Motivated by `reports/rl_continuation_audit_2026-09-04.md` §4–6. Everything is
+idempotent and lives in `scripts/phase2_chain.sh`:
+
+```bash
+source setup_env.sh
+nohup bash scripts/phase2_chain.sh > logs/phase2_chain.log 2>&1 &   # waits for a running RL to stop
+cat logs/phase2_status.txt                                          # stage markers
+```
+
+Stages: **A** `sft_data_local.sh` (teacher Qwen3.6-35B-A3B, search param policy,
+2048-token tool responses, strict + failure injection) ‖ **B**
+`screen_difficulty.py` (old SFT policy, pass@4 per question of the 12k pool) →
+**C** `sft_train_local.sh` → **D** `prepare_rl_data.py --screen` → **E**
+`run_rl_local.sh` with `SCALESEEK_RL_CONFIG=grpo_trainer_v2`, run `pilot_v2`,
+40 steps → **F** summary. Stop the chain with `pkill -f "^bash scripts/phase2_chain.sh"`
+then `bash scripts/rl_stop.sh`.
