@@ -1,0 +1,38 @@
+# =====================================================================================
+# RAG -- retrieve top-3 once with the question, one reader call (BASELINES.md §4 "RAG").
+# Reader prompt and passage format are PROJECT-DEFINED, modelled on the Search-R1 RAG
+# protocol (scripts/data_process/nq_rag.py), and IDENTICAL for the three retrievers.
+# Passages are passed in full: no character or token budget.
+# =====================================================================================
+method: rag
+display_name: RAG
+
+generator:
+  model: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+
+server:
+  served_model_name: qwen3.5-9b
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.70          # a dense query encoder (~8.5 GB) may share GPU 0
+  max_num_seqs: 64
+  seed: 0
+  reasoning_parser: null
+  tool_call_parser: null
+  enable_auto_tool_choice: false
+  language_model_only: true
+  trust_remote_code: false
+
+client:
+  concurrency: 64
+  request_timeout_s: 7200
+  max_retries: 5
+  retry_backoff_s: 15
+
+prompts:
+  user: {constant: prompts.rag.RAG_USER_TEMPLATE, sha256: 41cbfe6f54746f6db5cf0143b9cf68143939287414f69512408d3faf28dba42e}
+  passage: {constant: prompts.rag.RAG_PASSAGE_TEMPLATE, sha256: 8b5f663193fbda91200ad6048971e4f83cacf8ce5a239fe4be5153756e61a423}
+
+retrieval:
+  retrievers: [bm25, e5, qwen3_emb_4b]
+  top_k: 3

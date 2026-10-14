@@ -1,5 +1,18 @@
-"""Project-defined reader prompt shared by all RAG retriever backends."""
+"""RAG reader prompt and passage format -- PROJECT-DEFINED.
 
-PROMPT = """You are a knowledgeable assistant. You will be given a question and a set of Wikipedia passages retrieved from a fixed retrieval backend. Use the passages to answer the question. If the passages do not contain the answer, use your parametric knowledge.
+Modelled on the Search-R1 RAG protocol (scripts/data_process/nq_rag.py: documents as
+"Doc i(Title: t) text"), worded like prompts/direct.py.  The SAME template is used for
+every retriever; passages are inserted whole.  Frozen by the sha256s in
+configs/methods/rag.yaml.
+"""
 
-After any reasoning, end your response with exactly one <answer></answer> block containing only the final answer, which must be concise: a noun phrase, name, date, number, or yes/no. Put nothing else inside the tags."""
+RAG_USER_TEMPLATE = (
+    "Answer the given question using the retrieved documents below, which may or may not "
+    "be relevant. Give the final answer inside <answer> and </answer>, as a short phrase "
+    "without explanation, for example <answer> Beijing </answer>.\n\n"
+    "Documents:\n{documents}\n"
+    "Question: {question}"
+)
+
+# One line per passage; `documents` above is the concatenation of these.
+RAG_PASSAGE_TEMPLATE = "Doc {index}(Title: {title}) {text}\n"

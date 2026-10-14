@@ -1,155 +1,104 @@
-# ScaleSeek
+# ScaleSeek baselines
 
-ScaleSeek trains and evaluates retrieval agents that construct a bounded BM25
-workspace and then use `grep_workspace` / `read_doc` for fine-grained search.
+Re-runs, from scratch, the baseline matrix of [BASELINES.md](BASELINES.md): Direct, RAG,
+Search-R1 (7B, 14B), Search-o1, GrepSeek and AgentIR on seven FlashRAG QA sets and
+BrowseComp-Plus, with three retrievers (bm25, e5, qwen3_emb_4b), 15 runs per dataset.
 
-## Pipeline overview
-
-ScaleSeek is one two-stage pipeline. Every stage — evaluation, SFT generation,
-RL — shares the **same system prompt, the same three tools, and the same output
-format**:
-
-- system prompt: `prompts/scaleseek_prompt.py:PROMPT` (single canonical constant)
-- tools (`eval.agent.execute_tool` + `Workspace` + `BM25Retriever`):
-  `bm25_retrieve(query, top_k, k1, b, mode)`, `grep_workspace(pattern, case_insensitive)`,
-  `read_doc(doc_id)`
-- format: assistant = `<think>…</think>` + exactly one `<tool_call>`/`<answer>`;
-  tool turn = `{"role":"tool","content":<json>}`
-- data: canonical QA `{id, question, golden_answers}`
-
-```text
-                     canonical QA  {id, question, golden_answers}
-                              │
-   ┌──────────────────────────┼───────────────────────────────┐
-   │ Stage 1: evaluation       │ Stage 2: training              │
-   ▼                          ▼                                │
- eval/run_eval.py       (1) SFT cold-start generation           │
- direct / rag /         scripts/generate_sft_data.py            │
- search_r1 / search_o1  train/sft/coldstart.py  (teacher LLM)   │
- / scaleseek +           backward: decompose→trace→judge→bridge │
- official harnesses      forward:  planner→tutor-edit→execute   │
-   │                              →final(pinned gold)→quality   │
-   ▼                          ▼                                 │
- metrics                 trajectory JSONL (messages+loss_mask)  │
- (EM/F1, recall,             │  train/sft_dataset.py            │
-  latency)              ┌─────┴───── verl parquet / token mask  │
-                        ▼                                        │
-                   (2) SFT training                             │
-             run_sft.sh (verl, cluster) |                       │
-             run_sft_local.py (local smoke)                     │
-                        ▼                                        │
-                  HF checkpoint ───────────────────────┐        │
-                        │  SCALESEEK_MODEL_PATH         │        │
-                        ▼                               │        │
-             (3) RL (GRPO, verl)  scripts/run_rl.sh     │        │
-        train/{agent_loop,environment,reward}.py        │        │
-        ScaleSeekAgentLoop + ScaleSeekEnv (same tools)  │        │
-                        ▼                               │        │
-                RL checkpoint (HF) ─────────────────────┴────────┘
-                        │  becomes the scaleseek agent's model
-                        ▼
-               eval/run_eval.py --agent scaleseek
+```
+same subset + same corpus + same decoding profile
+        ==>  the only things that vary are the method and (where stated) the retriever
 ```
 
-Shared format does **not** mean the stages are interchangeable in practice — they
-still differ in base model (eval runs the frozen Qwen3.5-9B; the SFT smoke uses a
-1.7B student) and in what counts as the committed answer at each granularity (one
-assistant turn in eval, a whole trajectory in RL). The invariant that *is*
-enforced, by `eval.agent.visible_text` on both sides, is that nothing inside
-`<think>` is ever actionable.
+## Layout
 
-| Stage | Entry points | Status |
-|---|---|---|
-| 1. Evaluation | `eval/run_eval.py`, official launchers (`RUNBOOK.md`) | implemented; **phase-2 results exist only for search_r1 (7B/14B × bm25/e5) and search_o1** — direct / rag / scaleseek have not produced a run under the frozen protocol |
-| 2a. SFT cold-start generation | `scripts/generate_sft_data.py`, `train/sft/` | implemented (`train/sft/README.md`); exercised on smoke/puzzle corpora only |
-| 2b. SFT training | `scripts/run_sft.sh` (verl) / `scripts/run_sft_local.py` (local) | implemented; local smoke only |
-| 2c. RL (GRPO) | `scripts/run_rl.sh`, `train/config/grpo_trainer.yaml` | scaffolded, **never run**; SFT→RL handoff not yet exercised end-to-end |
-
-The SFT stage runs in two environments from one codebase: a single-GPU **local
-smoke** (tiny corpus, `hf:` teacher, `run_sft_local.py`) proves the plumbing, and
-the **cluster** path (full wiki-18 index, vLLM teacher, verl SFT) does real runs.
-See `train/sft/README.md` for the exact commands and the local-vs-cluster split.
-
-## Phase-1 source of truth
-
-- `TASK.md`: gated three-phase experiment plan.
-- `configs/baselines.yaml`: frozen method/model/retrieval parameters.
-- `configs/official_repos.yaml`: official repository commits.
-- `BASELINE_SOURCES.md`: paper, prompt and harness provenance.
-- `RUNBOOK.md`: executable commands and action/search budgets.
-- `cleanup_manifest.json`: removed approximations and obsolete launch scripts.
-- `prompts/*.py`: project-authored or project-modified prompt constants.
-- `eval/*`: verbatim third-party prompts beside their corresponding evaluator.
-
-Prompt-based generators and the BrowseComp-Plus judge use
-`Qwen/Qwen3.5-9B@c202236235762e1c871ad0ccb60c8ee5ba337b9a`. Search-R1 uses only
-the frozen 7B and 14B v0.3 checkpoints; GrepSeek and AgentIR use their official
-specialized checkpoints.
-
-## Local runner
-
-The local runner contains only methods whose loop is correctly implemented in
-this repository:
-
-```bash
-python -m eval.run_eval --help
+```
+run.py                      the only entry point (python run.py --help)
+setup_env.sh                source it to activate; bash setup_env.sh --install to build
+submit.sh                   sbatch wrapper for every stage (account in cluster.env)
+configs/base.yaml           shared: datasets, corpora, retrievers, decoding profiles, seed
+configs/methods/*.yaml      one file per method: model + revision, server, prompts (sha256)
+prompts/                    project-defined prompts; prompts/official/ = verbatim copies
+scaleseek/                  the package (config, data, corpus, retrieval/, methods/, ...)
+slurm/                      job.sh (one command), array.sh (one shard per task)
+env/                        locks: main.in + main.lock.txt, agentir.lock.txt, *_extra.txt
+docs/deviations.md          everything that differs from an official implementation
+tests/                      CPU tests: configs, byte diffs, sampling, metrics, method loops
 ```
 
-It supports `direct`, `rag`, `search_r1`, `search_o1`, and `scaleseek`.
-RAG, Search-R1 and Search-O1 accept `--retriever bm25|e5|qwen3_emb_4b`;
-their comparable local retrieval returns top-3. Fixed BM25 uses k1=1.2, b=0.75.
+Two config files define a run, and nothing else: `configs/base.yaml` and one
+`configs/methods/<method>.yaml`. Unknown keys and missing keys are both errors; the code
+has no defaults for experimental parameters. Prompts are frozen by sha256 in the yaml;
+official prompts are byte-diffed against the pinned checkout before every run.
 
-Direct, RAG and ScaleSeek prompts are imported from `prompts.direct:PROMPT`,
-`prompts.rag:PROMPT` and `prompts.scaleseek_prompt:PROMPT`. Training and
-evaluation resolve the same canonical ScaleSeek constant. Prompt provenance
-hashes cover the exact Python string sent to the model, without newline/file
-normalization ambiguity.
-
-`--full-eval` forbids `--n` and `--offset`, verifies known complete-split counts,
-requires the frozen generator revision, and checks that final output IDs exactly
-equal the dataset manifest. In particular, canonical `popqa` means all 14,267
-test examples; there are no `popqa_full` or long-tail aliases.
-
-## Official external harnesses
-
-GrepSeek, DCI, DR-DCI, RISE and AgentIR are intentionally not reimplemented locally.
-Bootstrap their pinned repositories and launch through the commit gate:
+## Setup (once, on a LOGIN node: compute nodes have no internet)
 
 ```bash
-python scripts/bootstrap_official_repos.py --root /data/official-baselines
-python scripts/run_official_baseline.py --help
-```
-
-The launcher passes argv directly without a shell, verifies the checkout commit,
-and rejects method parameters that violate the frozen Phase-1 profile.
-
-## Indexes
-
-On the experiment server, initialize the repository environment before running
-any command:
-
-```bash
-cd /data/rech/mofengra/ScaleSeek
+cp cluster.env.example cluster.env          # account, asset root
+bash setup_env.sh --install                 # uv, CPython, wheelhouse, login env, repos
 source setup_env.sh
+python run.py prefetch                      # pinned models, datasets, corpora (I/O only)
+# once, in any job: build the two AgentIR deps that have no PyPI wheel, then record
+# the printed sha256 lines in env/agentir_extra.txt
+srun --account=def-amirhk --time=1:00:00 --mem=8G bash setup_env.sh --build-wheels
 ```
+
+Everything lives under `$SCALESEEK_ROOT` (default `/scratch/$USER/scaleseek_v2`).
+Inside a job, `source setup_env.sh` builds the Python environment on node-local
+`$SLURM_TMPDIR` from the hash-pinned wheelhouse (offline, ~2 min, once per job): Lustre
+serves big files fast but small-file opens can take seconds, and a Python process opens
+thousands. The AgentIR environment is built the same way on first use.
+Mind the 60-day scratch purge: `runs/` holds the only copy of the trajectories.
+
+## Pipeline
 
 ```bash
-python scripts/build_corpus_manifest.py --corpus "$CORPUS_FILE" --out "$DATA/indexes/wiki18-corpus.json"
-python scripts/build_bm25_index.py --corpus-dir "$CORPUS_DIR" --index-dir "$BM25_INDEX_DIR" --corpus-manifest "$DATA/indexes/wiki18-corpus.json"
-python scripts/build_e5_index.py --backend e5 --corpus "$CORPUS_FILE" --out "$E5_INDEX_DIR" --corpus-manifest "$DATA/indexes/wiki18-corpus.json"
-python scripts/build_qwen3_embedding_index.py --corpus "$CORPUS_FILE" --out "$QWEN3_EMB_INDEX_DIR" --corpus-manifest "$DATA/indexes/wiki18-corpus.json"
+bash submit.sh prepare                                   # preflight + subsets + corpora
+bash submit.sh index-bm25       --corpus wiki18
+bash submit.sh encode           --retriever e5 --corpus wiki18 --shards 8
+bash submit.sh build-hnsw       --retriever e5 --corpus wiki18 --shards 8
+bash submit.sh encode           --retriever qwen3_emb_4b --corpus wiki18 --shards 64
+bash submit.sh build-hnsw       --retriever qwen3_emb_4b --corpus wiki18 --shards 64
+bash submit.sh encode-agentir   --corpus wiki18 --shards 64
+bash submit.sh finalize-agentir --corpus wiki18 --shards 64
+bash submit.sh check-retrievers --corpus wiki18          # doc-id alignment + determinism
+bash submit.sh eval-all --dataset popqa                  # the 15 runs
+bash submit.sh score    --dataset popqa                  # metrics.json + REPORT.md
+# BrowseComp-Plus: the same with --corpus bcp / --dataset browsecomp_plus, then
+bash submit.sh judge    --dataset browsecomp_plus
 ```
 
-The dense implementations use the frozen model revisions, E5 query/passage
-prefixes and masked-mean pooling, and Qwen3's official query instruction,
-left-padding-compatible last-token pooling and L2 normalization.
+`--after <jobid>` chains a stage on another; `--dry-run` prints the sbatch command.
+`--tasks 13,15,22` (with `--shards N`) re-runs only those shards of an array stage.
+A run resumes where it stopped (records are appended one by one); it refuses to resume
+under a different config id or harness commit; formal runs need committed code.
+Scoring refuses a run whose ids are not exactly the subset manifest's.
 
-## Tests
+Order (§2/§5): **PopQA first**, report, and only then the other seven datasets.
+
+## Smoke test
+
+One allocation, every method on 4 questions against mini corpora built from the real
+ones (`smoke` in base.yaml), the BCP judge, and a smoke report under `$SCALESEEK_ROOT/smoke`
+(never reported):
 
 ```bash
-PYTHONPYCACHEPREFIX=/tmp/scaleseek-pycache python -m pytest -q
-python scripts/verify_official_prompts.py --repo-root /data/official-baselines
+salloc --account=def-amirhk --gpus-per-node=a100:4 --cpus-per-task=48 --mem=0 --time=8:00:00   # 4 GPUs: the Qwen3-32B judge is TP=4
+source setup_env.sh
+python run.py smoke-prepare && python run.py smoke
 ```
 
-Phase 2 may begin only after Phase 1 passes. Phase 2 evaluates the complete
-PopQA test split and must stop for user review before any Phase-3 experiment.
+## Outputs (per run: `runs/<dataset>/<method>[__<retriever>]/`)
+
+`provenance.json` (config id, harness commit, subset manifest hash, model revision, corpus
+and index manifests, prompt hashes, byte-diff results, official commit, server command,
+software versions, seeds), `sessions.jsonl` (host, job, harness commit, wall time per session),
+`trajectories.jsonl` (one record per question with the full trajectory), `metrics.json`,
+and for official harnesses their raw output under `official/`.
+
+## Decisions on record
+
+See docs/deviations.md: AgentIR on the official OSS client with QUERY_TEMPLATE; BCP
+documents shown to agents cut to 512 tokens (Qwen3-0.6B); Direct/RAG on BCP capped at
+10,000 tokens per response; GrepSeek on BCP as the official harness is; BCP judge =
+Qwen3-32B (TP=4, the official open-source judge) instead of Qwen3.5-9B; judge verdicts per
+judge config; jobs run from a git worktree of the submitted commit.

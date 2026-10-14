@@ -1,0 +1,8 @@
+# Wheels installed into the AgentIR env on top of env/agentir.lock.txt, from
+# $SCALESEEK_ROOT/wheelhouse/agentir-extra.  <wheel file> <sha256>; checked at every install.
+#   flash-attn 2.8.3: no PyPI wheel; the upstream prebuilt wheel for torch 2.7 / cu12 / cp312
+#   tevatron: built from the commit locked by repos/AgentIR/uv.lock (setup_env.sh --build-wheels)
+#   jieba 0.42.1: sdist only on PyPI (hash in the official lock); built by --build-wheels
+flash_attn-2.8.3+cu12torch2.7cxx11abiTRUE-cp312-cp312-linux_x86_64.whl cafd4f708725e1be95495a86cbf418cfada08e707c8a797def61488a2a3c4f72
+tevatron-0.0.1-py3-none-any.whl 6b5f0d5fb7144b0370e6c55c67586b7f6f0c6fc398b19af33b0bb1b860aeb9ae
+jieba-0.42.1-py3-none-any.whl 8d85bda15a67e1b11b778632dc65326c80258dd558e03aecb2130e883ca488b3
