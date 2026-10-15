@@ -30,10 +30,9 @@ Qwen3.5-9B 在冒烟中对 AgentIR 的 3 个回答（3 个都答对了）都没�
 | 语料 | bm25 | e5 | qwen3_emb_4b | agentir_4b | retriever check |
 |---|---|---|---|---|---|
 | BCP（100,195 篇） | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Wiki-18（21,015,324 段） | ✅ | ✅ | 64 个 shard 都已编码（OOM 的 7 个重跑完成，每个约 47 分钟）；HNSW 构建中（5564785） | ✅ | 排在 HNSW 之后（5564796） |
+| Wiki-18（21,015,324 段） | ✅ | ✅ | ✅（HNSW 221 GB，构建 4.5 小时） | ✅ | 排队中（5564796） |
 
-- OOM 的原因：原来按「字符数/3」估算 token 数，遇到数字和表格多的段落会低估，batch 因此过大。现在先用真实 tokenizer 算出长度，再按 padding 后的 token 数分 batch；万一仍然 OOM，就把 batch 减半重试（向量结果不变）。
-- 重跑以后的顺序：qwen3 wiki18 的 7 个 shard → `build-hnsw qwen3_emb_4b wiki18 --shards 64`（400G 节点）→ `check-retrievers --corpus wiki18`。作业号见 `$ROOT/dev/index_jobs.txt`。
+- qwen3 有 7 个 shard 曾经 OOM：原来按「字符数/3」估算 token 数会低估。现在按真实 tokenizer 长度分 batch，7 个 shard 已重跑成功。作业号见 `$ROOT/dev/index_jobs.txt`。
 - `submit.sh` 新增 `--tasks 13,15,...`（配合 `--shards N`），可以只重跑指定的 shard。
 
 ## 10-14 晚：代码精简
@@ -41,9 +40,16 @@ Qwen3.5-9B 在冒烟中对 AgentIR 的 3 个回答（3 个都答对了）都没�
 - 删掉了多余的防御性代码：GrepSeek / AgentIR 的 transient 重跑（冒烟里从未触发）、编码 OOM 时减半 batch 的兜底、旧格式兼容、重复的存在性检查等。Search-o1 的 `max_search_limit` 不再写进 yaml 再校验，直接由 turns − 1 算出。
 - 修了一个 bug：`slurm/job.sh` 的 `cd "$SLURM_SUBMIT_DIR"` 让作业回到了 `~/ScaleSeek`，「冻结副本」其实从未生效，作业跑的一直是当时的工作区代码。另外 `.gitignore` 里的 `env/` 会让 lock 文件进不了 git。两处都已修好。
 
+## 10-14 晚：公平性修正（commit 2fbdad8）
+
+1. AgentIR 每次模型调用最多执行一次搜索：官方 OSS client 会执行一次回复里的所有工具调用，现在第一个之后的调用都丢掉（次数记在 sidecar 里）。AgentIR 的 README 也写了，要和 BCP 官方 baseline 公平比较，就关掉并行搜索。
+2. 统一的答案规则：只有以答案结束（`finish_reason == "answer"`）的记录才计 EM/F1、才送 judge（`metrics.final_answer`）。BCP judge 对所有方法都只看最终答案这个短串，AgentIR 只送 `Exact Answer:` 的值，不再送整段回答。
+3. Search-o1 只从最后一个 `</think>` 之后取 `\boxed{}`，和 Direct/RAG 一致。
+4. GrepSeek 每次工具调用的上限保持 BASELINES 的 2,048 / 6,000 token（你的决定），写进了 deviations.md，报告里作为说明列出。
+
 ## 下一步（按 BASELINES 的顺序）
 
-1. Wiki-18 retriever check 通过后：`bash submit.sh eval-all --dataset popqa`（15 个 run）→ `score` → 汇报。
+1. 等三件事：全新冒烟通过（作业 5615537，从 2fbdad8 的 worktree 跑，重建 mini 索引）、Wiki-18 retriever check 通过、你看完代码。然后在 PopQA 上一个模型一个模型地跑（Direct → RAG → Search-R1-7B → Search-R1-14B → Search-o1 → GrepSeek → AgentIR），每个模型跑完检查一遍再提交下一个。
 2. 汇报之后再跑其余 7 个数据集。BCP 还要跑 `judge`（Qwen3-32B，整节点 4 GPU）和 `score`。
 
 ## 提醒
