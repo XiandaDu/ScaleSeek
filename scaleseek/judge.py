@@ -1,10 +1,11 @@
 """BrowseComp-Plus judge (BASELINES.md §4): one independent server of the judge model
 (configs/methods/bcp_judge.yaml; Qwen3-32B since 2026-10-14).
 
-For every record of a BCP run: no final answer, or a run that did not complete, is
-judged incorrect WITHOUT a model call (official evaluate_run.py does the same).  Otherwise
-the official create_judge_prompt(question, response=<final answer>, correct_answer) goes
-to the judge as one user message, thinking disabled exactly as the official script does
+For every record of a BCP run: a record without a final answer (metrics.final_answer, one
+rule for every method) is judged incorrect WITHOUT a model call (official evaluate_run.py
+does the same for missing answers).  Otherwise the official create_judge_prompt(question,
+response=<final answer>, correct_answer) goes to the judge as one user message, thinking
+disabled exactly as the official script does
 (chat_template_kwargs={"enable_thinking": False}), temperature 0, top_p 1, at most
 `max_new_tokens`; the verdict is the official parse_judge_response.  The judge never sees
 the agent's conversation.  Raw judge text is stored in <run_dir>/judge__<judge>.jsonl;
@@ -19,6 +20,7 @@ from pathlib import Path
 from .config import ConfigError, load_method, load_prompts
 from .hub import local_snapshot
 from .llm import LLMClient, LLMRequestError, VLLMServer
+from .metrics import final_answer
 from .official import verify_method
 from .runner import job_gpus
 from .utils import (JsonlAppender, PipelineError, git_state, iter_jsonl, log, now_iso, repo_root,
@@ -56,10 +58,8 @@ def judge_runs(base: dict, run_dirs: list[Path], judge_name: str) -> None:
 
             def one(rec: dict) -> dict:
                 row = {"id": rec["id"], "judge_model": cfg["generator"], "created": now_iso()}
-                # The final response if the method has one (AgentIR: the official
-                # Explanation/Exact Answer/Confidence text), else its completed answer.
-                response = rec.get("final_response") or (
-                    rec["prediction"] if rec["finish_reason"] == "answer" else None) or ""
+                # Every method: only its final answer (AgentIR: the `Exact Answer:` value).
+                response = final_answer(rec) or ""
                 if not response:
                     return {**row, "response": response, "judge_prompt": None,
                             "judge_response": None, "called": False,

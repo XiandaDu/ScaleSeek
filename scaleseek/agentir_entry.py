@@ -15,8 +15,12 @@ overriding exactly these points (configs/methods/agentir.yaml, docs/deviations.m
      call whose output ends in a reasoning item (an "upstream vLLM bug" workaround), so it
      could loop forever; past the budget the call fails, which the official loop counts as
      an iteration, and the question ends after --max-iterations (= max_turns).
-  3. Our per-call log (ok / failure kind / usage) is written next to the official
-     run_*.json (`sidecars/<query_id>.json`), with the wall time of the question.
+  3. One search per model call: the official loop runs every tool call of a response;
+     calls after the first are dropped (the AgentIR README turns parallel search off for a
+     fair comparison with the BrowseComp-Plus baselines; every other method searches once
+     per turn).
+  4. Our per-call log (ok / failure kind / usage / dropped calls) is written next to the
+     official run_*.json (`sidecars/<query_id>.json`), with the wall time of the question.
 """
 
 from __future__ import annotations
@@ -27,6 +31,17 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+TOOL_CALL_TYPES = ("function_call", "mcp_call", "custom_tool_call")   # as the official loop
+
+
+def drop_parallel_calls(response) -> int:
+    """One search per model call, as for every other method: tool calls after the first
+    one of a response are removed before the official loop sees them.  Returns how many."""
+    calls = [o for o in response.output if o.type in TOOL_CALL_TYPES]
+    extra = {id(o) for o in calls[1:]}
+    response.output = [o for o in response.output if id(o) not in extra]
+    return len(extra)
 
 
 def main() -> None:
@@ -65,8 +80,10 @@ def main() -> None:
             except Exception as exc:
                 log.append({"ok": False, "kind": "transient", "error": f"{type(exc).__name__}: {exc}"[:500]})
                 raise
+            dropped = drop_parallel_calls(response)
             usage = getattr(response, "usage", None)
             log.append({"ok": True, "status": getattr(response, "status", None),
+                        "dropped_parallel_calls": dropped,
                         "usage": usage.model_dump() if usage is not None else None})
             return response
 

@@ -65,7 +65,7 @@ def test_search_o1_limit_and_repeat_messages():
     rid = ("</think>\n**Final Information**\n\nParis is the capital.", "stop", None)
     script = [(f"think {BQ}capital{EQ}", "stop", EQ), rid,
               (f"again {BQ}capital{EQ}", "stop", EQ),
-              ("so \\boxed{Paris}", "stop", None)]
+              ("maybe \\boxed{Rome}</think>\n\nso \\boxed{Paris}", "stop", None)]
     ctx = make_ctx("search_o1", P, script)
     from scaleseek.methods.search_o1 import SearchO1
     rec = SearchO1(ctx).run_one({"id": "1", "question": "Capital of France?", "golden_answers": ["Paris"]})
@@ -91,3 +91,11 @@ def test_title_rules():
     page = "---\ntitle: Arwa University\ndate: 2002-05-13\n---\nBody text\nmore"
     assert split_title(page, "bcp_front_matter") == ("Arwa University", "Body text\nmore")
     assert split_title("plain\nbody", "bcp_front_matter") == ("plain", "body")
+
+
+def test_search_o1_answer_only_after_think():
+    P = _prompts("search_o1")
+    ctx = make_ctx("search_o1", P, [("the answer is \\boxed{Paris}, but let me think", "stop", None)])
+    from scaleseek.methods.search_o1 import SearchO1
+    rec = SearchO1(ctx).run_one({"id": "1", "question": "Capital of France?", "golden_answers": ["Paris"]})
+    assert rec["prediction"] is None and rec["finish_reason"] == "no_answer"   # thinking never closed

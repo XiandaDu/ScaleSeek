@@ -13,9 +13,12 @@
 #     sends none) and max_output_tokens=None (official 20000 per response): no per-turn cap;
 #   * at most `max_assistant_turns` model calls per question (official --max-iterations is
 #     also set to it; the extra guard closes the official loop's uncounted re-calls);
+#   * one search per model call: tool calls after the first of a response are dropped
+#     (the official loop runs them all; AgentIR's README turns parallel search off for a fair
+#     comparison with the BrowseComp-Plus baselines);
 #   * k = 3 (official 5).
-# EM/F1 use the `Exact Answer:` line of the final response; the BCP judge gets the whole
-# final response, as in the official BrowseComp-Plus evaluation.
+# EM/F1 and the BCP judge use the `Exact Answer:` value of the final response (the judge
+# sees only the final answer, as for every method).
 # =====================================================================================
 method: agentir
 display_name: AgentIR

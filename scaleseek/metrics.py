@@ -1,9 +1,11 @@
 """Scoring (BASELINES.md §7): EM / token F1 with 95% intervals, run statistics, McNemar.
 
 One scorer for every method (SQuAD normalisation, max over gold answers; the same
-definition as Search-R1's qa_em and GrepSeek's inference/scoring.py).  A record without a
-prediction scores 0.  Before anything is scored, the run's id set must EQUAL the subset
-manifest's (formal runs) -- a partial run cannot produce a number.
+definition as Search-R1's qa_em and GrepSeek's inference/scoring.py).  Only a record that
+ENDED with an answer (finish_reason "answer") has a scored answer -- the same rule for every
+method, also for the BCP judge; anything else scores 0.  Before anything is scored, the
+run's id set must EQUAL the subset manifest's (formal runs) -- a partial run cannot produce
+a number.
 """
 
 from __future__ import annotations
@@ -21,6 +23,13 @@ def normalize_answer(s: str) -> str:
     s = "".join(ch for ch in s if ch not in set(string.punctuation))
     s = re.sub(r"\b(a|an|the)\b", " ", s)
     return " ".join(s.split())
+
+
+def final_answer(rec: dict) -> str | None:
+    """The answer that is scored and judged: the prediction of a record that ended with an
+    answer, else None (an answer seen mid-trajectory before max_turns / a full context does
+    not count)."""
+    return rec["prediction"] if rec["finish_reason"] == "answer" else None
 
 
 def exact_match(pred: str | None, golds: list[str]) -> bool:
@@ -97,9 +106,9 @@ def check_ids(records: list[dict], expected_ids: list[str], partial_ok: bool) ->
 
 def run_metrics(records: list[dict], z: float, wall_time_s: float) -> dict:
     n = len(records)
-    em = [exact_match(r["prediction"], r["golden_answers"]) for r in records]
-    f1 = [f1_score(r["prediction"], r["golden_answers"]) for r in records]
-    answered = sum(1 for r in records if r["prediction"])
+    em = [exact_match(final_answer(r), r["golden_answers"]) for r in records]
+    f1 = [f1_score(final_answer(r), r["golden_answers"]) for r in records]
+    answered = sum(1 for r in records if final_answer(r))
     return {
         "n": n,
         "em": proportion_ci(sum(em), n, z),

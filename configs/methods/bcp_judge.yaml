@@ -7,9 +7,9 @@
 # judge failure, i.e. incorrect.  Decoding stays as in §4 (temperature 0, top_p 1).
 # The grader template is copied verbatim from texttron/BrowseComp-Plus at the pinned
 # commit and byte-diffed.  The judge sees only (question, gold answer, the agent's final
-# answer -- for AgentIR its whole final response, the official BCP format); never the
-# agent's conversation, never the agent's self-reported confidence as a score.  Every
-# method's BCP output is judged by this one configuration and the raw judge text is stored.
+# answer -- for AgentIR its `Exact Answer:` value); never the agent's conversation, never
+# the agent's self-reported confidence as a score.  Every method's BCP output is judged by
+# this one configuration and the raw judge text is stored.
 # =====================================================================================
 method: bcp_judge
 display_name: BCP judge (Qwen3-32B)

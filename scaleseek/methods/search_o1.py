@@ -16,7 +16,8 @@ batching does not change any single sequence's prompts):
     otherwise the sequence is finished.
   answer = extract_answer(output, mode='qa')  (last \\boxed{...}).
 
-Local-corpus adaptation (docs/deviations.md): Bing results become top-k corpus documents
+Changed (docs/deviations.md): the answer is read only from the text after the last
+</think>, as for Direct/RAG.  Local-corpus adaptation: Bing results become top-k corpus documents
 shown as {"id", "title", "context"}; with no search snippet the official fallback
 `context = raw_context[:max_doc_len * 2]` applies.
 """
@@ -115,12 +116,14 @@ class SearchO1(Method):
         elif rec["finish_reason"] is None:
             rec["finish_reason"] = "max_turns"
         rec["trajectory"].append({"type": "final_output", "text": output})
-        answer = P["extract_answer"](output, mode="qa")
-        rec["prediction"] = answer if answer else None
+        # As for Direct/RAG (Qwen3.5 thinking mode), only the text after the last </think>
+        # counts; the official last-\boxed{} rule (extract_answer, mode="qa") is applied to it.
+        after_think = output.rsplit("</think>", 1)[1] if "</think>" in output else ""
+        rec["prediction"] = P["extract_answer"](after_think, mode="qa") or None
         if rec["finish_reason"] == "answer" and rec["prediction"] is None:
             rec["finish_reason"] = "no_answer"
             rec["errors"]["parse"] += 1
-            rec["error"] = "no \\boxed{} in the output"
+            rec["error"] = "no \\boxed{} after </think>"
 
     def _search_and_reason(self, rec, ex, output, query, max_doc_len, P, tags):
         hits = self.search(rec, query) or []

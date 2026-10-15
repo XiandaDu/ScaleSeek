@@ -15,6 +15,9 @@ checkout before every run (`python run.py check`; `scaleseek/official.py`). Code
 | Server sampling defaults | vLLM reads `generation_config.json` | `--generation-config vllm` | a checkpoint must not inject top_k / penalties we did not set |
 | Context window | per repository | 16,384 / 131,072 | §4 |
 | Seed | — | vLLM `--seed 0` (server); subset seed in base.yaml | provenance |
+| Scored answer | per repository | only a record that **ended** with an answer (`finish_reason == "answer"`) has one; EM/F1 and the BCP judge use it, nothing else (`metrics.final_answer`) | one rule for every method (decision 2026-10-14) |
+| BCP judge input | BrowseComp-Plus judges the whole response | the final answer string only, for every method (AgentIR: its `Exact Answer:` value) | §4: the judge sees the final answer; the same evidence for every method |
+| Searches per model call | AgentIR's OSS client runs every tool call of a response | at most one, as every other method | AgentIR README: parallel search off for a fair comparison with the BCP baselines |
 
 ## Direct and RAG (project-defined)
 
@@ -63,6 +66,10 @@ messages (scripts/run_search_o1.py).
   `context = raw_context[:max_doc_len * 2]` (max_doc_len = 3000) applies.
 * PopQA is not in the official script's dataset list; BASELINES.md assigns it the
   single-hop instruction. BCP is not covered by BASELINES.md; we use the multi-hop one.
+* Answer: the official `extract_answer(·, mode='qa')` (last `\boxed{}`) is applied only to
+  the text after the last `</think>`, the same rule as Direct/RAG (decision 2026-10-14).
+  Officially it reads the whole output, thinking included, so an unfinished reasoning chain
+  could still yield an answer.
 
 ## GrepSeek (official harness, unmodified)
 
@@ -83,6 +90,11 @@ harness's own "no per-turn cap"), `--tool_max_tokens 2048 / 6000`,
 * The corpus is copied to node-local disk before the run (same bytes, faster reads).
 * The harness tries each call once; an `api_error` row counts as a failure. If the vLLM
   server died, the run aborts and resumes later from the harness's own `--resume`.
+* Observation budget per tool call: GrepSeek's tool output is capped at 2,048 / 6,000
+  tokens (BASELINES.md §4, the checkpoint's setting); a retrieval method sees 3 documents
+  per search (about 450 tokens on Wiki-18, at most 3 × 512 on BCP). Kept as specified
+  (decision 2026-10-14) -- grep output is matching lines, not documents -- and stated as a
+  caveat in the report.
 * The official harness has no BCP mode (its system prompt describes a 21-million-line
   Wikipedia file); it runs on the BCP corpus as is -- accepted 2026-10-14.
 
@@ -100,9 +112,13 @@ official reasoning-aware AgentIR search tool. The official `main()` runs; overri
 * `--max-iterations` = turns, plus a hard cap of `turns` model calls per question: the
   official loop re-calls without counting when an output ends in a reasoning item;
 * `--k 3` (official 5); our per-call log is saved next to the official `run_*.json`.
-* EM/F1 use the last `Exact Answer:` line of the final response (project-defined parse of the
-  official format); the BCP judge receives the whole final response, as the official
-  BrowseComp-Plus evaluation does.
+* One search per model call: tool calls after the first of a response are dropped (count
+  in the per-call log). The official OSS loop executes every call of a response; the
+  AgentIR README turns parallel search off "for fair comparison against the official
+  baselines in BrowseComp-Plus", and every other method searches once per turn.
+* EM/F1 and the BCP judge use the last `Exact Answer:` line of the final response
+  (project-defined parse of the official format); the judge sees only that value, as it
+  sees only the final answer of every other method.
 * The task prefix is byte-identical to the official scripts, which pass it through bash
   double quotes: its `\n` is a literal backslash + `n`, in training and evaluation alike.
 * The official searcher builds a **flat** inner-product index from tevatron pickles and
@@ -157,9 +173,10 @@ official reasoning-aware AgentIR search tool. The official `main()` runs; overri
 * Official grader template and parser (texttron/BrowseComp-Plus, byte-diffed), thinking
   disabled as in the official script. temperature 0, top_p 1, 4096 new tokens (§4; the official
   defaults are 0.7 / 0.8 / top_k 20). Only runs that completed with a final answer are sent.
-* The judge sees the agent's **final answer** only (§4); for AgentIR, whose official format
-  is a whole response (Explanation / Exact Answer / Confidence), it sees that final response,
-  as in the official BrowseComp-Plus evaluation.
+* The judge sees the agent's **final answer** only (§4), for every method: AgentIR's
+  `Exact Answer:` value, not its whole Explanation / Exact Answer / Confidence response
+  (which the official BrowseComp-Plus evaluation would judge). A record that did not end
+  with an answer is not sent and counts as incorrect.
 
 ## Environments
 
