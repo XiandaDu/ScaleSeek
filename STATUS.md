@@ -47,10 +47,16 @@ Qwen3.5-9B 在冒烟中对 AgentIR 的 3 个回答（3 个都答对了）都没�
 3. Search-o1 只从最后一个 `</think>` 之后取 `\boxed{}`，和 Direct/RAG 一致。
 4. GrepSeek 每次工具调用的上限保持 BASELINES 的 2,048 / 6,000 token（你的决定），写进了 deviations.md，报告里作为说明列出。
 
-## 下一步（按 BASELINES 的顺序）
+## 正式 run（10-15 开始）
 
-1. 等三件事：全新冒烟通过（作业 5615537，从 2fbdad8 的 worktree 跑，重建 mini 索引）、Wiki-18 retriever check 通过、你看完代码。然后在 PopQA 上一个模型一个模型地跑（Direct → RAG → Search-R1-7B → Search-R1-14B → Search-o1 → GrepSeek → AgentIR），每个模型跑完检查一遍再提交下一个。
-2. 汇报之后再跑其余 7 个数据集。BCP 还要跑 `judge`（Qwen3-32B，整节点 4 GPU）和 `score`。
+- 顺序（你定的）：Direct × 8 个数据集 → Search-R1-7B / 14B + BM25 × 8 → Search-R1 + e5 / qwen3_emb_4b × 8 → RAG → Search-o1 → GrepSeek → AgentIR（后四个由我排序，都跑 8 个数据集）→ BCP judge → 全部 `score`。每个方法跑完我检查一遍，再提交下一个。
+- 所有正式 run 都从 commit `8aa3ae9` 的 worktree（`$ROOT/harness/8aa3ae938c51`）提交：它和冒烟用的 `2fbdad8` 相比只多改了 STATUS.md，代码完全相同；之后 STATUS.md 再怎么改，也不会让 run 落到不同的 commit 上。作业日志在该 worktree 的 `logs/` 下，作业号记在 `$ROOT/dev/formal_jobs.txt`。
+- 前提都已满足：全新冒烟（5615537）0 失败；Wiki-18 retriever check 通过（4 个索引都是 21,015,324 篇，重复查询结果一致，命中 id 都在语料内）。
+- 冒烟里看到的现象：AgentIR 在 PopQA 上 4 题都跑满 6 轮。它每轮都在正常检索，只是反复换说法核实，没有给出答案。没有并行调用被丢弃（0 次），所以和 10-14 的改动无关；轮数预算和其他方法一样，不改，报告里会写。
+
+| 方法 | 状态 |
+|---|---|
+| Direct × 8 | 已提交（5750273–5750281） |
 
 ## 提醒
 
