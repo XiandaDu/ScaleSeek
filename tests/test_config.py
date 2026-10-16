@@ -37,11 +37,14 @@ def test_unknown_and_missing_keys_are_errors():
 
 def test_decoding_profiles_match_baselines():
     base = C.load_base()
-    assert base["profiles"]["wiki"] == {"temperature": 0.6, "top_p": 1.0, "max_assistant_turns": 6,
-                                        "max_model_len": 16384, "single_call_max_tokens": None}
+    # Table 5 + presence_penalty 1.5 for every method (decision 2026-10-15: Qwen3.5 thinking loops)
+    assert base["profiles"]["wiki"] == {"temperature": 0.6, "top_p": 1.0, "presence_penalty": 1.5,
+                                        "max_assistant_turns": 6, "max_model_len": 16384,
+                                        "single_call_max_tokens": None}
     # BCP single-call cap: the BrowseComp-Plus official Qwen client default (decision 2026-10-14)
-    assert base["profiles"]["bcp"] == {"temperature": 0.6, "top_p": 1.0, "max_assistant_turns": 16,
-                                       "max_model_len": 131072, "single_call_max_tokens": 10000}
+    assert base["profiles"]["bcp"] == {"temperature": 0.6, "top_p": 1.0, "presence_penalty": 1.5,
+                                       "max_assistant_turns": 16, "max_model_len": 131072,
+                                       "single_call_max_tokens": 10000}
     assert base["retrievers"]["bm25"]["k1"] == 1.2 and base["retrievers"]["bm25"]["b"] == 0.75
     for r in ("e5", "qwen3_emb_4b"):
         assert base["retrievers"][r]["hnsw"] == {"M": 32, "ef_construction": 128, "ef_search": 128}

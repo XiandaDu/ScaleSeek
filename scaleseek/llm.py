@@ -1,9 +1,11 @@
 """vLLM server lifecycle and a small OpenAI-compatible client.
 
-Decoding policy (BASELINES.md §4): the client sends temperature and top_p and NOTHING else
-(no top_k, penalties or thinking budget), and the server runs with
-`--generation-config vllm` so a checkpoint's generation_config.json cannot inject its own
-sampling defaults (Qwen checkpoints ship top_k=20 etc.).  There is no per-turn cap:
+Decoding policy (BASELINES.md §4 + base.yaml profiles): a generation request carries
+temperature, top_p and presence_penalty and NOTHING else (no top_k, other penalties or
+thinking budget), and the server runs with `--generation-config vllm` so a checkpoint's
+generation_config.json cannot inject its own sampling defaults.  (vLLM cannot set a default
+presence_penalty server-side, so every client sends it: this one, scaleseek/grepseek_entry.py
+and scaleseek/agentir_entry.py.)  There is no per-turn cap:
 `max_tokens` is always "whatever is left of max_model_len", computed with the server's
 own tokenizer (/tokenize) so the count is exact.
 
@@ -148,11 +150,13 @@ class LLMClient:
         """Tokens left in the context window after `prompt` (the no-cap max_tokens)."""
         return self.server.max_model_len - self.count_tokens(prompt)
 
-    def complete(self, prompt: str, *, temperature: float, top_p: float, max_tokens: int,
-                 stop: list[str] | None = None, stop_token_ids: list[int] | None = None,
+    def complete(self, prompt: str, *, temperature: float, top_p: float, presence_penalty: float,
+                 max_tokens: int, stop: list[str] | None = None,
+                 stop_token_ids: list[int] | None = None,
                  include_stop_str_in_output: bool = False) -> dict:
         payload = {"model": self.model, "prompt": prompt, "temperature": temperature,
-                   "top_p": top_p, "max_tokens": max_tokens, "n": 1,
+                   "top_p": top_p, "presence_penalty": presence_penalty,
+                   "max_tokens": max_tokens, "n": 1,
                    "skip_special_tokens": True,
                    "include_stop_str_in_output": include_stop_str_in_output}
         if stop:

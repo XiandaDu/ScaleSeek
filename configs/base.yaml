@@ -33,20 +33,26 @@ sampling:
   max_questions: 500
 
 # ------------------------------------------------------------------------- decoding (§4)
-# GrepSeek paper Table 5, applied to every method.  `max_model_len` is the vLLM context
-# window; there is deliberately NO per-turn generation cap anywhere: each call may use
-# whatever is left of the window.  No top_k, repetition/presence penalty or thinking
-# budget is sent.  `max_assistant_turns` does not apply to Direct and RAG (one call).
+# GrepSeek paper Table 5 (temperature, top_p), applied to every method, plus one addition:
+# presence_penalty 1.5 (Qwen3.5 model card, thinking mode), sent with EVERY generation
+# request of EVERY method -- our loops, the GrepSeek harness and the AgentIR client alike
+# (decision 2026-10-15: without it Qwen3.5-9B thinking looped on the same line until the
+# window ran out on ~half of the formal Direct PopQA questions).  `max_model_len` is the
+# vLLM context window; there is deliberately NO per-turn generation cap anywhere: each call
+# may use whatever is left of the window.  No top_k, repetition penalty or thinking budget
+# is sent.  `max_assistant_turns` does not apply to Direct and RAG (one call).
 profiles:
   wiki:
     temperature: 0.6
     top_p: 1.0
+    presence_penalty: 1.5
     max_assistant_turns: 6
     max_model_len: 16384
     single_call_max_tokens: null     # Direct / RAG: no cap
   bcp:
     temperature: 0.6
     top_p: 1.0
+    presence_penalty: 1.5
     max_assistant_turns: 16
     max_model_len: 131072
     # Direct / RAG on BCP: at most 10,000 tokens per response, the BrowseComp-Plus official

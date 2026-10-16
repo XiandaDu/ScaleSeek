@@ -99,6 +99,7 @@ and for official harnesses their raw output under `official/`.
 
 See docs/deviations.md: AgentIR on the official OSS client with QUERY_TEMPLATE; BCP
 documents shown to agents cut to 512 tokens (Qwen3-0.6B); Direct/RAG on BCP capped at
-10,000 tokens per response; GrepSeek on BCP as the official harness is; BCP judge =
+10,000 tokens per response; GrepSeek on BCP as the official harness is; presence_penalty
+1.5 added to every generation request of every method (Qwen3.5 thinking loops); BCP judge =
 Qwen3-32B (TP=4, the official open-source judge) instead of Qwen3.5-9B; judge verdicts per
 judge config; jobs run from a git worktree of the submitted commit.

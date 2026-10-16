@@ -98,7 +98,9 @@ class Method:
             return None
         max_tokens = min(room, cap) if cap else room
         out = self.ctx.llm.complete(prompt, temperature=self.profile["temperature"],
-                                    top_p=self.profile["top_p"], max_tokens=max_tokens, **kw)
+                                    top_p=self.profile["top_p"],
+                                    presence_penalty=self.profile["presence_penalty"],
+                                    max_tokens=max_tokens, **kw)
         out["capped"] = max_tokens < room
         rec["trajectory"].append({"type": "llm", "max_tokens": max_tokens, "room": room, **out})
         return out

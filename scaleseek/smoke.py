@@ -75,11 +75,12 @@ def smoke_all(base: dict, only: str) -> int:
     out = Path(base["paths"]["smoke"]) / "SMOKE_SUMMARY.json"
     failed = 0
     for d in base["smoke"]["datasets"]:
-        for method, retr in enumerate_runs(base, d):
-            name = method + (f"__{retr}" if retr else "")
-            # --only accepts run names, "dataset/run" keys and "dataset/" (whole dataset)
-            if want and not ({name, f"{d}/{name}", f"{d}/"} & want):
-                continue
+        # --only accepts run names, "dataset/run" keys and "dataset/" (whole dataset)
+        selected = [(m, r, m + (f"__{r}" if r else "")) for m, r in enumerate_runs(base, d)]
+        selected = [s for s in selected if not want or {s[2], f"{d}/{s[2]}", f"{d}/"} & want]
+        if not selected:
+            continue
+        for method, retr, name in selected:
             key = f"{d}/{name}"
             try:
                 spec = resolve_run(base, method, d, retr, "smoke")

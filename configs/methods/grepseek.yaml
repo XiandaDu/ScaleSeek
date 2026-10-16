@@ -1,6 +1,7 @@
 # =====================================================================================
-# GrepSeek -- the official harness alirezasalemi7/grepseek `inference/` (python -m
-# inference.run, unmodified) with the official GRPO checkpoint (BASELINES.md §4).
+# GrepSeek -- the official harness alirezasalemi7/grepseek `inference/` (unmodified; started
+# through scaleseek/grepseek_entry.py, which only adds the profile's presence_penalty to every
+# request) with the official GRPO checkpoint (BASELINES.md §4).
 # Settings are the paper's Table 5.  No retriever: the agent greps the materialised
 # corpus (`wiki_corpus.jsonl`).  The server flags mirror rl/serve_rl.sh except the tool-call
 # parser (see `server` below).

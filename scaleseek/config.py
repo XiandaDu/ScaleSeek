@@ -135,7 +135,7 @@ BASE_SCHEMA = {
     "paths": {k: str for k in ("root", "hf_home", "repos", "data", "indexes", "runs",
                                "smoke", "agentir_python")},
     "sampling": {"seed": int, "max_questions": int},
-    "profiles": PerProfile({"temperature": float, "top_p": float,
+    "profiles": PerProfile({"temperature": float, "top_p": float, "presence_penalty": float,
                             "max_assistant_turns": int, "max_model_len": int,
                             "single_call_max_tokens": Nullable(int)}),
     "datasets": MapOf(ANY),          # per-source schemas below

@@ -78,6 +78,8 @@ def test_search_o1_limit_and_repeat_messages():
     assert '**Web Page 1:**\n{\n  "id": 1,\n  "title": "\\"Title 0\\"",' in rid_prompt
     first = ctx.llm.prompts[0][0]
     assert "limited to 5." in first            # singleqa branch, limit = turns - 1
+    # every call (main loop and Reason-in-Documents) carries the profile's decoding
+    assert {kw["presence_penalty"] for _, kw in ctx.llm.prompts} == {ctx.spec.profile["presence_penalty"]}
 
 
 def test_search_o1_fill_is_single_pass():

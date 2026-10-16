@@ -9,8 +9,8 @@
 #
 # The official checkout is NOT modified.  scaleseek/agentir_entry.py runs the official
 # main() and overrides only (docs/deviations.md):
-#   * sampling: every request carries the profile temperature/top_p (the official client
-#     sends none) and max_output_tokens=None (official 20000 per response): no per-turn cap;
+#   * sampling: every request carries the profile temperature/top_p/presence_penalty (the
+#     official client sends none) and max_output_tokens=None (official 20000 per response): no per-turn cap;
 #   * at most `max_assistant_turns` model calls per question (official --max-iterations is
 #     also set to it; the extra guard closes the official loop's uncounted re-calls);
 #   * one search per model call: tool calls after the first of a response are dropped

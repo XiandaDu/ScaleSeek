@@ -8,9 +8,11 @@ of the pinned checkout -- official QUERY_TEMPLATE, official Responses-API tool l
 official reasoning-aware AgentIR search tool, official run_*.json output -- after
 overriding exactly these points (configs/methods/agentir.yaml, docs/deviations.md):
 
-  1. Every `client.responses.create` call carries the profile temperature / top_p (the
-     official client sends none, i.e. server defaults) and max_output_tokens=None
-     (official 20000 per response): no per-turn cap, as for every method.
+  1. Every `client.responses.create` call carries the profile temperature / top_p /
+     presence_penalty (the official client sends none, i.e. server defaults) and
+     max_output_tokens=None (official 20000 per response): no per-turn cap, as for every
+     method.  presence_penalty goes in extra_body (not a Responses-API SDK argument; vLLM
+     reads it from the request body).
   2. At most `max_turns` model calls per question.  The official loop does not count a
      call whose output ends in a reasoning item (an "upstream vLLM bug" workaround), so it
      could loop forever; past the budget the call fails, which the official loop counts as
@@ -69,7 +71,9 @@ def main() -> None:
                 log.append({"ok": False, "kind": "turn_budget"})
                 raise RuntimeError("assistant-turn budget exhausted")
             request = dict(request, temperature=settings["temperature"], top_p=settings["top_p"],
-                           max_output_tokens=None)
+                           max_output_tokens=None,
+                           extra_body={**request.get("extra_body", {}),
+                                       "presence_penalty": settings["presence_penalty"]})
             try:
                 response = official_create(**request)
             except openai.BadRequestError as exc:

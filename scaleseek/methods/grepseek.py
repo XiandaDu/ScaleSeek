@@ -1,4 +1,6 @@
-"""GrepSeek: the official harness `python -m inference.run`, unmodified, as a subprocess.
+"""GrepSeek: the official harness `inference/run.py`, unmodified, as a subprocess, started
+through scaleseek/grepseek_entry.py (which adds the profile's presence_penalty to every
+request, as for every method; otherwise identical to `python -m inference.run`).
 
 All settings are command-line flags of the official harness (see configs/methods/
 grepseek.yaml).  We give it the subset as its generation-mode `--input` file and our own
@@ -20,7 +22,7 @@ from ..corpus import corpus_dir
 from ..hub import _parallel_copy
 from ..llm import ServerDied, VLLMServer
 from ..official import checkout_path
-from ..utils import PipelineError, iter_jsonl, log, write_jsonl
+from ..utils import PipelineError, iter_jsonl, log, repo_root, write_jsonl
 
 
 def stage_corpus(spec, smoke: bool) -> Path:
@@ -40,7 +42,8 @@ def stage_corpus(spec, smoke: bool) -> Path:
 def harness_command(spec, server: VLLMServer, model_path: Path, input_file: Path,
                     corpus: Path, out_dir: Path) -> list[str]:
     h = spec.method["harness"]
-    return [sys.executable, "-m", "inference.run",
+    return [sys.executable, str(repo_root() / "scaleseek" / "grepseek_entry.py"),
+            str(spec.profile["presence_penalty"]), "--",
             "--base_url", server.base_url + "/v1",
             "--model", spec.method["server"]["served_model_name"],
             "--tokenizer", str(model_path),

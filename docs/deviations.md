@@ -9,7 +9,8 @@ checkout before every run (`python run.py check`; `scaleseek/official.py`). Code
 
 | Item | Official | Here | Why |
 |---|---|---|---|
-| Decoding | per repository | temperature 0.6, top_p 1.0, nothing else sent | BASELINES.md §4 (GrepSeek Table 5) |
+| Decoding | per repository | temperature 0.6, top_p 1.0 (§4, GrepSeek Table 5) **+ presence_penalty 1.5**, nothing else sent | §4; the presence penalty is a decision of 2026-10-15, see below |
+| How decoding reaches the server | — | every generation request of every method carries the same three values: our loops (`LLMClient.complete`), GrepSeek (`scaleseek/grepseek_entry.py` wraps the harness's OpenAI client), AgentIR (`agentir_entry.py`, Responses API `extra_body`). vLLM cannot default presence_penalty server-side (`--override-generation-config` only takes temperature / top_p / top_k / min_p / repetition_penalty). The BCP judge keeps its own §4 decoding. | one decoding for every method |
 | Per-turn generation cap | per repository | none: `max_tokens` = what is left of `max_model_len`, counted by the server's `/tokenize` | §4 |
 | Assistant turns | per repository | 6 (FlashRAG) / 16 (BCP) | §4 |
 | Server sampling defaults | vLLM reads `generation_config.json` | `--generation-config vllm` | a checkpoint must not inject top_k / penalties we did not set |
@@ -18,6 +19,17 @@ checkout before every run (`python run.py check`; `scaleseek/official.py`). Code
 | Scored answer | per repository | only a record that **ended** with an answer (`finish_reason == "answer"`) has one; EM/F1 and the BCP judge use it, nothing else (`metrics.final_answer`) | one rule for every method (decision 2026-10-14) |
 | BCP judge input | BrowseComp-Plus judges the whole response | the final answer string only, for every method (AgentIR: its `Exact Answer:` value) | §4: the judge sees the final answer; the same evidence for every method |
 | Searches per model call | AgentIR's OSS client runs every tool call of a response | at most one, as every other method | AgentIR README: parallel search off for a fair comparison with the BCP baselines |
+
+### Presence penalty (decision 2026-10-15)
+
+Under Table 5 alone (temperature 0.6, top_p 1.0, no penalty), Qwen3.5-9B in thinking mode
+looped on one line until the window ran out: in the first formal Direct runs (superseded),
+269 / 500 PopQA, 113 TriviaQA and 159 NQ questions ended with the 16K window full, and
+253 / 111 / 155 of those ended in a line repeated at least five times; on BCP 462 / 500
+hit the 10K cap. Qwen3.5-9B ships no generation_config.json, so no server default was
+missing; its model card recommends presence_penalty 1.5 for thinking mode. It is added for
+every method alike (Search-R1's Qwen2.5 and GrepSeek's GRPO checkpoint included), with
+temperature and top_p unchanged, so the decoding is still identical across methods.
 
 ## Direct and RAG (project-defined)
 
@@ -75,7 +87,9 @@ messages (scripts/run_search_o1.py).
 
 `python -m inference.run` of the pinned checkout, with `--max_tokens_per_turn 0` (the
 harness's own "no per-turn cap"), `--tool_max_tokens 2048 / 6000`,
-`--max_assistant_turns 6 / 16`, temperature 0.6, top_p 1.0, server flags of
+`--max_assistant_turns 6 / 16`, temperature 0.6, top_p 1.0 (+ presence_penalty 1.5, added to
+every request by `scaleseek/grepseek_entry.py`, which otherwise runs the harness exactly as
+`python -m inference.run`), server flags of
 `rl/serve_rl.sh` (`--reasoning-parser qwen3`, `--language-model-only`) **without**
 `--enable-auto-tool-choice --tool-call-parser qwen3_coder`.
 
@@ -107,8 +121,9 @@ prompt; the OSS client uses the official BrowseComp-Plus `QUERY_TEMPLATE`
 (Responses API; vLLM `--reasoning-parser qwen3 --tool-call-parser qwen3_coder`) and the
 official reasoning-aware AgentIR search tool. The official `main()` runs; overrides:
 
-* every `responses.create` carries temperature / top_p from the profile (the official client
-  sends none) and `max_output_tokens=None` (official 20000): no per-turn cap;
+* every `responses.create` carries temperature / top_p / presence_penalty from the profile
+  (the official client sends none) and `max_output_tokens=None` (official 20000): no
+  per-turn cap;
 * `--max-iterations` = turns, plus a hard cap of `turns` model calls per question: the
   official loop re-calls without counting when an output ends in a reasoning item;
 * `--k 3` (official 5); our per-call log is saved next to the official `run_*.json`.
