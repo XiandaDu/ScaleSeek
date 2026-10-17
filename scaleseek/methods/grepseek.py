@@ -1,6 +1,7 @@
 """GrepSeek: the official harness `inference/run.py`, unmodified, as a subprocess, started
-through scaleseek/grepseek_entry.py (which adds the profile's presence_penalty to every
-request, as for every method; otherwise identical to `python -m inference.run`).
+through scaleseek/grepseek_entry.py (which gives its OpenAI client the profile's
+presence_penalty and the same timeout / retries as every method; otherwise identical to
+`python -m inference.run`).
 
 All settings are command-line flags of the official harness (see configs/methods/
 grepseek.yaml).  We give it the subset as its generation-mode `--input` file and our own
@@ -13,6 +14,7 @@ from the harness's own `--resume`.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -42,8 +44,10 @@ def stage_corpus(spec, smoke: bool) -> Path:
 def harness_command(spec, server: VLLMServer, model_path: Path, input_file: Path,
                     corpus: Path, out_dir: Path) -> list[str]:
     h = spec.method["harness"]
+    settings = {"presence_penalty": spec.profile["presence_penalty"],
+                "request_timeout_s": h["request_timeout_s"], "max_retries": h["max_retries"]}
     return [sys.executable, str(repo_root() / "scaleseek" / "grepseek_entry.py"),
-            str(spec.profile["presence_penalty"]), "--",
+            json.dumps(settings), "--",
             "--base_url", server.base_url + "/v1",
             "--model", spec.method["server"]["served_model_name"],
             "--tokenizer", str(model_path),

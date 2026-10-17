@@ -43,5 +43,10 @@ harness:
   tool_timeout: 60.0
   parallel: 16
   engine_mode: none
+  # The harness's OpenAI client gets the same per-request timeout and retries as every
+  # other method's client (SDK default 600 s / 2 cut long BCP turns short), via
+  # scaleseek/grepseek_entry.py.
+  request_timeout_s: 7200
+  max_retries: 5
 
 retrieval: null

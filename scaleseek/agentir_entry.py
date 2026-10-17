@@ -21,7 +21,9 @@ overriding exactly these points (configs/methods/agentir.yaml, docs/deviations.m
      calls after the first are dropped (the AgentIR README turns parallel search off for a
      fair comparison with the BrowseComp-Plus baselines; every other method searches once
      per turn).
-  4. Our per-call log (ok / failure kind / usage / dropped calls) is written next to the
+  4. The client's per-request timeout and retries are `request_timeout_s` / `max_retries`,
+     as for every other method (the SDK default 600 s / 2 cut long BCP turns short).
+  5. Our per-call log (ok / failure kind / usage / dropped calls) is written next to the
      official run_*.json (`sidecars/<query_id>.json`), with the wall time of the question.
 """
 
@@ -62,6 +64,7 @@ def main() -> None:
     real_openai = openai.OpenAI
 
     def make_client(*args, **kwargs):
+        kwargs.update(timeout=settings["request_timeout_s"], max_retries=settings["max_retries"])
         client = real_openai(*args, **kwargs)
         official_create = client.responses.create
 

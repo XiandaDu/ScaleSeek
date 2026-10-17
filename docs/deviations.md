@@ -16,6 +16,7 @@ checkout before every run (`python run.py check`; `scaleseek/official.py`). Code
 | Server sampling defaults | vLLM reads `generation_config.json` | `--generation-config vllm` | a checkpoint must not inject top_k / penalties we did not set |
 | Context window | per repository | 16,384 / 131,072 | §4 |
 | Seed | — | vLLM `--seed 0` (server); subset seed in base.yaml | provenance |
+| Per-request timeout | official clients: OpenAI SDK default 600 s, 2 retries | 7,200 s and 5 retries for every method's client (ours, and the GrepSeek / AgentIR clients through their entry wrappers) | 600 s cut long BCP turns short for GrepSeek / AgentIR only: a hidden per-turn cap (5 GrepSeek BCP timeouts, decision 2026-10-17) |
 | Scored answer | per repository | only a record that **ended** with an answer (`finish_reason == "answer"`) has one; EM/F1 and the BCP judge use it, nothing else (`metrics.final_answer`) | one rule for every method (decision 2026-10-14) |
 | BCP judge input | BrowseComp-Plus judges the whole response | the final answer string only, for every method (AgentIR: its `Exact Answer:` value) | §4: the judge sees the final answer; the same evidence for every method |
 | Searches per model call | AgentIR's OSS client runs every tool call of a response | at most one, as every other method | AgentIR README: parallel search off for a fair comparison with the BCP baselines |
@@ -98,8 +99,9 @@ messages (scripts/run_search_o1.py).
 
 `python -m inference.run` of the pinned checkout, with `--max_tokens_per_turn 0` (the
 harness's own "no per-turn cap"), `--tool_max_tokens 2048 / 6000`,
-`--max_assistant_turns 6 / 16`, temperature 0.6, top_p 1.0 (+ presence_penalty 2.0, added to
-every request by `scaleseek/grepseek_entry.py`, which otherwise runs the harness exactly as
+`--max_assistant_turns 6 / 16`, temperature 0.6, top_p 1.0 (+ presence_penalty 2.0 on
+every request, and a 7,200 s / 5-retry client as for every method, both set by
+`scaleseek/grepseek_entry.py`, which otherwise runs the harness exactly as
 `python -m inference.run`), server flags of
 `rl/serve_rl.sh` (`--reasoning-parser qwen3`, `--language-model-only`) **without**
 `--enable-auto-tool-choice --tool-call-parser qwen3_coder`.

@@ -90,6 +90,8 @@ def run(spec, server: VLLMServer, examples: list[dict], smoke: bool) -> Path:
                           "temperature": spec.profile["temperature"],
                           "top_p": spec.profile["top_p"],
                           "presence_penalty": spec.profile["presence_penalty"],
+                          "request_timeout_s": spec.method["agent"]["request_timeout_s"],
+                          "max_retries": spec.method["agent"]["max_retries"],
                           "sidecar_dir": str(official / "sidecars")})
     cmd = [ensure_agentir_env(base), str(repo_root() / "scaleseek" / "agentir_entry.py"),
            str(settings), "--"] + official_args(spec, server, tsv, official, smoke)

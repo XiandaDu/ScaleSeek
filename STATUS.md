@@ -49,7 +49,7 @@ Qwen3.5-9B 在冒烟中对 AgentIR 的 3 个回答（3 个都答对了）都没�
 
 ## 正式 run（10-15 开始）
 
-- 顺序（你定的）：Direct × 8 个数据集 → Search-R1-7B / 14B + BM25 × 8 → Search-R1 + e5 / qwen3_emb_4b × 8 → RAG → Search-o1 → GrepSeek → AgentIR（后四个由我排序，都跑 8 个数据集）→ BCP judge → 全部 `score`。每个方法跑完我检查一遍，再提交下一个。
+- 顺序（你定的；10-17 改为 Direct 和 GrepSeek 先跑、Bamboogle 优先）：Direct × 8 个数据集 → Search-R1-7B / 14B + BM25 × 8 → Search-R1 + e5 / qwen3_emb_4b × 8 → RAG → Search-o1 → GrepSeek → AgentIR（后四个由我排序，都跑 8 个数据集）→ BCP judge → 全部 `score`。每个方法跑完我检查一遍，再提交下一个。
 - 所有正式 run 都从 commit `8aa3ae9` 的 worktree（`$ROOT/harness/8aa3ae938c51`）提交：它和冒烟用的 `2fbdad8` 相比只多改了 STATUS.md，代码完全相同；之后 STATUS.md 再怎么改，也不会让 run 落到不同的 commit 上。作业日志在该 worktree 的 `logs/` 下，作业号记在 `$ROOT/dev/formal_jobs.txt`。
 - 前提都已满足：全新冒烟（5615537）0 失败；Wiki-18 retriever check 通过（4 个索引都是 21,015,324 篇，重复查询结果一致，命中 id 都在语料内）。
 - 冒烟里看到的现象：AgentIR 在 PopQA 上 4 题都跑满 6 轮。它每轮都在正常检索，只是反复换说法核实，没有给出答案。没有并行调用被丢弃（0 次），所以和 10-14 的改动无关；轮数预算和其他方法一样，不改，报告里会写。
@@ -82,7 +82,7 @@ Qwen3.5-9B 在冒烟中对 AgentIR 的 3 个回答（3 个都答对了）都没�
 
 加了 penalty 的三种设置 EM 互相差别不显著，主要差在死循环比例。
 
-**10-17 决定：所有方法统一用 temperature 0.6、top_p 1.0、presence_penalty 2.0**（保留 Table 5 的 temperature/top_p，只改 penalty）。presence_penalty 1.5 下跑的 Direct PopQA 作废，移到 `$ROOT/runs_superseded/20261017_presence_penalty_1.5/`。所有正式 run 从新 commit 重新开始。
+**10-17 决定：所有方法统一用 temperature 0.6、top_p 1.0、presence_penalty 2.0**（保留 Table 5 的 temperature/top_p，只改 penalty）。presence_penalty 1.5 下跑的 Direct PopQA 作废，移到 `$ROOT/runs_superseded/20261017_presence_penalty_1.5/`。所有正式 run 从新 commit 重新开始。正式 commit：`3931330`，worktree `$ROOT/harness/3931330129fd`。10-17 11:45 提交了 PopQA 冒烟（6109989，验证三条请求路径都接受 2.0）和 Direct × 8（6110043–6110059，时限 3 小时）。10-17 12:20 你定的新顺序：先跑 Direct 和 GrepSeek 的全部数据集，两者都优先 Bamboogle。GrepSeek × 8 已提交（Bamboogle 6113278；其余 6113623–6113633，Wiki 12 小时、BCP 24 小时）；非 Bamboogle 的 Direct 和 GrepSeek 作业 nice 设为 100，让两个 Bamboogle 先跑（集群不允许用户 `scontrol top`）。
 
 ## 提醒
 
