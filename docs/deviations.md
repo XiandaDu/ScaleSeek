@@ -9,7 +9,7 @@ checkout before every run (`python run.py check`; `scaleseek/official.py`). Code
 
 | Item | Official | Here | Why |
 |---|---|---|---|
-| Decoding | per repository | temperature 0.6, top_p 1.0 (§4, GrepSeek Table 5) **+ presence_penalty 1.5**, nothing else sent | §4; the presence penalty is a decision of 2026-10-15, see below |
+| Decoding | per repository | temperature 0.6, top_p 1.0 (§4, GrepSeek Table 5) **+ presence_penalty 2.0**, nothing else sent | §4; the presence penalty is a decision of 2026-10-15, see below |
 | How decoding reaches the server | — | every generation request of every method carries the same three values: our loops (`LLMClient.complete`), GrepSeek (`scaleseek/grepseek_entry.py` wraps the harness's OpenAI client), AgentIR (`agentir_entry.py`, Responses API `extra_body`). vLLM cannot default presence_penalty server-side (`--override-generation-config` only takes temperature / top_p / top_k / min_p / repetition_penalty). The BCP judge keeps its own §4 decoding. | one decoding for every method |
 | Per-turn generation cap | per repository | none: `max_tokens` = what is left of `max_model_len`, counted by the server's `/tokenize` | §4 |
 | Assistant turns | per repository | 6 (FlashRAG) / 16 (BCP) | §4 |
@@ -20,16 +20,27 @@ checkout before every run (`python run.py check`; `scaleseek/official.py`). Code
 | BCP judge input | BrowseComp-Plus judges the whole response | the final answer string only, for every method (AgentIR: its `Exact Answer:` value) | §4: the judge sees the final answer; the same evidence for every method |
 | Searches per model call | AgentIR's OSS client runs every tool call of a response | at most one, as every other method | AgentIR README: parallel search off for a fair comparison with the BCP baselines |
 
-### Presence penalty (decision 2026-10-15)
+### Presence penalty 2.0 (decisions 2026-10-15 and 2026-10-17)
 
 Under Table 5 alone (temperature 0.6, top_p 1.0, no penalty), Qwen3.5-9B in thinking mode
 looped on one line until the window ran out: in the first formal Direct runs (superseded),
 269 / 500 PopQA, 113 TriviaQA and 159 NQ questions ended with the 16K window full, and
 253 / 111 / 155 of those ended in a line repeated at least five times; on BCP 462 / 500
 hit the 10K cap. Qwen3.5-9B ships no generation_config.json, so no server default was
-missing; its model card recommends presence_penalty 1.5 for thinking mode. It is added for
-every method alike (Search-R1's Qwen2.5 and GrepSeek's GRPO checkpoint included), with
-temperature and top_p unchanged, so the decoding is still identical across methods.
+missing. Settings tried on Direct PopQA (500 questions):
+
+| decoding | window full | of which looping | EM | answered |
+|---|---:|---:|---:|---:|
+| Table 5 | 269 | 253 | 17.2 ± 3.3 | 46% |
+| Table 5 + presence_penalty 1.5 | 128 | 99 | 20.6 ± 3.5 | 74% |
+| **Table 5 + presence_penalty 2.0 (chosen)** | 93 | 53 | 20.8 ± 3.6 | 81% |
+| model-card thinking (T 1.0, top_p 0.95, top_k 20, pp 1.5) | 12 | 5 | 19.8 ± 3.5 | 98% |
+
+2.0 keeps Table 5's temperature and top_p and changes only the penalty; the model-card
+setting nearly ends the loops but replaces three Table 5 values for every method. It is
+added for every method alike (Search-R1's Qwen2.5 and GrepSeek's GRPO checkpoint included),
+so the decoding is identical across methods. About 10% of Direct PopQA questions still
+loop; the report states the share of window-full records per run.
 
 ## Direct and RAG (project-defined)
 
@@ -87,7 +98,7 @@ messages (scripts/run_search_o1.py).
 
 `python -m inference.run` of the pinned checkout, with `--max_tokens_per_turn 0` (the
 harness's own "no per-turn cap"), `--tool_max_tokens 2048 / 6000`,
-`--max_assistant_turns 6 / 16`, temperature 0.6, top_p 1.0 (+ presence_penalty 1.5, added to
+`--max_assistant_turns 6 / 16`, temperature 0.6, top_p 1.0 (+ presence_penalty 2.0, added to
 every request by `scaleseek/grepseek_entry.py`, which otherwise runs the harness exactly as
 `python -m inference.run`), server flags of
 `rl/serve_rl.sh` (`--reasoning-parser qwen3`, `--language-model-only`) **without**

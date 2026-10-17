@@ -56,11 +56,33 @@ Qwen3.5-9B 在冒烟中对 AgentIR 的 3 个回答（3 个都答对了）都没�
 
 | 方法 | 状态 |
 |---|---|
-| Direct × 8（旧解码） | 作废，移到 `$ROOT/runs_superseded/20261015_no_presence_penalty/`（死循环，见下） |
+| Direct × 8（BASELINES 原样解码） | 作废，移到 `$ROOT/runs_superseded/20261015_no_presence_penalty/`（死循环，见下） |
 
 **10-15 发现：Qwen3.5-9B 的 thinking 死循环。** Direct 里用完 16K 窗口、没给出答案的比例：PopQA 269/500、TriviaQA 113/500、NQ 159/500、HotpotQA 165、2Wiki 210、MuSiQue 162、Bamboogle 26/125；BCP 有 462/500 撞到 1 万 token 上限。前三个数据集里，95% 以上的截断记录最后 4K 字符是同一句话的重复（PopQA 253/269、TriviaQA 111/113、NQ 155/159）。Qwen3.5-9B 没有 `generation_config.json`，所以不是服务端默认参数的问题，而是 BASELINES 的解码设置（temperature 0.6、top_p 1.0、不发其他参数）在 thinking 模式下容易死循环；Qwen3.5 模型卡对 thinking 模式的建议是 `top_p=0.95, top_k=20, presence_penalty=1.5`。
 
 **10-15 决定：所有方法统一加 `presence_penalty=1.5`**（temperature 0.6 / top_p 1.0 不变；judge 不加）。vLLM 不能在服务端设 presence_penalty 的默认值（`--override-generation-config` 只认 temperature/top_p/top_k/min_p/repetition_penalty），所以由每个客户端随请求发送同一个值：我们自己的方法走 `LLMClient.complete`，GrepSeek 走新的 `scaleseek/grepseek_entry.py`（包装官方 harness 的 OpenAI 客户端，官方代码不改），AgentIR 走 `agentir_entry.py`（Responses API 的 `extra_body`）。正式 run 改从新 commit 的 worktree 提交；先在 PopQA 上跑 Direct，看死循环是否消失，再跑其余数据集。
+
+**10-16 凌晨：presence_penalty 1.5 的效果。** PopQA 冒烟 15 个 run 0 失败，三条请求路径（completions、chat、responses）都没有 API 错误。正式 Direct PopQA（commit 77a0b18，37 分钟）：
+
+| Direct PopQA | 用完窗口 | 其中死循环 | EM | 有答案 |
+|---|---:|---:|---:|---:|
+| 旧（无 penalty） | 269 | 253 | 17.2 ± 3.3 | 46% |
+| presence_penalty 1.5 | 128 | 99 | 20.6 ± 3.5 | 74% |
+
+死循环少了六成，但仍有 20%：presence_penalty 不随重复次数增大，压不住长循环。在跑两个**非正式**试点（Direct PopQA 全部 500 题，输出在 `$ROOT/dev/pilots/`）：P1 = 模型卡完整的 thinking 设置（temperature 1.0、top_p 0.95、top_k 20、presence_penalty 1.5）；P2 = temperature 0.6、top_p 1.0、presence_penalty 2.0。
+
+**10-16 清晨：试点结果（Direct PopQA，500 题）**
+
+| 设置 | 用完窗口 | 其中死循环 | EM | F1 | 有答案 | 用时 |
+|---|---:|---:|---:|---:|---:|---:|
+| Table 5 原样（T 0.6, top_p 1.0） | 269 | 253 | 17.2 ± 3.3 | 20.6 | 46% | 58 分钟 |
+| Table 5 + presence_penalty 1.5 | 128 | 99 | 20.6 ± 3.5 | 24.1 | 74% | 37 分钟 |
+| Table 5 + presence_penalty 2.0（P2） | 93 | 53 | 20.8 ± 3.6 | 25.4 | 81% | 34 分钟 |
+| 模型卡 thinking（P1：T 1.0, top_p 0.95, top_k 20, pp 1.5） | 12 | 5 | 19.8 ± 3.5 | 23.9 | 98% | 28 分钟 |
+
+加了 penalty 的三种设置 EM 互相差别不显著，主要差在死循环比例。
+
+**10-17 决定：所有方法统一用 temperature 0.6、top_p 1.0、presence_penalty 2.0**（保留 Table 5 的 temperature/top_p，只改 penalty）。presence_penalty 1.5 下跑的 Direct PopQA 作废，移到 `$ROOT/runs_superseded/20261017_presence_penalty_1.5/`。所有正式 run 从新 commit 重新开始。
 
 ## 提醒
 
