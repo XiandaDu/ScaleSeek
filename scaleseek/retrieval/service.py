@@ -91,6 +91,10 @@ def serve(base: dict, retriever: str, corpus: str, smoke: bool, port: int, devic
             except Exception as exc:  # reported to the caller as a TOOL error, never hidden
                 self._send(500, {"error": f"{type(exc).__name__}: {exc}"})
 
+    # Requests are served one at a time, but every client thread must be able to WAIT: with
+    # the default listen backlog (5) a run's 64 concurrent searches overflowed it and got
+    # "connection reset by peer".
+    HTTPServer.request_queue_size = 1024
     server = HTTPServer(("127.0.0.1", port), Handler)
     log(f"retrieval service {retriever}/{corpus}{' (smoke)' if smoke else ''} on :{port}")
     server.serve_forever()

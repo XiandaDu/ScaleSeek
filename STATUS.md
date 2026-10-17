@@ -84,6 +84,8 @@ Qwen3.5-9B 在冒烟中对 AgentIR 的 3 个回答（3 个都答对了）都没�
 
 **10-17 决定：所有方法统一用 temperature 0.6、top_p 1.0、presence_penalty 2.0**（保留 Table 5 的 temperature/top_p，只改 penalty）。presence_penalty 1.5 下跑的 Direct PopQA 作废，移到 `$ROOT/runs_superseded/20261017_presence_penalty_1.5/`。所有正式 run 从新 commit 重新开始。正式 commit：`3931330`，worktree `$ROOT/harness/3931330129fd`。10-17 11:45 提交了 PopQA 冒烟（6109989，验证三条请求路径都接受 2.0）和 Direct × 8（6110043–6110059，时限 3 小时）。10-17 12:20 你定的新顺序：先跑 Direct 和 GrepSeek 的全部数据集，两者都优先 Bamboogle。GrepSeek × 8 已提交（Bamboogle 6113278；其余 6113623–6113633，Wiki 12 小时、BCP 24 小时）；非 Bamboogle 的 Direct 和 GrepSeek 作业 nice 设为 100，让两个 Bamboogle 先跑（集群不允许用户 `scontrol top`）。
 
+**10-17 晚：GrepSeek / AgentIR 的请求超时修正（commit `ec94ed2`）。** BCP 上 GrepSeek 出现 5 次请求超时：官方 harness 的 OpenAI 客户端用 SDK 默认的 600 秒 / 重试 2 次，而我们自己的方法是 7,200 秒 / 5 次，等于给 GrepSeek 和 AgentIR 加了一个隐藏的单轮长度上限。现在两者都通过 entry wrapper 用 7,200 秒 / 5 次。BCP GrepSeek 跑了一半作废，移到 `$ROOT/runs_superseded/20261017_sdk_timeout_600s/`，从 `ec94ed2` 重跑（6155115，24 小时）。Wiki 的 GrepSeek（`3931330`）0 次超时，结果不受影响，保留。Search-R1 + BM25 × 8（6154964–6154999）用的是我们自己的客户端，代码与 `ec94ed2` 相同，保留在 `3931330`。wrapper 冒烟：6155114。
+
 ## 提醒
 
 - 10/27–11/03 集群维护停机。
