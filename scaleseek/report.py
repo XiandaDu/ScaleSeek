@@ -13,7 +13,7 @@ from .config import load_method
 from .data import load_subset
 from .judge import judge_file
 from .metrics import check_ids, mcnemar_exact, proportion_ci, run_metrics
-from .utils import PipelineError, iter_jsonl, read_json, write_json
+from .utils import PipelineError, git_state, iter_jsonl, read_json, repo_root, write_json
 
 
 def _wall(run_dir: Path) -> tuple[float, int]:
@@ -35,6 +35,7 @@ def score_run(base: dict, dataset: str, run_dir: Path, smoke: bool, judge: str) 
     m["interrupted_sessions"] = interrupted
     prov = read_json(run_dir / "provenance.json")
     m.update({"run": run_dir.name, "dataset": dataset, "config_id": prov["config_id"],
+              "harness_commit": prov["harness_commit"], "scored_with": git_state(repo_root())["commit"],
               "subset_ids_sha256": manifest["ids_sha256"], "smoke": smoke})
     if base["datasets"][dataset]["profile"] == "bcp":
         judged = {r["id"]: r for r in iter_jsonl(judge_file(run_dir, judge))}
@@ -99,6 +100,11 @@ def dataset_report(base: dict, dataset: str, root: Path, smoke: bool, judge: str
     lines += ["", "## Finish reasons", ""]
     for name, m in metrics.items():
         lines.append(f"- `{name}`: " + ", ".join(f"{k}={v}" for k, v in sorted(m["finish_reasons"].items())))
+    lines += ["", "## Harness commit per run", "",
+              "Runs started after a fix use the fixed commit; docs/deviations.md lists what each fix "
+              "changed and why the earlier runs are unaffected.", ""]
+    for name, m in metrics.items():
+        lines.append(f"- `{name}`: {m['harness_commit'][:7]}")
     if not bcp:
         lines += ["", "## Retrievers side by side (EM)", "",
                   "| method | bm25 | e5 | qwen3_emb_4b |", "|---|---:|---:|---:|"]

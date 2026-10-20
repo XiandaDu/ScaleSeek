@@ -37,3 +37,14 @@ def test_only_a_finished_answer_is_scored():
     assert final_answer(done) == "x" and final_answer(cut) is None
     m = run_metrics([done, cut], 1.96, 0.0)
     assert m["per_question_em"] == {"a": True, "b": False} and m["answered_rate"] == 0.5
+
+
+def test_grepseek_full_window_is_not_an_api_failure():
+    from scaleseek.metrics import run_metrics
+    base = {"golden_answers": ["x"], "prediction": None, "n_turns": 6, "n_retrievals": 5}
+    full = dict(base, id="a", finish_reason="api_error", errors={"parse": 0, "tool": 0, "api": 1},
+                error="API error: BadRequestError: This model's maximum context length is 16384 tokens.")
+    down = dict(base, id="b", finish_reason="api_error", errors={"parse": 0, "tool": 0, "api": 1},
+                error="API error: APIConnectionError")
+    m = run_metrics([full, down], 1.96, 0.0)
+    assert m["finish_reasons"] == {"context_exhausted": 1, "api_error": 1} and m["errors"]["api"] == 1

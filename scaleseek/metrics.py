@@ -104,6 +104,21 @@ def check_ids(records: list[dict], expected_ids: list[str], partial_ok: bool) ->
                             "resume the run before scoring")
 
 
+def finish_reason(rec: dict) -> str:
+    """GrepSeek's harness reports a full context window as an `api_error`; count it as the
+    `context_exhausted` every other method records (it is not a server failure)."""
+    if rec["finish_reason"] == "api_error" and "maximum context length" in (rec["error"] or ""):
+        return "context_exhausted"
+    return rec["finish_reason"]
+
+
+def errors(rec: dict) -> dict:
+    e = dict(rec["errors"])
+    if finish_reason(rec) != rec["finish_reason"]:      # a full window, not an API failure
+        e["api"] = 0
+    return e
+
+
 def run_metrics(records: list[dict], z: float, wall_time_s: float) -> dict:
     n = len(records)
     em = [exact_match(final_answer(r), r["golden_answers"]) for r in records]
@@ -114,9 +129,9 @@ def run_metrics(records: list[dict], z: float, wall_time_s: float) -> dict:
         "em": proportion_ci(sum(em), n, z),
         "f1": mean_ci(f1, z),
         "answered_rate": answered / n if n else None,
-        "finish_reasons": dict(Counter(r["finish_reason"] for r in records)),
-        "errors": {k: sum(r["errors"][k] for r in records) for k in ("parse", "tool", "api")},
-        "rows_with_errors": {k: sum(1 for r in records if r["errors"][k]) for k in ("parse", "tool", "api")},
+        "finish_reasons": dict(Counter(finish_reason(r) for r in records)),
+        "errors": {k: sum(errors(r)[k] for r in records) for k in ("parse", "tool", "api")},
+        "rows_with_errors": {k: sum(1 for r in records if errors(r)[k]) for k in ("parse", "tool", "api")},
         "avg_turns": sum(r["n_turns"] for r in records) / n if n else None,
         "avg_retrievals": sum(r["n_retrievals"] for r in records) / n if n else None,
         "wall_time_s": wall_time_s,

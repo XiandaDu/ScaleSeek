@@ -223,3 +223,35 @@ with uncommitted changes and never resume under another commit; smoke runs may. 
 refuses uncommitted changes and runs every job in a git worktree of the current commit
 (`$SCALESEEK_ROOT/harness/<commit>`), so a job that starts hours later runs the code that
 existed at submission.
+
+## Fixes during the formal runs (which runs use which commit)
+
+All formal runs use temperature 0.6, top_p 1.0, presence_penalty 2.0. Two harness bugs
+were fixed after some runs had finished; each fix touches code that the earlier runs never
+exercised, so those runs were kept (`REPORT.md` lists the commit of every run).
+
+| commit | runs | fix |
+|---|---|---|
+| `3931330` | Direct x 8, GrepSeek x 7 (Wiki) | — |
+| `ec94ed2` | GrepSeek on BCP | GrepSeek / AgentIR OpenAI clients get the same 7,200 s timeout and 5 retries as ours (SDK default 600 s / 2 cut long BCP turns: 5 timeouts in the superseded BCP GrepSeek run). The Wiki GrepSeek runs had 0 timeouts. |
+| `903a200` | all other runs | retrieval service listen backlog 5 -> 1024 (64 concurrent searches got "connection reset" and aborted Search-R1). Direct and GrepSeek do not use the service. |
+
+Scoring: GrepSeek's harness reports a full context window as `api_error`; the report counts
+it as `context_exhausted`, as for every other method (`metrics.finish_reason`). Scores are
+unaffected (no answer either way).
+
+### Search-R1-7B and the presence penalty (non-formal pilots, 2026-10-18)
+
+Search-R1-7B fills the 16K window on 3-12% of questions and ends in degenerate text (e.g.
+"arduesubarduesub..."); the 14B does not. Re-running Search-R1-7B + BM25 without the
+penalty (pilots, `$SCALESEEK_ROOT/dev/pilots/`) shows the same degeneration, more often:
+
+| dataset | EM, penalty 2.0 (formal) | EM, no penalty (pilot) | paired McNemar p | window full (2.0 / none) |
+|---|---:|---:|---:|---:|
+| Bamboogle | 21.6 | 30.4 | 0.013 | 15 / 19 |
+| PopQA | 28.2 | 27.6 | 0.76 | 29 / 46 |
+| HotpotQA | 34.6 | 35.4 | 0.73 | 32 / 54 |
+| 2WikiMultihopQA | 36.8 | 32.8 | 0.07 | 50 / 64 |
+
+No consistent effect (Bamboogle's p is above the 0.0125 Bonferroni threshold for 4 tests,
+and 2Wiki points the other way), so the common decoding stays.

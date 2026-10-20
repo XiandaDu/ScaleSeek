@@ -86,6 +86,12 @@ Qwen3.5-9B 在冒烟中对 AgentIR 的 3 个回答（3 个都答对了）都没�
 
 **10-17 晚：GrepSeek / AgentIR 的请求超时修正（commit `ec94ed2`）。** BCP 上 GrepSeek 出现 5 次请求超时：官方 harness 的 OpenAI 客户端用 SDK 默认的 600 秒 / 重试 2 次，而我们自己的方法是 7,200 秒 / 5 次，等于给 GrepSeek 和 AgentIR 加了一个隐藏的单轮长度上限。现在两者都通过 entry wrapper 用 7,200 秒 / 5 次。BCP GrepSeek 跑了一半作废，移到 `$ROOT/runs_superseded/20261017_sdk_timeout_600s/`，从 `ec94ed2` 重跑（6155115，24 小时）。Wiki 的 GrepSeek（`3931330`）0 次超时，结果不受影响，保留。Search-R1 + BM25 × 8（6154964–6154999）用的是我们自己的客户端，代码与 `ec94ed2` 相同，保留在 `3931330`。wrapper 冒烟：6155114。
 
+**10-17 晚：检索服务的连接队列 bug（commit `903a200`）。** 前 4 个 Search-R1-7B + BM25 作业跑了约 7 分钟就失败：检索服务是一次处理一个请求（保证结果确定），但 Python 默认只允许 5 个连接排队，正式 run 有 64 个并发搜索，排不下的连接被重置（connection reset by peer），run 中止。冒烟每个 run 只有 4 题，没触发。已把排队上限改为 1024（仍然一次处理一个请求）。压力测试：128 个并发客户端发 1,024 个请求，3.9 秒全部成功，同一 query 结果一致；同样的测试在旧代码上 10 分钟都没跑完。Search-R1 的部分结果移到 `$ROOT/runs_superseded/20261017_listen_backlog/`，16 个作业从 `903a200` 重新提交（6156087–6156102，Bamboogle 优先）。RAG、Search-o1 也走这个服务，之后都从 `903a200` 或更新的 commit 跑。
+
+**10-18 下午：剩余任务全部提交（commit `903a200`）。** 88 个正式 run：RAG × 3 检索器、Search-R1-7B / 14B × e5 / qwen3_emb_4b、Search-o1 × 3 检索器、AgentIR，各 8 个数据集（Bamboogle 优先，其余 nice 100），作业号见 `$ROOT/dev/formal_jobs.txt`。BCP judge（6247178）设成在所有 BCP run 完成后自动开始。同时在跑两个非正式试跑：Search-R1-7B + BM25 不加 presence_penalty（Bamboogle、PopQA），看 7B 写满窗口时的乱码是不是 penalty 造成的。
+
+**10-18 晚：Search-R1-7B 加不加 presence_penalty 的对比（非正式试跑，`$ROOT/dev/pilots/`）。** 7B + BM25，EM（加 2.0 正式 / 不加试跑）：Bamboogle 21.6 / 30.4（McNemar p 0.013）、PopQA 28.2 / 27.6（0.76）、HotpotQA 34.6 / 35.4（0.73）、2Wiki 36.8 / 32.8（0.07，加了更好）；加 penalty 后写满窗口的题在 4 个数据集上都更少。没有一致的损害，维持统一的 presence_penalty 2.0；7B 写满窗口时的乱码不加 penalty 也有，是 checkpoint 本身的问题。报告里作为说明。
+
 ## 提醒
 
 - 10/27–11/03 集群维护停机。
