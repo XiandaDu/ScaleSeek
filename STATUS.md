@@ -92,7 +92,9 @@ Qwen3.5-9B 在冒烟中对 AgentIR 的 3 个回答（3 个都答对了）都没�
 
 **10-18 晚：Search-R1-7B 加不加 presence_penalty 的对比（非正式试跑，`$ROOT/dev/pilots/`）。** 7B + BM25，EM（加 2.0 正式 / 不加试跑）：Bamboogle 21.6 / 30.4（McNemar p 0.013）、PopQA 28.2 / 27.6（0.76）、HotpotQA 34.6 / 35.4（0.73）、2Wiki 36.8 / 32.8（0.07，加了更好）；加 penalty 后写满窗口的题在 4 个数据集上都更少。没有一致的损害，维持统一的 presence_penalty 2.0；7B 写满窗口时的乱码不加 penalty 也有，是 checkpoint 本身的问题。报告里作为说明。
 
+**10-19 晚：全部完成。** 120 个正式 run（8 个数据集 × 15）全部跑完，BCP judge（Qwen3-32B，35 分钟，judge 失败 0）和 8 份 REPORT.md 都已生成：`$ROOT/runs/<dataset>/REPORT.md`，计分 commit `cdacd93`。
+
 ## 提醒
 
 - 10/27–11/03 集群维护停机。
-- /scratch 有 60 天清理：最终的轨迹和报告要归档到 /project 或 /nearline。
+- /scratch 有 60 天清理：最终的轨迹和报告要归档到 /project 或 /nearline。 **现在就该归档 `$ROOT/runs/`。**
