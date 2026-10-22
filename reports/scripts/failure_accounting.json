@@ -1,0 +1,407 @@
+{
+ "grepseek": {
+  "bamboogle": {
+   "gold_unseen": 23,
+   "correct": 64,
+   "form": 13,
+   "max_turns": 13,
+   "gold_seen": 4,
+   "unmatchable": 1,
+   "context_exhausted": 7
+  },
+  "popqa": {
+   "gold_seen": 39,
+   "correct": 222,
+   "form": 38,
+   "gold_unseen": 109,
+   "max_turns": 30,
+   "context_exhausted": 61,
+   "abstain": 1
+  },
+  "triviaqa": {
+   "gold_unseen": 65,
+   "correct": 352,
+   "form": 44,
+   "context_exhausted": 6,
+   "max_turns": 20,
+   "gold_seen": 13
+  },
+  "nq": {
+   "form": 72,
+   "correct": 195,
+   "gold_seen": 66,
+   "gold_unseen": 126,
+   "context_exhausted": 14,
+   "max_turns": 23,
+   "unmatchable": 4
+  },
+  "hotpotqa": {
+   "correct": 238,
+   "gold_unseen": 93,
+   "gold_seen": 51,
+   "form": 49,
+   "max_turns": 47,
+   "context_exhausted": 19,
+   "unmatchable": 3
+  },
+  "2wikimultihopqa": {
+   "gold_unseen": 60,
+   "max_turns": 107,
+   "correct": 234,
+   "unmatchable": 9,
+   "context_exhausted": 30,
+   "gold_seen": 39,
+   "form": 21
+  },
+  "musique": {
+   "gold_seen": 50,
+   "max_turns": 107,
+   "form": 35,
+   "gold_unseen": 131,
+   "correct": 108,
+   "context_exhausted": 68,
+   "unmatchable": 1
+  },
+  "browsecomp_plus": {
+   "gold_unseen": 175,
+   "correct": 108,
+   "context_exhausted": 192,
+   "gold_seen": 19,
+   "unmatchable": 4,
+   "no_answer": 2
+  }
+ },
+ "search_r1_14b__qwen3_emb_4b": {
+  "bamboogle": {
+   "correct": 65,
+   "form": 9,
+   "gold_unseen": 42,
+   "unmatchable": 2,
+   "gold_seen": 6,
+   "no_answer": 1
+  },
+  "popqa": {
+   "correct": 243,
+   "gold_unseen": 167,
+   "gold_seen": 62,
+   "form": 27,
+   "no_answer": 1
+  },
+  "triviaqa": {
+   "correct": 345,
+   "gold_seen": 26,
+   "gold_unseen": 80,
+   "form": 48,
+   "no_answer": 1
+  },
+  "nq": {
+   "correct": 243,
+   "gold_seen": 88,
+   "gold_unseen": 119,
+   "form": 41,
+   "unmatchable": 6,
+   "no_answer": 3
+  },
+  "hotpotqa": {
+   "gold_seen": 57,
+   "correct": 235,
+   "gold_unseen": 146,
+   "form": 50,
+   "no_answer": 8,
+   "unmatchable": 4
+  },
+  "2wikimultihopqa": {
+   "correct": 242,
+   "gold_unseen": 126,
+   "no_answer": 24,
+   "form": 35,
+   "gold_seen": 58,
+   "unmatchable": 15
+  },
+  "musique": {
+   "gold_unseen": 263,
+   "correct": 125,
+   "gold_seen": 60,
+   "form": 33,
+   "no_answer": 16,
+   "unmatchable": 3
+  },
+  "browsecomp_plus": {
+   "no_answer": 120,
+   "gold_unseen": 309,
+   "unmatchable": 6,
+   "gold_seen": 20,
+   "correct": 45
+  }
+ },
+ "search_r1_14b__e5": {
+  "bamboogle": {
+   "correct": 65,
+   "form": 8,
+   "gold_unseen": 46,
+   "unmatchable": 2,
+   "gold_seen": 4
+  },
+  "popqa": {
+   "gold_seen": 52,
+   "correct": 225,
+   "gold_unseen": 190,
+   "form": 33
+  },
+  "triviaqa": {
+   "correct": 346,
+   "gold_unseen": 94,
+   "no_answer": 1,
+   "form": 38,
+   "gold_seen": 21
+  },
+  "nq": {
+   "form": 38,
+   "gold_unseen": 118,
+   "gold_seen": 82,
+   "correct": 256,
+   "unmatchable": 5,
+   "no_answer": 1
+  },
+  "hotpotqa": {
+   "gold_unseen": 166,
+   "correct": 233,
+   "gold_seen": 39,
+   "form": 49,
+   "no_answer": 9,
+   "unmatchable": 4
+  },
+  "2wikimultihopqa": {
+   "correct": 220,
+   "gold_unseen": 153,
+   "form": 28,
+   "gold_seen": 53,
+   "no_answer": 29,
+   "unmatchable": 17
+  },
+  "musique": {
+   "gold_unseen": 273,
+   "correct": 115,
+   "gold_seen": 61,
+   "form": 31,
+   "no_answer": 15,
+   "unmatchable": 5
+  },
+  "browsecomp_plus": {
+   "no_answer": 128,
+   "gold_unseen": 320,
+   "correct": 24,
+   "gold_seen": 22,
+   "unmatchable": 6
+  }
+ },
+ "search_o1__qwen3_emb_4b": {
+  "bamboogle": {
+   "no_answer": 4,
+   "gold_unseen": 19,
+   "correct": 67,
+   "form": 10,
+   "gold_seen": 7,
+   "unmatchable": 1,
+   "max_turns": 17
+  },
+  "popqa": {
+   "no_answer": 6,
+   "correct": 214,
+   "form": 48,
+   "gold_unseen": 122,
+   "gold_seen": 48,
+   "abstain": 3,
+   "max_turns": 59
+  },
+  "triviaqa": {
+   "no_answer": 8,
+   "correct": 325,
+   "form": 42,
+   "gold_seen": 24,
+   "gold_unseen": 40,
+   "max_turns": 58,
+   "abstain": 2,
+   "context_exhausted": 1
+  },
+  "nq": {
+   "no_answer": 9,
+   "gold_unseen": 77,
+   "form": 80,
+   "gold_seen": 100,
+   "correct": 173,
+   "unmatchable": 1,
+   "max_turns": 60
+  },
+  "hotpotqa": {
+   "correct": 193,
+   "gold_seen": 60,
+   "unmatchable": 4,
+   "gold_unseen": 55,
+   "max_turns": 140,
+   "form": 40,
+   "no_answer": 8
+  },
+  "2wikimultihopqa": {
+   "no_answer": 8,
+   "gold_unseen": 24,
+   "correct": 186,
+   "form": 24,
+   "max_turns": 226,
+   "gold_seen": 27,
+   "unmatchable": 2,
+   "abstain": 2,
+   "context_exhausted": 1
+  },
+  "musique": {
+   "no_answer": 17,
+   "correct": 81,
+   "gold_unseen": 82,
+   "gold_seen": 41,
+   "form": 39,
+   "max_turns": 237,
+   "abstain": 2,
+   "unmatchable": 1
+  },
+  "browsecomp_plus": {
+   "no_answer": 48,
+   "gold_seen": 14,
+   "context_exhausted": 74,
+   "correct": 63,
+   "max_turns": 269,
+   "gold_unseen": 26,
+   "abstain": 5,
+   "unmatchable": 1
+  }
+ },
+ "rag__qwen3_emb_4b": {
+  "bamboogle": {
+   "correct": 35,
+   "gold_unseen": 37,
+   "form": 10,
+   "gold_seen": 6,
+   "abstain": 37
+  },
+  "popqa": {
+   "correct": 209,
+   "form": 70,
+   "gold_unseen": 128,
+   "gold_seen": 41,
+   "abstain": 49,
+   "context_exhausted": 3
+  },
+  "triviaqa": {
+   "correct": 330,
+   "gold_unseen": 75,
+   "form": 53,
+   "abstain": 20,
+   "gold_seen": 21,
+   "context_exhausted": 1
+  },
+  "nq": {
+   "gold_unseen": 103,
+   "gold_seen": 79,
+   "form": 84,
+   "correct": 194,
+   "abstain": 38,
+   "unmatchable": 1,
+   "context_exhausted": 1
+  },
+  "hotpotqa": {
+   "correct": 166,
+   "form": 44,
+   "gold_unseen": 134,
+   "gold_seen": 35,
+   "abstain": 116,
+   "unmatchable": 2,
+   "context_exhausted": 3
+  },
+  "2wikimultihopqa": {
+   "correct": 94,
+   "gold_unseen": 73,
+   "abstain": 302,
+   "form": 14,
+   "gold_seen": 14,
+   "unmatchable": 3
+  },
+  "musique": {
+   "correct": 49,
+   "gold_unseen": 182,
+   "gold_seen": 23,
+   "form": 27,
+   "abstain": 211,
+   "context_exhausted": 4,
+   "unmatchable": 4
+  },
+  "browsecomp_plus": {
+   "correct": 72,
+   "gold_unseen": 157,
+   "abstain": 158,
+   "context_exhausted": 100,
+   "gold_seen": 12,
+   "unmatchable": 1
+  }
+ },
+ "agentir__agentir_4b": {
+  "bamboogle": {
+   "correct": 54,
+   "gold_seen": 9,
+   "form": 10,
+   "gold_unseen": 10,
+   "max_turns": 42
+  },
+  "popqa": {
+   "gold_unseen": 79,
+   "max_turns": 161,
+   "form": 96,
+   "gold_seen": 20,
+   "correct": 144
+  },
+  "triviaqa": {
+   "max_turns": 101,
+   "correct": 262,
+   "form": 88,
+   "gold_unseen": 40,
+   "gold_seen": 9
+  },
+  "nq": {
+   "max_turns": 157,
+   "form": 155,
+   "correct": 77,
+   "gold_unseen": 54,
+   "gold_seen": 55,
+   "unmatchable": 1,
+   "abstain": 1
+  },
+  "hotpotqa": {
+   "form": 77,
+   "correct": 155,
+   "max_turns": 185,
+   "gold_seen": 47,
+   "gold_unseen": 34,
+   "unmatchable": 2
+  },
+  "2wikimultihopqa": {
+   "max_turns": 300,
+   "correct": 123,
+   "form": 53,
+   "gold_unseen": 9,
+   "gold_seen": 15
+  },
+  "musique": {
+   "max_turns": 339,
+   "gold_unseen": 43,
+   "correct": 54,
+   "form": 34,
+   "gold_seen": 29,
+   "no_answer": 1
+  },
+  "browsecomp_plus": {
+   "correct": 155,
+   "max_turns": 325,
+   "gold_unseen": 14,
+   "abstain": 1,
+   "gold_seen": 5
+  }
+ }
+}
