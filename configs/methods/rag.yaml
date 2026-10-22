@@ -30,7 +30,7 @@ client:
   retry_backoff_s: 15
 
 prompts:
-  user: {constant: prompts.rag.RAG_USER_TEMPLATE, sha256: 41cbfe6f54746f6db5cf0143b9cf68143939287414f69512408d3faf28dba42e}
+  user: {constant: prompts.rag.RAG_USER_TEMPLATE, sha256: f55a349bf8b5a47242ac0d4e402a041efdf0503957dbe62669575ceb4b6a61c1}
   passage: {constant: prompts.rag.RAG_PASSAGE_TEMPLATE, sha256: 8b5f663193fbda91200ad6048971e4f83cacf8ce5a239fe4be5153756e61a423}
 
 retrieval:
