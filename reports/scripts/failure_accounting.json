@@ -276,70 +276,73 @@
  },
  "rag__qwen3_emb_4b": {
   "bamboogle": {
-   "correct": 35,
-   "gold_unseen": 37,
-   "form": 10,
-   "gold_seen": 6,
-   "abstain": 37
-  },
-  "popqa": {
-   "correct": 209,
-   "form": 70,
-   "gold_unseen": 128,
-   "gold_seen": 41,
-   "abstain": 49,
-   "context_exhausted": 3
-  },
-  "triviaqa": {
-   "correct": 330,
-   "gold_unseen": 75,
-   "form": 53,
-   "abstain": 20,
-   "gold_seen": 21,
-   "context_exhausted": 1
-  },
-  "nq": {
-   "gold_unseen": 103,
-   "gold_seen": 79,
-   "form": 84,
-   "correct": 194,
-   "abstain": 38,
+   "correct": 59,
+   "form": 12,
+   "gold_unseen": 48,
+   "gold_seen": 4,
    "unmatchable": 1,
    "context_exhausted": 1
   },
-  "hotpotqa": {
-   "correct": 166,
-   "form": 44,
-   "gold_unseen": 134,
-   "gold_seen": 35,
-   "abstain": 116,
-   "unmatchable": 2,
+  "popqa": {
+   "form": 66,
+   "correct": 226,
+   "gold_unseen": 154,
+   "gold_seen": 43,
+   "abstain": 8,
    "context_exhausted": 3
   },
+  "triviaqa": {
+   "correct": 336,
+   "gold_unseen": 80,
+   "form": 52,
+   "gold_seen": 25,
+   "abstain": 3,
+   "context_exhausted": 4
+  },
+  "nq": {
+   "gold_seen": 93,
+   "gold_unseen": 122,
+   "correct": 192,
+   "form": 82,
+   "unmatchable": 5,
+   "abstain": 2,
+   "context_exhausted": 4
+  },
+  "hotpotqa": {
+   "correct": 184,
+   "form": 54,
+   "gold_unseen": 194,
+   "gold_seen": 43,
+   "abstain": 5,
+   "unmatchable": 6,
+   "context_exhausted": 14
+  },
   "2wikimultihopqa": {
-   "correct": 94,
-   "gold_unseen": 73,
-   "abstain": 302,
-   "form": 14,
-   "gold_seen": 14,
-   "unmatchable": 3
+   "correct": 202,
+   "gold_unseen": 216,
+   "gold_seen": 24,
+   "form": 16,
+   "unmatchable": 15,
+   "abstain": 21,
+   "context_exhausted": 6
   },
   "musique": {
-   "correct": 49,
-   "gold_unseen": 182,
-   "gold_seen": 23,
-   "form": 27,
-   "abstain": 211,
-   "context_exhausted": 4,
-   "unmatchable": 4
+   "correct": 68,
+   "gold_unseen": 319,
+   "gold_seen": 31,
+   "form": 31,
+   "abstain": 32,
+   "no_answer": 1,
+   "context_exhausted": 11,
+   "unmatchable": 7
   },
   "browsecomp_plus": {
-   "correct": 72,
-   "gold_unseen": 157,
-   "abstain": 158,
-   "context_exhausted": 100,
-   "gold_seen": 12,
-   "unmatchable": 1
+   "gold_unseen": 145,
+   "correct": 67,
+   "abstain": 20,
+   "unmatchable": 6,
+   "gold_seen": 15,
+   "context_exhausted": 247
   }
  },
  "agentir__agentir_4b": {
