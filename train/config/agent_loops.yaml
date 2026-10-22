@@ -1,2 +1,0 @@
-- name: scaleseek_agent
-  _target_: train.agent_loop.ScaleSeekAgentLoop

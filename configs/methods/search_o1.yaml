@@ -1,0 +1,71 @@
+# =====================================================================================
+# Search-o1 -- RUC-NLPIR/Search-o1 scripts/run_search_o1.py loop with Qwen3.5-9B
+# (BASELINES.md §4 "Search-o1").  The instructions come from scripts/prompts.py at the
+# pinned commit and are byte-diffed on every run: single-hop
+# get_singleqa_search_o1_instruction, multi-hop get_multiqa_search_o1_instruction (the
+# dataset decides, base.yaml `search_o1_instruction`), non-QwQ get_task_instruction_openqa,
+# and get_webpage_to_reasonchain_instruction for Reason-in-Documents.  The answer is the
+# last \boxed{} (official evaluate.extract_answer, mode='qa').
+#
+# Differences from the original, all listed in docs/deviations.md:
+#   * max_turn 15 -> profile turns; search limit 5/10 -> turns - 1 (template parameter);
+#   * temperature 0.7 / top_p 0.8 / top_k 20 / repetition 1.05 / max_tokens 8192 -> profile;
+#   * Bing top-10 web pages -> local corpus top-3 (no snippet, so the official
+#     "no snippet match" fallback context[:2*max_doc_len] applies).
+# =====================================================================================
+method: search_o1
+display_name: Search-o1
+
+generator:
+  model: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+
+official_repo:
+  name: Search-o1
+  url: https://github.com/RUC-NLPIR/Search-o1.git
+  commit: c76a700fb2a948039ada577c03b3be958aa57282
+
+server:
+  served_model_name: qwen3.5-9b
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.70          # a dense query encoder (~8.5 GB) may share GPU 0
+  max_num_seqs: 64
+  seed: 0
+  reasoning_parser: null
+  tool_call_parser: null
+  enable_auto_tool_choice: false
+  language_model_only: true
+  trust_remote_code: false
+
+client:
+  concurrency: 64
+  request_timeout_s: 7200
+  max_retries: 5
+  retry_backoff_s: 15
+
+prompts:
+  singleqa: {constant: prompts.official.search_o1.get_singleqa_search_o1_instruction, sha256: 9506092688ed2248b9c7985f315da95a02cfeb477fdcc192cb255033babe1dfa}
+  multiqa: {constant: prompts.official.search_o1.get_multiqa_search_o1_instruction, sha256: 90153b3d7c533903b4389256475e0862db91b5ef4e808203ed4fa21975e508d8}
+  task: {constant: prompts.official.search_o1.get_task_instruction_openqa, sha256: 201e18c851ee42fe7be7f37f8a5ceda2fd6c7205515b50ed06861008baa3a5ec}
+  reason_in_documents: {constant: prompts.official.search_o1.get_webpage_to_reasonchain_instruction, sha256: 60c5e7d932bd9ef70f9822d8a275b50beb53492fd9f99d7a195006b7f121edb4}
+  extract_answer: {constant: prompts.official.search_o1.extract_answer, sha256: 43ed609147de63bb047127debf417953c99972c3a4c35b43628915e7ee2c27fd}
+  begin_search_query: {constant: prompts.official.search_o1.BEGIN_SEARCH_QUERY, sha256: f9ff19ddd9b8cddc5074c7cce7697cbe3e67b31b8adfd950605794d8a667fba9}
+  end_search_query: {constant: prompts.official.search_o1.END_SEARCH_QUERY, sha256: 325250a5c7dda0e57e5e201b17bdf1b5988fb1b140e21a38b1d8f684db10e025}
+  begin_search_result: {constant: prompts.official.search_o1.BEGIN_SEARCH_RESULT, sha256: 25d016ba86d0f24a55b955072db8a576ef605b06b379c7b65eac8839cbfddb61}
+  end_search_result: {constant: prompts.official.search_o1.END_SEARCH_RESULT, sha256: 16395f484167671b614757b04b627b265446cab3c19285b745e42847fe742a67}
+  extract_between: {constant: prompts.official.search_o1.extract_between, sha256: c48fc45dd0217fb39e66e3e7a413a2ecf9ad2214865c75f9afd36e30b9c2ddb2}
+  limit_message: {constant: prompts.official.search_o1.LIMIT_MESSAGE, sha256: 9f645a4686d46f62e40549d623ea6294b661ddb619cc0a6d3fd7c614fa952e60}
+  repeat_message: {constant: prompts.official.search_o1.REPEAT_MESSAGE, sha256: d36f0a813df10bb97773c35d53d6182232bd1796962f5e4e152f3fc7f587d7e9}
+  result_message: {constant: prompts.official.search_o1.RESULT_MESSAGE, sha256: 8a029033fb8c059d01487fafb5be997c79acd685f571b9d9d071d894d3792ca2}
+  step_line: {constant: prompts.official.search_o1.STEP_LINE, sha256: e839e48527394dcd03b37cb11a8daa917aa5e242e6b3c8cef72bc7e3c2c20678}
+  web_page_header: {constant: prompts.official.search_o1.WEB_PAGE_HEADER, sha256: 4256e78c0def36a7fd95534c79187097393188fdbbb865a028f380ee140967c9}
+
+search_o1:
+  # MAX_SEARCH_LIMIT is not set here: it is the profile's turns - 1 (BASELINES.md §4).
+  # Official per-document budget for the QA datasets; used only through the official
+  # no-snippet fallback `raw_context[:max_doc_len * 2]`.
+  max_doc_len: 3000
+
+retrieval:
+  retrievers: [bm25, e5, qwen3_emb_4b]
+  top_k: 3

@@ -1,0 +1,55 @@
+# =====================================================================================
+# BrowseComp-Plus judge -- an INDEPENDENT Qwen3-32B server.
+# Decision 2026-10-14: Qwen3-32B replaces the Qwen3.5-9B of BASELINES.md §4.  It is the
+# default judge of the official open-source evaluation (scripts_evaluation/evaluate_run.py);
+# in the smoke test Qwen3.5-9B dropped the `correct:` line on every AgentIR answer (the long
+# Explanation / Exact Answer / Confidence format), which the official parser counts as a
+# judge failure, i.e. incorrect.  Decoding stays as in §4 (temperature 0, top_p 1).
+# The grader template is copied verbatim from texttron/BrowseComp-Plus at the pinned
+# commit and byte-diffed.  The judge sees only (question, gold answer, the agent's final
+# answer -- for AgentIR its `Exact Answer:` value); never the agent's conversation, never
+# the agent's self-reported confidence as a score.  Every method's BCP output is judged by
+# this one configuration and the raw judge text is stored.
+# =====================================================================================
+method: bcp_judge
+display_name: BCP judge (Qwen3-32B)
+
+generator:
+  model: Qwen/Qwen3-32B
+  revision: 9216db5781bf21249d130ec9da846c4624c16137
+
+official_repo:
+  name: BrowseComp-Plus
+  url: https://github.com/texttron/BrowseComp-Plus.git
+  commit: 046949032b0328319cc9a02663a759ec601d9402
+
+server:
+  served_model_name: qwen3-32b-judge
+  tensor_parallel_size: 4               # 65 GB of bf16 weights: a whole 4 x A100-40GB node
+  gpu_memory_utilization: 0.90
+  max_num_seqs: 64
+  seed: 0
+  reasoning_parser: null
+  tool_call_parser: null
+  enable_auto_tool_choice: false
+  language_model_only: false            # a text-only model
+  trust_remote_code: false
+  max_model_len: 32768
+
+client:
+  concurrency: 64
+  request_timeout_s: 3600
+  max_retries: 5
+  retry_backoff_s: 15
+
+decoding:
+  temperature: 0.0
+  top_p: 1.0
+  max_new_tokens: 4096
+
+prompts:
+  grader: {constant: prompts.official.bcp_judge.GRADER_TEMPLATE, sha256: 71fb29f51a56cea9fe647331d525648474195fa4816f7d05632459d572419d90}
+  create_judge_prompt: {constant: prompts.official.bcp_judge.create_judge_prompt, sha256: 10c7b97c87dca560d795e64c99fdc48e1538784effd82f03cae93e9439fbf21e}
+  parse_judge_response: {constant: prompts.official.bcp_judge.parse_judge_response, sha256: 0095eead072b3174a04b049829bb2f9504c6391341bee024527f007b9972032d}
+
+retrieval: null

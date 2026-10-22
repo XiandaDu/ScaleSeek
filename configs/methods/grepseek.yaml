@@ -1,0 +1,52 @@
+# =====================================================================================
+# GrepSeek -- the official harness alirezasalemi7/grepseek `inference/` (unmodified; started
+# through scaleseek/grepseek_entry.py, which only adds the profile's presence_penalty to every
+# request) with the official GRPO checkpoint (BASELINES.md §4).
+# Settings are the paper's Table 5.  No retriever: the agent greps the materialised
+# corpus (`wiki_corpus.jsonl`).  The server flags mirror rl/serve_rl.sh except the tool-call
+# parser (see `server` below).
+# `max_tokens_per_turn: 0` is the harness's own "no per-turn cap" value (it then sends
+# max_tokens=None, i.e. up to the remaining context window).
+# =====================================================================================
+method: grepseek
+display_name: GrepSeek
+
+generator:
+  model: alireza7/GrepSeek-Qwen3.5-9B-GRPO
+  revision: a79563970cfdd2ced3cc5fde481737d0ebea6fa4
+
+official_repo:
+  name: grepseek
+  url: https://github.com/alirezasalemi7/grepseek.git
+  commit: 1f6ea58372defe774213e22c7650b7fd1b842ab8
+
+server:
+  served_model_name: grepseek
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.90
+  max_num_seqs: 32
+  seed: 0
+  reasoning_parser: qwen3
+  # rl/serve_rl.sh also passes --enable-auto-tool-choice --tool-call-parser qwen3_coder.
+  # The harness sends no `tools` and parses <tool_call> from the TEXT.  Under the paper's
+  # vLLM 0.17 the parser only ran for requests with tools, so the text arrived intact; in
+  # vLLM 0.25 it strips the block from `content` and then drops it (no tool_choice), and
+  # every turn becomes a parse_error.  Off here = what the official harness received.
+  tool_call_parser: null
+  enable_auto_tool_choice: false
+  language_model_only: true
+  trust_remote_code: true
+
+harness:
+  max_tokens_per_turn: 0
+  tool_max_tokens: {wiki: 2048, bcp: 6000}
+  tool_timeout: 60.0
+  parallel: 16
+  engine_mode: none
+  # The harness's OpenAI client gets the same per-request timeout and retries as every
+  # other method's client (SDK default 600 s / 2 cut long BCP turns short), via
+  # scaleseek/grepseek_entry.py.
+  request_timeout_s: 7200
+  max_retries: 5
+
+retrieval: null

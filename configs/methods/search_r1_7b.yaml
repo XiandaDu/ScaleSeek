@@ -1,0 +1,49 @@
+# =====================================================================================
+# Search-R1 7B -- official checkpoint, official inference loop (BASELINES.md §4).
+# Copied verbatim from PeterGriffinJin/Search-R1 infer.py at the pinned commit and
+# byte-diffed on every run: the prompt, the stop sequences, the EOS ids and the
+# '<information>' continuation template.  The checkpoint's own chat template is used and
+# no system message is added.  Decoding follows the shared profile, not infer.py
+# (B=4 -> max_assistant_turns, max_new_tokens=1024 -> no cap, temperature 0.7 -> 0.6).
+# =====================================================================================
+method: search_r1
+display_name: Search-R1-7B
+
+generator:
+  model: PeterJinGo/SearchR1-nq_hotpotqa_train-qwen2.5-7b-em-grpo-v0.3
+  revision: 395b18f1fecee52f1b51fb22f898c220f0a08ec3
+
+official_repo:
+  name: Search-R1
+  url: https://github.com/PeterGriffinJin/Search-R1.git
+  commit: 598e61bd1d36895726d28a8d06b3a15bed19f5d3
+
+server:
+  served_model_name: search-r1-7b
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.70          # a dense query encoder (~8.5 GB) may share GPU 0
+  max_num_seqs: 64
+  seed: 0
+  reasoning_parser: null
+  tool_call_parser: null
+  enable_auto_tool_choice: false
+  language_model_only: false
+  trust_remote_code: false
+
+client:
+  concurrency: 64
+  request_timeout_s: 7200
+  max_retries: 5
+  retry_backoff_s: 15
+
+prompts:
+  user: {constant: prompts.official.search_r1.PROMPT_TEMPLATE, sha256: 325187b4e28848fc12d41dfcb958bf9376b3735630d67686c140b65d1b76d578}
+  search_template: {constant: prompts.official.search_r1.SEARCH_TEMPLATE, sha256: cf2616fcdf017e973547ae902cfcaf582c136af95a7b79d33dc6b7c7032d3b4c}
+  stop_sequences: {constant: prompts.official.search_r1.STOP_SEQUENCES, sha256: a9fc2c1dba42f10c11808bfc33dd77a69d7e26b5087a32547cb478a27f34da7a}
+  eos_token_ids: {constant: prompts.official.search_r1.EOS_TOKEN_IDS, sha256: fe9bdf32be61eb87b5bf38ca1e7112390baf7eb7206bdff7f4d23be6fcbba6da}
+  get_query: {constant: prompts.official.search_r1.get_query, sha256: f7f4adf31e3aff364b860ff0d5dc9dcc5484665f19ce378051210819c13c38a4}
+  passages2string: {constant: prompts.official.search_r1._passages2string, sha256: 6556ea7e611bca038cae312b980cf55a8489554f5cb789d6a6121396ef964779}
+
+retrieval:
+  retrievers: [bm25, e5, qwen3_emb_4b]
+  top_k: 3

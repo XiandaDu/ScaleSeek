@@ -1,0 +1,5 @@
+# Wheels installed into the main env on top of env/main.lock.txt, from
+# $SCALESEEK_ROOT/wheelhouse/main-extra.  <wheel file> <sha256>; checked at every install.
+#   pyserini 2.4.0: sdist only on PyPI (its hash is in env/main.lock.txt); built by
+#   `bash setup_env.sh --build-wheels` from that verified sdist.
+pyserini-2.4.0-py3-none-any.whl 5d75d146b109239bba73749566e41d85f99976b72a629f90785f7baa4a0db03d

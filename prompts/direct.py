@@ -1,5 +1,12 @@
-"""Project-defined Direct baseline prompt."""
+"""Direct prompt -- PROJECT-DEFINED.
 
-PROMPT = """You are a knowledgeable assistant. Answer the question using your parametric knowledge. Keep the answer concise.
+The GrepSeek paper reports a Direct row but publishes no prompt, so this one is ours.  It
+shares its wording with the RAG prompt (prompts/rag.py) so the two differ only by the
+documents block.  Frozen by the sha256 in configs/methods/direct.yaml.
+"""
 
-After any reasoning, end your response with exactly one <answer></answer> block containing only the final answer, which must be concise: a noun phrase, name, date, number, or yes/no. Put nothing else inside the tags."""
+DIRECT_USER_TEMPLATE = (
+    "Answer the given question. Give the final answer inside <answer> and </answer>, "
+    "as a short phrase without explanation, for example <answer> Beijing </answer>.\n\n"
+    "Question: {question}"
+)

@@ -1,0 +1,14 @@
+# Top-level pins of the main environment (vLLM serving, retrieval, all project code).
+# The full transitive lock is env/main.lock.txt; regenerate it with
+#     bash setup_env.sh --relock
+# and commit both files together.  Versions are pinned to the vLLM 0.25.1 release window
+# (July 2026) instead of "newest", so the resolver cannot drift to an untested transformers.
+vllm==0.25.1
+transformers==5.13.1
+datasets==5.0.0
+openai==2.54.0
+pyserini==2.4.0
+faiss-cpu==1.15.1
+pyyaml
+requests
+pytest
