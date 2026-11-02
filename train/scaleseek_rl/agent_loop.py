@@ -26,6 +26,9 @@ from scaleseek import agent
 @register("scaleseek_agent")
 class ScaleSeekAgentLoop(ToolAgentLoop):
 
+    async def process_vision_info(self, messages: list[dict]) -> dict:
+        return {}       # text only (Qwen3.5 ships an image processor; GrepSeek skips it the same way)
+
     async def _handle_generating_state(self, agent_data: AgentData, sampling_params: dict[str, Any],
                                        ignore_termination: bool = False) -> AgentState:
         state = await super()._handle_generating_state(
