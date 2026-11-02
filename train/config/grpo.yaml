@@ -5,7 +5,7 @@
 #   lr 1e-6 (GrepSeek 5e-6)                                   -- no SFT warm start, no KL
 #   reward: format-gated EM, drafts at draft_credit           -- scaleseek/agent.py
 #   tools: find + search, native Qwen3.5 calls (qwen3_coder)  -- train/scaleseek_rl/
-#   rollout TP 2, ulysses SP 4, 4K tokens/GPU per micro-batch -- 40 GB A100s, 248K vocab (GrepSeek: 80 GB)
+#   rollout TP 2; fused log-prob kernels, no sequence parallel -- 40 GB A100s, 248K vocab (GrepSeek: 80 GB)
 # Same as GrepSeek: data NQ + HotpotQA train, 16K context (1024 prompt + 15360), at most
 # 5 tool calls + 1 answering turn, temperature 1.0, eager vLLM, full FSDP offload.
 #
@@ -81,6 +81,11 @@ actor_rollout_ref:
     path: ${oc.env:SCALESEEK_RL_MODEL}
     trust_remote_code: true
     enable_gradient_checkpointing: true
+    # log-probs straight from the hidden states (verl models/transformers/qwen3_5.py):
+    # 16K tokens x 248K-vocab logits in fp32 alone overflowed a 40 GB A100
+    use_fused_kernels: true
+    fused_kernel_options:
+      impl_backend: torch
   rollout:
     name: vllm
     mode: async
@@ -102,7 +107,7 @@ actor_rollout_ref:
     max_num_batched_tokens: 24576
     log_prob_micro_batch_size_per_gpu: 1
     log_prob_use_dynamic_bsz: true
-    log_prob_max_token_len_per_gpu: 4096     # x SP 4 = one 16K trajectory per micro-batch
+    log_prob_max_token_len_per_gpu: 16384    # one whole 16K trajectory per GPU (model.use_fused_kernels)
     val_kwargs:
       do_sample: false
     multi_turn:
@@ -128,9 +133,8 @@ actor_rollout_ref:
       load_contents: ['model', 'optimizer', 'extra']
     ppo_mini_batch_size: 16          # 64 questions -> 4 updates per step
     ppo_micro_batch_size_per_gpu: 1
-    ppo_max_token_len_per_gpu: 4096          # x SP 4 = 16K tokens per micro-batch: 4K per GPU (vocab 248K logits; 16K/GPU went OOM)
+    ppo_max_token_len_per_gpu: 16384
     use_dynamic_bsz: true
-    entropy_from_logits_with_chunking: true
     use_kl_loss: false
     kl_loss_coef: 0.0
     fsdp_config:
@@ -142,7 +146,6 @@ actor_rollout_ref:
       fsdp_size: 4
       dtype: bfloat16
       model_dtype: bfloat16
-      ulysses_sequence_parallel_size: 4
     optim:
       optimizer: AdamW
       optimizer_impl: torch.optim
@@ -156,14 +159,13 @@ actor_rollout_ref:
   ref:
     strategy: fsdp
     log_prob_micro_batch_size_per_gpu: 1
-    log_prob_max_token_len_per_gpu: 4096
+    log_prob_max_token_len_per_gpu: 16384
     fsdp_config:
       wrap_policy:
         min_num_params: 0
       param_offload: true
       dtype: bfloat16
       model_dtype: bfloat16
-      ulysses_sequence_parallel_size: 4
 
 critic:
   enable: false
