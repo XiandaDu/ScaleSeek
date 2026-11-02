@@ -143,7 +143,8 @@ class ExactSearcher:
         hits = [(self.stored.document(sd.doc).get("id"), float(sd.score)) for sd in top]
 
         def in_title(doc_id: str) -> bool:
-            title = " " + " ".join(self.analyzer.analyze(fold(store.get(doc_id)["contents"].split("\n", 1)[0]))) + " "
+            # word tokens in Python: a Lucene analyze() per title costs ~70 ms through the JVM
+            title = " " + " ".join(re.findall(r"\w+", fold(store.get(doc_id)["contents"].split("\n", 1)[0]))) + " "
             return any(" " + " ".join(p) + " " in title for p in phrases)
         # stable sort: title matches first, BM25 order within each group
         out["hits"] = sorted(hits, key=lambda h: not in_title(h[0]))[:k]

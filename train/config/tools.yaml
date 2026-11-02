@@ -1,0 +1,11 @@
+# verl tool registry of the ScaleSeek agent.  Schemas come from scaleseek/agent.py (TOOLS);
+# the URLs are the retrieval services train/rl.sbatch starts on the training node.
+tools:
+  - class_name: scaleseek_rl.tools.FindTool
+    config:
+      type: native
+      url: ${oc.env:SCALESEEK_FIND_URL}
+  - class_name: scaleseek_rl.tools.SearchTool
+    config:
+      type: native
+      url: ${oc.env:SCALESEEK_SEARCH_URL}

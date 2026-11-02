@@ -12,6 +12,8 @@
 #   bash setup_env.sh --install       LOGIN node: uv, CPython, wheelhouse, login env, repos
 #   bash setup_env.sh --build-wheels  inside a job, once: wheels for the sdist-only packages
 #   bash setup_env.sh --job-agentir   inside a job: build the AgentIR env (run.py calls it)
+#   bash setup_env.sh --build-train-wheels  inside a job, once: flash-attn etc. for the training env
+#   bash setup_env.sh --job-train     inside a job: build the training env (verl SFT + GRPO)
 #   bash setup_env.sh --relock        re-resolve env/main.lock.txt from env/main.in
 #
 # Why node-local: on Narval /scratch (Lustre) opening a small file can take seconds when
@@ -241,6 +243,31 @@ _ss_build_wheels() {  # inside a job, once: wheels for the locked sdist-only pac
   echo "Record in env/agentir_extra.txt:"; (cd "$R/wheelhouse/agentir-extra" && sha256sum tevatron-*.whl jieba-*.whl | awk '{print $2, $1}')
 }
 
+_ss_build_train_wheels() {  # inside a job, once: the training env's compiled/source-only packages
+  [ -n "${SLURM_TMPDIR:-}" ] || { _ss_fail "--build-train-wheels runs inside a job"; return 1; }
+  _ss_modules; _ss_common_env
+  module load gcc/12.3 cuda/12.9 >/dev/null 2>&1 || { _ss_fail "cannot load gcc/12.3 cuda/12.9"; return 1; }
+  local L="$(_ss_local_root)" R="$SCALESEEK_ROOT" out="$SCALESEEK_ROOT/wheelhouse/train-extra" d
+  _ss_local_python || return 1
+  rm -rf "$L/tbuild" "$L/tsrc" && mkdir -p "$L/tsrc" "$out"
+  UV_PYTHON_INSTALL_DIR="$L/python" _ss_uv venv -q --python "$_SS_PYTHON" "$L/tbuild" || return 1
+  # torch (cu128) + build tools from the locked training wheelhouse
+  UV_CACHE_DIR="$L/uv_cache" UV_LINK_MODE=copy _ss_uv pip install -q --python "$L/tbuild/bin/python" --offline --no-index \
+      --find-links "$R/wheelhouse/train" torch==2.10.0+cu128 setuptools wheel ninja packaging psutil einops || return 1
+  for d in flash_attn-2.8.3 causal_conv1d-1.6.1 antlr4-python3-runtime-4.9.3; do tar -xzf "$R/wheelhouse/src/$d.tar.gz" -C "$L/tsrc"; done
+  tar -xzf "$R/wheelhouse/src/transformers-f048e845.tar.gz" -C "$L/tsrc"
+  export CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")" TORCH_CUDA_ARCH_LIST="8.0" FLASH_ATTN_CUDA_ARCHS="80" \
+         FLASH_ATTENTION_FORCE_BUILD=TRUE CAUSAL_CONV1D_FORCE_BUILD=TRUE MAX_JOBS="${MAX_JOBS:-12}" NVCC_THREADS=2
+  _ss_build_one() {
+    UV_CACHE_DIR="$L/uv_cache" _ss_uv build -q --wheel --offline --no-build-isolation \
+        --python "$L/tbuild/bin/python" --out-dir "$out" "$1" || _ss_fail "wheel build $1"; }
+  _ss_build_one "$L/tsrc/antlr4-python3-runtime-4.9.3" || return 1
+  _ss_build_one "$L/tsrc/transformers-f048e845684894fe60440bb8506f26ffaf7b69ac" || return 1
+  _ss_build_one "$L/tsrc/causal_conv1d-1.6.1" || return 1
+  _ss_build_one "$L/tsrc/flash_attn-2.8.3" || return 1
+  echo "Record in env/train_extra.txt:"; (cd "$out" && sha256sum *.whl | awk '{print $2, $1}')
+}
+
 _ss_relock() {
   unset PYTHONPATH PIP_CONFIG_FILE
   local tmp; tmp="$(mktemp)"
@@ -259,6 +286,9 @@ else
   case "${1:-}" in
     --install)      _ss_install ;;
     --build-wheels) _ss_build_wheels ;;
+    --build-train-wheels) _ss_build_train_wheels ;;
+    --job-train)    _ss_modules && _ss_common_env &&
+                    _ss_local_env train "$_SS_REPO/env/train.lock.txt" "transformers antlr4-python3-runtime" ;;
     --job-agentir)  _ss_modules && _ss_common_env &&
                     _ss_local_env agentir "$_SS_REPO/env/agentir.lock.txt" "" ;;
     --relock)       _ss_relock ;;

@@ -15,6 +15,7 @@
 #   bash submit.sh eval-all --dataset popqa          # the 15 runs of one dataset
 #   bash submit.sh judge --dataset browsecomp_plus
 #   bash submit.sh score --dataset popqa
+#   bash submit.sh rl --name <run> [--model <hf dir>] [hydra overrides]   # GRPO of our agent
 #   ... --time 48:00:00 --dry-run --after <jobid>   (extra sbatch controls, any stage)
 # =====================================================================================
 set -uo pipefail
@@ -114,5 +115,14 @@ case "$STAGE" in
       --mem=$((64*TP + 64))G --time=12:00:00 -- judge "${ARGS[@]}" ;;
   score)
     submit "score_$(arg dataset)" slurm/job.sh --cpus-per-task=2 --mem=16G --time=00:30:00 -- score "${ARGS[@]}" ;;
+  rl)
+    # GRPO of our agent (train/rl.sbatch); --model defaults to the pinned base Qwen3.5-9B.
+    N="$(arg name)"; [ -n "$N" ] || { echo "--name required"; exit 2; }
+    M="$(arg model)"; M="${M:-${SCALESEEK_ROOT:-/scratch/$USER/scaleseek_v2}/hf/hub/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a}"
+    PASS=(); for ((i=0; i<${#ARGS[@]}; i++)); do
+      case "${ARGS[$i]}" in --name|--model) i=$((i+1)); continue ;; esac; PASS+=("${ARGS[$i]}"); done
+    mkdir -p "${SCALESEEK_ROOT:-/scratch/$USER/scaleseek_v2}/train_runs"
+    submit "rl_$N" train/rl.sbatch --gpus-per-node="$GPU_TYPE:4" --cpus-per-task=48 --mem=498G \
+      -- "$N" "$M" "${PASS[@]}" ;;
   *) echo "unknown stage $STAGE"; sed -n '2,18p' "$0"; exit 2 ;;
 esac

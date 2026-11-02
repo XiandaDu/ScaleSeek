@@ -65,14 +65,15 @@ def check_context_window(model_path: Path, max_model_len: int) -> dict:
 
 
 class RetrievalProcess:
-    def __init__(self, spec: RunSpec, smoke: bool, gpu: str):
+    def __init__(self, spec: RunSpec, smoke: bool, gpu: str, retriever: str | None = None):
+        retriever = retriever or spec.retriever
         self.port = free_port()
         self.url = f"http://127.0.0.1:{self.port}"
         cmd = [sys.executable, str(repo_root() / "run.py"), "serve-retriever",
-               "--retriever", spec.retriever, "--corpus", spec.corpus, "--port", str(self.port),
+               "--retriever", retriever, "--corpus", spec.corpus, "--port", str(self.port),
                "--device", "cuda:0"] + (["--smoke"] if smoke else [])
         env = dict(os.environ, CUDA_VISIBLE_DEVICES=gpu)
-        self.log_path = spec.run_dir / "retriever.log"
+        self.log_path = spec.run_dir / ("retriever.log" if retriever == spec.retriever else f"retriever_{retriever}.log")
         self._logf = open(self.log_path, "ab")
         log("retriever: " + " ".join(cmd))
         self.proc = subprocess.Popen(cmd, stdout=self._logf, stderr=subprocess.STDOUT, env=env,
@@ -121,6 +122,8 @@ def build_provenance(spec: RunSpec, subset_manifest: dict, model_path: Path, smo
         "corpus_sha256": load_corpus_manifest(base, spec.corpus, smoke)["sha256"],
         "index_manifest_sha256": (sha256_json(load_index_manifest(base, spec.retriever, spec.corpus, smoke))
                                   if spec.retriever else None),
+        **({"exact_index_manifest_sha256": sha256_json(load_index_manifest(base, "exact", spec.corpus, smoke))}
+           if spec.kind == "scaleseek" else {}),
         "prompts": {slot: ref["sha256"] for slot, ref in spec.method.get("prompts", {}).items()},
         "official": official,
         "server_command": server.command(),
@@ -187,19 +190,25 @@ def eval_run(spec: RunSpec, smoke_n: int | None = None) -> dict:
     # The start is logged at once, so a session killed before `finally` still shows up
     # (as a start without an end) in sessions.jsonl.
     _log_session(spec, {"event": "start", **{k: v for k, v in session.items() if k != "t0"}})
+    exact = None
+    kind = method["method"]
     try:
         if spec.retriever in SERVED_BY_SERVICE:
             retr = RetrievalProcess(spec, smoke, gpus[0])
             retr.wait(base["runtime"]["retriever_start_timeout_s"])
+        if kind == "scaleseek":           # its `find` tool: the exact-search service (CPU)
+            exact = RetrievalProcess(spec, smoke, "", retriever="exact")
+            exact.wait(base["runtime"]["retriever_start_timeout_s"])
         server.start(base["runtime"]["server_start_timeout_s"])
-        kind = method["method"]
-        if kind in ("direct", "rag", "search_r1", "search_o1"):
+        if kind in ("direct", "rag", "search_r1", "search_o1", "scaleseek"):
             from transformers import AutoTokenizer
             from .methods import METHODS
             from .methods.base import run_examples
+            timeout = method["client"]["request_timeout_s"]
             ctx = SimpleNamespace(
                 spec=spec, prompts=prompts, llm=LLMClient(server, method["client"]),
-                retrieval=RetrievalClient(retr.url, method["client"]["request_timeout_s"]) if retr else None,
+                retrieval=RetrievalClient(retr.url, timeout) if retr else None,
+                exact=RetrievalClient(exact.url, timeout) if exact else None,
                 tokenizer=AutoTokenizer.from_pretrained(str(serve_path)),
                 title_rule=load_corpus_manifest(base, spec.corpus, smoke)["title_rule"])
             result = run_examples(METHODS[kind](ctx), examples, out_path, method["client"]["concurrency"])
@@ -215,8 +224,9 @@ def eval_run(spec: RunSpec, smoke_n: int | None = None) -> dict:
             result = {"official_output": str(off)}
     finally:
         server.stop()
-        if retr:
-            retr.stop()
+        for proc in (retr, exact):
+            if proc:
+                proc.stop()
         _log_session(spec, {"event": "end", "start": session["start"], "end": now_iso(),
                             "seconds": round(time.time() - session["t0"], 1)})
     done = {r["id"] for r in iter_jsonl(out_path)}

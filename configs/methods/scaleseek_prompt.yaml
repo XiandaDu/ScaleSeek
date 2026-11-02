@@ -1,0 +1,41 @@
+# =====================================================================================
+# ScaleSeek (Prompt) -- our agent (scaleseek/agent.py) on the untrained backbone: the
+# same prompt, tools, budgets and decoding as the RL-trained model, zero training.
+# Tools: `find` = exact phrase search (retrievers.exact, always on); `search` = the run's
+# dense retriever.  Predictions follow the shared rule (an <answer> that ends the
+# trajectory); the draft fallback is reported separately from the records' `answered`.
+# =====================================================================================
+method: scaleseek
+display_name: ScaleSeek (Prompt)
+
+generator:
+  model: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+
+server:
+  served_model_name: qwen3.5-9b
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.70          # a dense query encoder may share GPU 0
+  max_num_seqs: 64
+  seed: 0
+  reasoning_parser: null
+  tool_call_parser: null                # tool calls are parsed from the text (agent.parse_tool_calls)
+  enable_auto_tool_choice: false
+  language_model_only: true
+  trust_remote_code: false
+
+client:
+  concurrency: 64
+  request_timeout_s: 7200
+  max_retries: 5
+  retry_backoff_s: 15
+
+prompts:
+  system: {constant: scaleseek.agent.SYSTEM_PROMPT, sha256: 351f0f7fd2cf4fff4b1359d7f069b5e66ae0f57e30dc5823ac0353d72a2b1314}
+  tools: {constant: scaleseek.agent.TOOLS, sha256: cdf88172b409acdcd6894a114674ce5eb0206fab34b9b8cbf6ec2aecb184903b}
+  render_find: {constant: scaleseek.agent.render_find, sha256: 8b430dfbaba0f44d665bed62a11f4ecbaec572459105ceaa1a3687165f77e3c5}
+  render_search: {constant: scaleseek.agent.render_search, sha256: abd119689e18b8c820de328d95c40198f7ff948dd5eac34eb9c9c77ab8d122d7}
+
+retrieval:
+  retrievers: [e5, qwen3_emb_4b]
+  top_k: 5                              # = agent.FIND_TOP_K / SEARCH_TOP_K (the agent module rules)

@@ -33,7 +33,7 @@ You have two tools:
 
 Every tool call also takes current_answer: your best answer so far given everything you have read (a short answer), or "unknown". If you run out of tool calls, your last current_answer becomes your final answer.
 
-You can make at most 5 tool calls. As soon as you know the answer, reply with <answer>your answer</answer> instead of calling a tool.
+You can make at most 5 tool calls, one per turn. As soon as you know the answer, reply with <answer>your answer</answer> instead of calling a tool.
 
 The answer must be as short as possible: a single name, entity, number, date or phrase, with no explanation. Give a date at the precision the question asks for. Answer yes/no questions with yes or no."""
 
@@ -66,6 +66,31 @@ class ToolCallError(ValueError):
     """A malformed call; its message is shown to the agent as the tool response."""
 
 
+_CALL = re.compile(r"<tool_call>(.*?)</tool_call>|<tool_call>(.*?)$", re.DOTALL)
+_FUNC = re.compile(r"<function=(.*?)</function>|<function=(.*)$", re.DOTALL)
+_PARAM = re.compile(r"<parameter=(.*?)</parameter>|<parameter=(.*?)$", re.DOTALL)
+
+
+def parse_tool_calls(text: str) -> list[tuple[str, dict]]:
+    """Qwen3.5 XML tool calls -> [(name, {param: str})]: verl's qwen3_coder parser
+    (verl/experimental/agent_loop/tool_parser.py) for our all-string parameters, so
+    evaluation reads a turn exactly as training did."""
+    if "<tool_call>" not in text:
+        return []
+    out = []
+    for call in [a or b for a, b in _CALL.findall(text)]:
+        for fn in [a or b for a, b in _FUNC.findall(call)]:
+            name, _, params = fn.partition(">")
+            args = {}
+            for p in [a or b for a, b in _PARAM.findall(params)]:
+                key, _, value = p.partition(">")
+                value = value[1:] if value.startswith("\n") else value
+                value = value[:-1] if value.endswith("\n") else value
+                args[key] = None if value.lower() == "null" else value
+            out.append((name, args))
+    return out
+
+
 def find_query(args: dict) -> str:
     """The exact.py query string: quoted phrases, then hint words."""
     phrases = [str(args.get(k) or "").replace('"', " ").strip() for k in ("phrase", "phrase2")]
@@ -86,7 +111,8 @@ def _passages(hits: list[dict]) -> str:
     out = []
     for i, h in enumerate(hits, 1):
         title, _, body = h["contents"].partition("\n")
-        out.append(f"[{i}] {title.strip().strip('\"')}\n{body.strip()}")
+        title = title.strip().strip('"')
+        out.append(f"[{i}] {title}\n{body.strip()}")
     return "\n\n".join(out)
 
 

@@ -228,6 +228,7 @@ METHOD_SCHEMAS = {
                                          "reasoning_effort": OneOf("low", "medium", "high"),
                                          "request_timeout_s": float, "max_retries": int}},
                               retrieval=RETRIEVAL),
+    "scaleseek": _method_schema({"client": CLIENT, "prompts": MapOf(PROMPT_REF)}, retrieval=RETRIEVAL),
     "bcp_judge": _method_schema({"official_repo": OFFICIAL_REPO, "client": CLIENT,
                                  "decoding": {"temperature": float, "top_p": float,
                                               "max_new_tokens": int},
@@ -245,6 +246,7 @@ REQUIRED_PROMPTS = {
                   "begin_search_query", "end_search_query", "begin_search_result",
                   "end_search_result", "extract_between", "limit_message",
                   "repeat_message", "result_message", "step_line", "web_page_header"},
+    "scaleseek": {"system", "tools", "render_find", "render_search"},
     "bcp_judge": {"grader", "create_judge_prompt", "parse_judge_response"},
 }
 
