@@ -35,6 +35,7 @@ export VERL_DIR="$R/repos/grepseek/verl" SCALESEEK_REPO="$PWD"
 export PYTHONPATH="$PWD/train:$PWD:$VERL_DIR"
 export SCALESEEK_FIND_URL=http://127.0.0.1:8101 SCALESEEK_SEARCH_URL=http://127.0.0.1:8102
 export SCALESEEK_RL_MODEL="$MODEL" SCALESEEK_RL_DATA="$R/train_data/rl_v1" SCALESEEK_RL_OUT="$OUT"
-export TMPDIR="$SLURM_TMPDIR" TRITON_CACHE_DIR="$SLURM_TMPDIR/triton" RAY_TMPDIR="$SLURM_TMPDIR/ray" TENSORBOARD_DIR="$OUT/tensorboard"
+export TMPDIR="$SLURM_TMPDIR" RAY_TMPDIR="$SLURM_TMPDIR/ray" TENSORBOARD_DIR="$OUT/tensorboard"
+unset ROCR_VISIBLE_DEVICES               # Slurm sets it next to CUDA_VISIBLE_DEVICES; verl refuses both
 "$SLURM_TMPDIR/scaleseek_env/train/bin/python" -m verl.trainer.main_ppo \
     --config-path "$PWD/train/config" --config-name grpo "$@"

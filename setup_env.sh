@@ -67,6 +67,12 @@ _ss_common_env() {
   # FlashInfer's sampler JIT-compiles with nvcc, which the runtime does not ship.
   export VLLM_USE_FLASHINFER_SAMPLER=0
   export TOKENIZERS_PARALLELISM=false PYTHONNOUSERSITE=1
+  # Inside jobs, every cache goes to node-local disk: vLLM's torch.compile cache alone had
+  # put 363K files in ~/.cache (home allows 500K files) and stopped vLLM from starting.
+  if [ -n "${SLURM_TMPDIR:-}" ]; then
+    export XDG_CACHE_HOME="$SLURM_TMPDIR/cache" VLLM_CACHE_ROOT="$SLURM_TMPDIR/cache/vllm" \
+           TRITON_CACHE_DIR="$SLURM_TMPDIR/cache/triton" TORCHINDUCTOR_CACHE_DIR="$SLURM_TMPDIR/cache/inductor"
+  fi
   export PATH="$SCALESEEK_ROOT/tools/uv:$PATH"
 }
 
