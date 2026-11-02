@@ -6,7 +6,7 @@ calling, tool schemas rendered by the chat template) plus
   - the outcome fields the reward reads, in extra_fields:
       answer      the `answer` call's answer, or None
       draft       last informative current_answer (agent.draft)
-      valid       format gate: no malformed call, at most one call per turn, no turn cut
+      valid       format gate: no malformed call, at most MAX_PARALLEL_CALLS per turn, no turn cut
                   by the per-turn cap, and the trajectory ends in a non-empty `answer`
                   or out of budget (turns or context)
 """
@@ -35,15 +35,15 @@ class ScaleSeekAgentLoop(ToolAgentLoop):
         x["n_cut"] = x.get("n_cut", 0) + (len(agent_data.response_ids) >= agent.MAX_TURN_TOKENS)
         # (agent_data.tool_calls is only refreshed when the loop goes on to run tools)
         if state == AgentState.PROCESSING_TOOLS:
-            x["n_multi"] = x.get("n_multi", 0) + (len(agent_data.tool_calls) > 1)
+            x["n_multi"] = x.get("n_multi", 0) + (len(agent_data.tool_calls) > agent.MAX_PARALLEL_CALLS)
             if agent_data.tool_calls[0].name == agent.ANSWER_TOOL:
                 return AgentState.TERMINATED          # the answer call ends the episode; nothing runs
         return state
 
     async def _call_tool(self, tool_call, tools_kwargs, agent_data):
-        if tool_call.name not in self.tools:       # same message as evaluation (methods/scaleseek.py)
+        if err := agent.call_error(tool_call.name):     # same message as evaluation (methods/scaleseek.py)
             agent_data.extra_fields["n_invalid"] = agent_data.extra_fields.get("n_invalid", 0) + 1
-            return ToolResponse(text=f"Error: unknown tool {tool_call.name!r}"), 0.0, {}
+            return ToolResponse(text=f"Error: {err}"), 0.0, {}
         return await super()._call_tool(tool_call, tools_kwargs, agent_data)
 
     @rollout_trace_op

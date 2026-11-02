@@ -31,7 +31,7 @@ client:
   retry_backoff_s: 15
 
 prompts:
-  system: {constant: scaleseek.agent.SYSTEM_PROMPT, sha256: 67336aaa7b16c4137f936f1a3c3965bb22df5da0222db5893034bf76a8acbe68}
+  system: {constant: scaleseek.agent.SYSTEM_PROMPT, sha256: dc4edc97f03beba453a58c6b0056135d6e86c2bcded42c0fa554723895e4eca1}
   tools: {constant: scaleseek.agent.TOOLS, sha256: cdd5d5424ea2c0f6ab25ad0fbe4532c4a20208d00dafa4a1a07aa0d33cb0c748}
   render_find: {constant: scaleseek.agent.render_find, sha256: 8b430dfbaba0f44d665bed62a11f4ecbaec572459105ceaa1a3687165f77e3c5}
   render_search: {constant: scaleseek.agent.render_search, sha256: abd119689e18b8c820de328d95c40198f7ff948dd5eac34eb9c9c77ab8d122d7}

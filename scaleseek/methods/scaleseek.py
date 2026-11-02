@@ -30,28 +30,28 @@ class ScaleSeek(Method):
         self.implicit_system = one[: len(one) - (len(two) - len(one))]
         self.eos = tok.eos_token
 
-    def tool_turn(self, text: str) -> str:
-        """The tool message as verl appends it: Qwen3.5's template refuses a conversation
-        without a user message, so verl (utils/chat_template.py) renders it after a dummy
-        empty user turn and cuts that turn off again."""
+    def tool_turn(self, texts: list[str]) -> str:
+        """The turn's tool messages as verl appends them: Qwen3.5's template refuses a
+        conversation without a user message, so verl (utils/chat_template.py) renders them
+        after a dummy empty user turn and cuts that turn off again."""
         tok = self.ctx.tokenizer
         dummy = [{"role": "user", "content": [{"type": "text", "text": ""}]}]
-        full = tok.apply_chat_template(dummy + [{"role": "tool", "content": text}],
+        full = tok.apply_chat_template(dummy + [{"role": "tool", "content": t} for t in texts],
                                        add_generation_prompt=True, tokenize=False)
         pre = tok.apply_chat_template(dummy, add_generation_prompt=False, tokenize=False)
         return full[len(pre):][len(self.implicit_system):]
 
     def call(self, rec: dict, name: str, args: dict) -> str:
         try:
+            if err := agent.call_error(name):
+                raise agent.ToolCallError(err)
             if name == "find":
                 res = self.ctx.exact.find(agent.find_query(args), agent.FIND_TOP_K)
                 text = agent.render_find(args, res)
                 hits = res["hits"]
-            elif name == "search":
+            else:
                 hits = self.ctx.retrieval.search(agent.search_query(args), agent.SEARCH_TOP_K)
                 text = agent.render_search(args, hits)
-            else:
-                raise agent.ToolCallError(f"unknown tool {name!r}")
         except (agent.ToolCallError, RetrievalError) as exc:
             if "unreachable" in str(exc):
                 raise
@@ -83,17 +83,17 @@ class ScaleSeek(Method):
             if not parsed:
                 rec["finish_reason"] = "no_answer"
                 break
-            rec["errors"]["parse"] += len(parsed) > 1          # one call per turn
-            name, args = parsed[0]
-            if name == agent.ANSWER_TOOL:
+            if parsed[0][0] == agent.ANSWER_TOOL:
                 answer = agent.final_answer(out["text"])
                 rec["finish_reason"] = "answer" if answer is not None else "no_answer"
                 break
-            calls.append({"tool": name, **args})
+            batch = parsed[: agent.MAX_PARALLEL_CALLS]          # verl: max_parallel_calls
+            rec["errors"]["parse"] += len(parsed) > agent.MAX_PARALLEL_CALLS
+            calls += [{"tool": n, **a} for n, a in batch if agent.call_error(n) is None]
             if turn == turns - 1:
                 rec["finish_reason"] = "max_turns"
                 break
-            prompt += self.tool_turn(self.call(rec, name, args))
+            prompt += self.tool_turn([self.call(rec, n, a) for n, a in batch])
         rec["trajectory"].append({"type": "final_sequence", "text": prompt})
         rec["answered"] = answer is not None
         rec["prediction"] = answer if answer is not None else agent.draft(calls)

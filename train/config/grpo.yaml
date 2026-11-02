@@ -109,7 +109,7 @@ actor_rollout_ref:
       enable: true
       max_user_turns: 5
       max_assistant_turns: 6
-      max_parallel_calls: 1
+      max_parallel_calls: 2              # = agent.MAX_PARALLEL_CALLS
       format: qwen3_coder
       tool_config_path: ${oc.env:SCALESEEK_REPO}/train/config/tools.yaml
       interaction_config_path: null

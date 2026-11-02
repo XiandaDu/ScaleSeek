@@ -3,7 +3,8 @@
 Shared, byte for byte, by RL training (train/, verl) and evaluation (methods/scaleseek.py),
 so it imports only the standard library and scaleseek.metrics.
 
-Three tools (Qwen3.5 native tool calling), so every turn is exactly one call:
+Three tools (Qwen3.5 native tool calling); every turn is tool calls only, at most
+MAX_PARALLEL_CALLS of find/search, or a lone `answer`:
   find    exact phrase search (retrieval/exact.py): every hit contains the phrase verbatim,
           case/accents ignored; ranked, title matches first; zero-hit calls report the
           count of each phrase alone, so an empty AND still says which phrase is rare.
@@ -21,7 +22,8 @@ import re
 
 from .metrics import exact_match
 
-MAX_TOOL_CALLS = 5          # find/search calls; + 1 answering turn = 6 assistant turns (GrepSeek's budget)
+SEARCH_TURNS = 5            # turns with find/search calls; + 1 answering turn = 6 assistant turns (GrepSeek's budget)
+MAX_PARALLEL_CALLS = 2      # find/search calls run per turn (both sides of a comparison at once)
 MAX_TURN_TOKENS = 2048      # generation cap per assistant turn (thinking + call)
 CONTEXT_TOKENS = 16384      # prompt + whole trajectory (GrepSeek's budget)
 FIND_TOP_K = 5
@@ -30,14 +32,14 @@ UNKNOWN = "unknown"
 
 SYSTEM_PROMPT = """You answer questions by searching a Wikipedia corpus (December 2018 dump, about 21 million passages of about 100 words each).
 
-You have three tools; call exactly one per turn:
+You have three tools:
 - find: exact search. Every passage it returns contains your phrase word for word (case, accents and punctuation are ignored). Keep the phrase short, usually 1 to 4 words that you expect verbatim in the text, such as a name, a title or a date, never a question or a description. Passages whose title contains the phrase come first. With two phrases, both must appear; if no passage has both, you get the count for each phrase alone.
 - search: semantic search. Use it when you do not know the exact wording; it returns the passages closest in meaning to your query.
 - answer: give your final answer and stop.
 
 find and search also take current_answer: your best answer so far given everything you have read (a short answer), or "unknown". If you run out of searches, your last current_answer becomes your final answer.
 
-You can call find and search at most 5 times in total. As soon as you know the answer, call answer.
+Each turn, call find or search once, or twice at the same time when you need two independent lookups (for example both sides of a comparison); you have at most 5 such turns. As soon as you know the answer, call answer, alone in its turn.
 
 The answer must be as short as possible: a single name, entity, number, date or phrase, with no explanation. Give a date at the precision the question asks for. Answer yes/no questions with yes or no."""
 
@@ -75,6 +77,15 @@ def user_message(question: str) -> str:
 # ----------------------------------------------------------------------------- tool calls
 class ToolCallError(ValueError):
     """A malformed call; its message is shown to the agent as the tool response."""
+
+
+def call_error(name: str) -> str | None:
+    """Why a call in a find/search turn cannot run (None: it can)."""
+    if name == ANSWER_TOOL:
+        return "answer must be called alone in its turn"
+    if name not in ("find", "search"):
+        return f"unknown tool {name!r}"
+    return None
 
 
 _CALL = re.compile(r"<tool_call>(.*?)</tool_call>|<tool_call>(.*?)$", re.DOTALL)
