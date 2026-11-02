@@ -67,7 +67,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     s = sub.add_parser("matrix", help="list the runs of one dataset (one per line)")
     s.add_argument("--dataset", required=True)
 
-    for name in ("index-bm25", "check-retrievers"):
+    for name in ("index-bm25", "index-exact", "check-retrievers"):
         s = sub.add_parser(name)
         s.add_argument("--corpus", required=True)
         s.add_argument("--smoke", action="store_true")
@@ -212,6 +212,9 @@ def main(argv=None) -> int:
         elif a.cmd == "index-bm25":
             from scaleseek.retrieval import bm25
             bm25.build(base, a.corpus, a.smoke)
+        elif a.cmd == "index-exact":
+            from scaleseek.retrieval import exact
+            exact.build(base, a.corpus, a.smoke)
         elif a.cmd == "encode":
             from scaleseek.retrieval import dense
             dense.encode_shard(base, a.retriever, a.corpus, a.shard[0], a.shard[1], a.smoke, a.device)

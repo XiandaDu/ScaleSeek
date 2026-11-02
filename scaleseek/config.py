@@ -172,6 +172,7 @@ CORPUS_SCHEMAS = {
 
 RETRIEVER_SCHEMAS = {
     "bm25": {"kind": str, "k1": float, "b": float, "index_threads": int},
+    "exact": {"kind": str, "k1": float, "b": float, "index_threads": int, "rerank_pool": int},
     "dense": {"kind": str, "model": str, "revision": SHA1_HEX, "query_prefix": TEXT,
               "doc_prefix": TEXT, "pooling": OneOf("mean", "last_token"),
               "normalize": bool, "query_max_length": int, "doc_max_length": int,

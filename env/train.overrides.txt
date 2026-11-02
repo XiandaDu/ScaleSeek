@@ -1,0 +1,5 @@
+# The Qwen3.5 transformers build needs these newer than vLLM 0.17 declares
+# (TRAINING_ENV.md step 6 force-installs them with --no-deps).
+huggingface_hub==1.8.0
+tokenizers==0.22.2
+safetensors==0.7.0

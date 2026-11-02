@@ -32,6 +32,9 @@ def make_searcher(base: dict, retriever: str, corpus: str, smoke: bool, device: 
     if kind == "dense":
         from .dense import DenseSearcher
         return DenseSearcher(base, retriever, corpus, smoke, device)
+    if kind == "exact":
+        from .exact import ExactSearcher
+        return ExactSearcher(base, corpus, smoke)
     raise PipelineError(f"{retriever} ({kind}) is not served by this service")
 
 
@@ -80,14 +83,17 @@ def serve(base: dict, retriever: str, corpus: str, smoke: bool, port: int, devic
             self._send(200 if self.path == "/health" else 404, health)
 
         def do_POST(self):
-            if self.path != "/search":
+            if self.path not in ("/search", "/find"):
                 return self._send(404, {"error": "unknown path"})
             try:
                 req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 t0 = time.time()
-                hits = searcher.search(req["query"], int(req["top_k"]))
-                out = [{"id": d, "score": s, "contents": show(store.get(d)["contents"])} for d, s in hits]
-                self._send(200, {"hits": out, "elapsed_s": time.time() - t0})
+                if self.path == "/find":       # exact search: also counts (exact.py)
+                    res = searcher.find(req["query"], int(req["top_k"]), store)
+                else:
+                    res = {"hits": searcher.search(req["query"], int(req["top_k"]))}
+                res["hits"] = [{"id": d, "score": s, "contents": show(store.get(d)["contents"])} for d, s in res["hits"]]
+                self._send(200, res | {"elapsed_s": time.time() - t0})
             except Exception as exc:  # reported to the caller as a TOOL error, never hidden
                 self._send(500, {"error": f"{type(exc).__name__}: {exc}"})
 
@@ -122,3 +128,14 @@ class RetrievalClient:
         if r.status_code != 200:
             raise RetrievalError(r.json().get("error", r.text[:300]))
         return r.json()["hits"]
+
+    def find(self, query: str, top_k: int) -> dict:
+        """Exact search (exact.py): {"hits", "count", "phrase_counts"}."""
+        try:
+            r = self.session.post(self.url + "/find", json={"query": query, "top_k": top_k},
+                                  timeout=self.timeout_s)
+        except requests.RequestException as exc:
+            raise RetrievalError(f"retrieval service unreachable: {exc}") from exc
+        if r.status_code != 200:
+            raise RetrievalError(r.json().get("error", r.text[:300]))
+        return r.json()

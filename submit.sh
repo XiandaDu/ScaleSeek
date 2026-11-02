@@ -5,6 +5,7 @@
 #
 #   bash submit.sh prepare
 #   bash submit.sh index-bm25   --corpus wiki18
+#   bash submit.sh index-exact  --corpus wiki18          # the new agent's find tool
 #   bash submit.sh encode       --retriever e5 --corpus wiki18 --shards 8
 #   bash submit.sh build-hnsw   --retriever e5 --corpus wiki18 --shards 8
 #   bash submit.sh encode-agentir   --corpus wiki18 --shards 32
@@ -73,6 +74,9 @@ case "$STAGE" in
   index-bm25)
     submit "bm25_$(arg corpus)" slurm/job.sh --cpus-per-task=32 --mem=128G --time=24:00:00 \
       --export=ALL,SCALESEEK_JAVA_HEAP=96g -- index-bm25 "${ARGS[@]}" ;;
+  index-exact)
+    submit "exact_$(arg corpus)" slurm/job.sh --cpus-per-task=32 --mem=128G --time=24:00:00 \
+      --export=ALL,SCALESEEK_JAVA_HEAP=96g -- index-exact "${ARGS[@]}" ;;
   encode|encode-agentir)
     N="$(arg shards)"; [ -n "$N" ] || { echo "--shards N required"; exit 2; }
     TASKS="$(arg tasks)"; TASKS="${TASKS:-0-$((N-1))}"     # --tasks 13,15,22: re-run only those
