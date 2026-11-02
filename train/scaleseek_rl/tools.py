@@ -54,3 +54,11 @@ class SearchTool(_ServiceTool):
 
     def _run(self, args: dict) -> str:
         return agent.render_search(args, self._post("/search", agent.search_query(args), agent.SEARCH_TOP_K)["hits"])
+
+
+class AnswerTool(BaseTool):
+    """Registered only so the chat template shows its schema: the agent loop ends the
+    episode on an `answer` call before any tool runs."""
+
+    def __init__(self, config: dict, tool_schema: OpenAIFunctionToolSchema | None):
+        super().__init__(config, OpenAIFunctionToolSchema.model_validate(_SCHEMAS[agent.ANSWER_TOOL]))

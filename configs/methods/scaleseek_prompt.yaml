@@ -2,8 +2,8 @@
 # ScaleSeek (Prompt) -- our agent (scaleseek/agent.py) on the untrained backbone: the
 # same prompt, tools, budgets and decoding as the RL-trained model, zero training.
 # Tools: `find` = exact phrase search (retrievers.exact, always on); `search` = the run's
-# dense retriever.  Predictions follow the shared rule (an <answer> that ends the
-# trajectory); the draft fallback is reported separately from the records' `answered`.
+# dense retriever; `answer` ends the episode.  Predictions follow the shared rule (an
+# `answer` call ends the trajectory); the draft fallback is reported separately (records' `answered`).
 # =====================================================================================
 method: scaleseek
 display_name: ScaleSeek (Prompt)
@@ -31,8 +31,8 @@ client:
   retry_backoff_s: 15
 
 prompts:
-  system: {constant: scaleseek.agent.SYSTEM_PROMPT, sha256: 351f0f7fd2cf4fff4b1359d7f069b5e66ae0f57e30dc5823ac0353d72a2b1314}
-  tools: {constant: scaleseek.agent.TOOLS, sha256: cdf88172b409acdcd6894a114674ce5eb0206fab34b9b8cbf6ec2aecb184903b}
+  system: {constant: scaleseek.agent.SYSTEM_PROMPT, sha256: 67336aaa7b16c4137f936f1a3c3965bb22df5da0222db5893034bf76a8acbe68}
+  tools: {constant: scaleseek.agent.TOOLS, sha256: cdd5d5424ea2c0f6ab25ad0fbe4532c4a20208d00dafa4a1a07aa0d33cb0c748}
   render_find: {constant: scaleseek.agent.render_find, sha256: 8b430dfbaba0f44d665bed62a11f4ecbaec572459105ceaa1a3687165f77e3c5}
   render_search: {constant: scaleseek.agent.render_search, sha256: abd119689e18b8c820de328d95c40198f7ff948dd5eac34eb9c9c77ab8d122d7}
 

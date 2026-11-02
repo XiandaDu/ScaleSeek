@@ -2,12 +2,13 @@
 calling, tool schemas rendered by the chat template) plus
 
   - a generation cap of agent.MAX_TURN_TOKENS per assistant turn;
+  - an `answer` call ends the episode (nothing is executed);
   - the outcome fields the reward reads, in extra_fields:
-      answer      <answer> of the last turn, or None
+      answer      the `answer` call's answer, or None
       draft       last informative current_answer (agent.draft)
       valid       format gate: no malformed call, at most one call per turn, no turn cut
-                  by the per-turn cap, and the trajectory ends in an <answer> or out of
-                  budget (turns or context)
+                  by the per-turn cap, and the trajectory ends in a non-empty `answer`
+                  or out of budget (turns or context)
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ class ScaleSeekAgentLoop(ToolAgentLoop):
         # (agent_data.tool_calls is only refreshed when the loop goes on to run tools)
         if state == AgentState.PROCESSING_TOOLS:
             x["n_multi"] = x.get("n_multi", 0) + (len(agent_data.tool_calls) > 1)
+            if agent_data.tool_calls[0].name == agent.ANSWER_TOOL:
+                return AgentState.TERMINATED          # the answer call ends the episode; nothing runs
         return state
 
     async def _call_tool(self, tool_call, tools_kwargs, agent_data):
@@ -49,10 +52,12 @@ class ScaleSeekAgentLoop(ToolAgentLoop):
         x = out.extra_fields
         calls = x.get("calls", [])
         last = x.get("last_text", "")
-        answer = agent.extract_answer(last)
-        # out of budget: the last turn was a call (turn cap, or no room left for its
-        # response) or it was cut by the context limit
-        by_budget = answer is None and ("<tool_call>" in last or len(out.response_ids) >= self.response_length)
+        parsed = agent.parse_tool_calls(last)
+        answer = agent.final_answer(last)
+        # out of budget: the last turn was a find/search call (turn cap, or no room left
+        # for its response) or it was cut by the context limit
+        by_budget = ((bool(parsed) and parsed[0][0] != agent.ANSWER_TOOL)
+                     or len(out.response_ids) >= self.response_length)
         x.update(answer=answer, draft=agent.draft(calls), n_calls=len(calls),
                  n_find=sum(c["tool"] == "find" for c in calls), n_search=sum(c["tool"] == "search" for c in calls),
                  valid=(x.get("n_invalid", 0) == 0 and x.get("n_multi", 0) == 0 and x.get("n_cut", 0) == 0

@@ -8,9 +8,10 @@ template's implicit system prefix, as verl strips it); the first call of a turn 
 most profile.max_assistant_turns turns, so the last turn's call is never run (verl:
 max_user_turns = turns - 1).  Decoding is the shared profile.
 
-`find` goes to the exact-search service, `search` to the run's dense retriever.  The
-prediction is the final <answer>, else the last informative current_answer (agent.draft);
-`answered` in the record says which.
+`find` goes to the exact-search service, `search` to the run's dense retriever, `answer`
+ends the episode.  The prediction is the `answer` call, else the last informative
+current_answer (agent.draft); `answered` in the record says which (only an `answer` call
+is scored under the shared rule, metrics.final_answer).
 """
 
 from __future__ import annotations
@@ -80,11 +81,14 @@ class ScaleSeek(Method):
             prompt += self.eos
             parsed = agent.parse_tool_calls(out["text"])
             if not parsed:
-                answer = agent.extract_answer(out["text"])
-                rec["finish_reason"] = "answer" if answer is not None else "no_answer"
+                rec["finish_reason"] = "no_answer"
                 break
             rec["errors"]["parse"] += len(parsed) > 1          # one call per turn
             name, args = parsed[0]
+            if name == agent.ANSWER_TOOL:
+                answer = agent.final_answer(out["text"])
+                rec["finish_reason"] = "answer" if answer is not None else "no_answer"
+                break
             calls.append({"tool": name, **args})
             if turn == turns - 1:
                 rec["finish_reason"] = "max_turns"

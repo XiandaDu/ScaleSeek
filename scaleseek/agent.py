@@ -3,13 +3,16 @@
 Shared, byte for byte, by RL training (train/, verl) and evaluation (methods/scaleseek.py),
 so it imports only the standard library and scaleseek.metrics.
 
-Two tools over the same Wikipedia corpus (Qwen3.5 native tool calling):
+Three tools (Qwen3.5 native tool calling), so every turn is exactly one call:
   find    exact phrase search (retrieval/exact.py): every hit contains the phrase verbatim,
           case/accents ignored; ranked, title matches first; zero-hit calls report the
           count of each phrase alone, so an empty AND still says which phrase is rare.
   search  dense semantic search (e5 / Qwen3-Embedding-4B).
-Every tool call carries `current_answer`; if the budget runs out before an <answer>, the
-last non-"unknown" current_answer is the prediction (anytime answering).
+  answer  ends the episode with the final answer (never executed).  A tool, not an
+          <answer> tag: the untrained model reaches for a tool to answer, and under the
+          shared presence_penalty it could not close a tag it had just opened.
+find/search carry `current_answer`; if the budget runs out before `answer`, the last
+non-"unknown" current_answer is the prediction (anytime answering).
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import re
 
 from .metrics import exact_match
 
-MAX_TOOL_CALLS = 5          # + 1 answering turn = 6 assistant turns (GrepSeek's budget)
+MAX_TOOL_CALLS = 5          # find/search calls; + 1 answering turn = 6 assistant turns (GrepSeek's budget)
 MAX_TURN_TOKENS = 2048      # generation cap per assistant turn (thinking + call)
 CONTEXT_TOKENS = 16384      # prompt + whole trajectory (GrepSeek's budget)
 FIND_TOP_K = 5
@@ -27,13 +30,14 @@ UNKNOWN = "unknown"
 
 SYSTEM_PROMPT = """You answer questions by searching a Wikipedia corpus (December 2018 dump, about 21 million passages of about 100 words each).
 
-You have two tools:
-- find: exact search. Every passage it returns contains your phrase word for word (case, accents and punctuation are ignored). Use it for names, titles, dates and other distinctive wording. Passages whose title contains the phrase come first. With two phrases, both must appear; if no passage has both, you get the count for each phrase alone.
+You have three tools; call exactly one per turn:
+- find: exact search. Every passage it returns contains your phrase word for word (case, accents and punctuation are ignored). Keep the phrase short, usually 1 to 4 words that you expect verbatim in the text, such as a name, a title or a date, never a question or a description. Passages whose title contains the phrase come first. With two phrases, both must appear; if no passage has both, you get the count for each phrase alone.
 - search: semantic search. Use it when you do not know the exact wording; it returns the passages closest in meaning to your query.
+- answer: give your final answer and stop.
 
-Every tool call also takes current_answer: your best answer so far given everything you have read (a short answer), or "unknown". If you run out of tool calls, your last current_answer becomes your final answer.
+find and search also take current_answer: your best answer so far given everything you have read (a short answer), or "unknown". If you run out of searches, your last current_answer becomes your final answer.
 
-You can make at most 5 tool calls, one per turn. As soon as you know the answer, reply with <answer>your answer</answer> instead of calling a tool.
+You can call find and search at most 5 times in total. As soon as you know the answer, call answer.
 
 The answer must be as short as possible: a single name, entity, number, date or phrase, with no explanation. Give a date at the precision the question asks for. Answer yes/no questions with yes or no."""
 
@@ -42,7 +46,7 @@ TOOLS = [
         "name": "find",
         "description": "Exact phrase search over the corpus. Returns the number of passages containing the phrase(s) and the top 5, passages whose title contains the phrase first.",
         "parameters": {"type": "object", "properties": {
-            "phrase": {"type": "string", "description": "Words that must appear exactly, in this order."},
+            "phrase": {"type": "string", "description": "A short phrase (usually 1-4 words, e.g. a name or a title) that must appear exactly, in this order."},
             "phrase2": {"type": "string", "description": "Optional second phrase that must also appear in the same passage."},
             "hint": {"type": "string", "description": "Optional extra words that only rank the results."},
             "current_answer": {"type": "string", "description": 'Your best answer so far, or "unknown".'}},
@@ -54,7 +58,14 @@ TOOLS = [
             "query": {"type": "string", "description": "What you are looking for, in natural language."},
             "current_answer": {"type": "string", "description": 'Your best answer so far, or "unknown".'}},
             "required": ["query", "current_answer"]}}},
+    {"type": "function", "function": {
+        "name": "answer",
+        "description": "Give the final answer and stop.",
+        "parameters": {"type": "object", "properties": {
+            "answer": {"type": "string", "description": "The answer, as short as possible: a name, entity, number, date or yes/no."}},
+            "required": ["answer"]}}},
 ]
+ANSWER_TOOL = "answer"
 
 
 def user_message(question: str) -> str:
@@ -133,14 +144,12 @@ def render_search(args: dict, hits: list[dict]) -> str:
 
 
 # ----------------------------------------------------------------------------- answers
-_ANSWER = re.compile(r"<answer>(.*?)</answer>", re.DOTALL)
-
-
-def extract_answer(text: str) -> str | None:
-    """The last <answer> outside the thinking block."""
-    text = text.split("</think>")[-1]
-    found = _ANSWER.findall(text)
-    return found[-1].strip() if found else None
+def final_answer(turn_text: str) -> str | None:
+    """The answer of a turn whose (first) call is `answer`, else None."""
+    calls = parse_tool_calls(turn_text)
+    if calls and calls[0][0] == ANSWER_TOOL:
+        return str(calls[0][1].get("answer") or "").strip() or None
+    return None
 
 
 def draft(calls_args: list[dict]) -> str | None:

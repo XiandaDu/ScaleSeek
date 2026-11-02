@@ -9,3 +9,6 @@ tools:
     config:
       type: native
       url: ${oc.env:SCALESEEK_SEARCH_URL}
+  - class_name: scaleseek_rl.tools.AnswerTool
+    config:
+      type: native
