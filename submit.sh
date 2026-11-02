@@ -16,7 +16,7 @@
 #   bash submit.sh judge --dataset browsecomp_plus
 #   bash submit.sh score --dataset popqa
 #   bash submit.sh rl --name <run> [--model <hf dir>] [hydra overrides]   # GRPO of our agent
-#   ... --time 48:00:00 --dry-run --after <jobid>   (extra sbatch controls, any stage)
+#   ... --time 48:00:00 --dry-run --after <jobid> --after-any <jobid>   (extra sbatch controls, any stage)
 # =====================================================================================
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
@@ -25,12 +25,13 @@ ACCOUNT="${SCALESEEK_ACCOUNT:?set SCALESEEK_ACCOUNT in cluster.env}"
 GPU_TYPE="${SCALESEEK_GPU_TYPE:-a100}"
 STAGE="${1:?usage: bash submit.sh <stage> [args]}"; shift
 
-TIME=""; DRY=0; AFTER=""; ARGS=()
+TIME=""; DRY=0; AFTER=""; AFTER_ANY=""; ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --time) TIME="$2"; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --after) AFTER="$2"; shift 2 ;;
+    --after-any) AFTER_ANY="$2"; shift 2 ;;     # start when it ends in any state (RL resume after a time limit)
     *) ARGS+=("$1"); shift ;;
   esac
 done
@@ -64,6 +65,7 @@ submit() {  # submit <name> <script> <sbatch resource flags...> -- <run.py args.
   local cmd=(sbatch --chdir="$SNAP" --account="$ACCOUNT" --job-name="ss_$name" --output="$REPO/logs/%x-%j.out")
   [ -n "$TIME" ] && res+=(--time="$TIME")
   [ -n "$AFTER" ] && cmd+=(--dependency="afterok:${AFTER//,/:}")   # --after 1,2,3 = all of them
+  [ -n "$AFTER_ANY" ] && cmd+=(--dependency="afterany:${AFTER_ANY//,/:}")
   cmd+=("${res[@]}" "$script" "$@")
   echo "${cmd[*]}"
   [ $DRY -eq 1 ] || "${cmd[@]}"

@@ -20,6 +20,10 @@ source setup_env.sh                       # main env (retrieval services); job s
 R="$SCALESEEK_ROOT"; OUT="$R/train_runs/$NAME"; mkdir -p "$OUT"
 echo "job $SLURM_JOB_ID on $(hostname)  harness $(git rev-parse HEAD)  model $MODEL  $(date -Is)"
 
+# Warm the page cache with what the services read at random (the corpus for hit text and
+# find's title re-rank, the exact index): cold Lustre reads made a tool call take seconds.
+cat "$R/data/corpora/wiki18/corpus.jsonl" "$R/indexes/wiki18/exact/lucene/"* > /dev/null
+echo "page cache warmed $(date -Is)"
 export JAVA_TOOL_OPTIONS=-Xmx32g
 python run.py serve-retriever --retriever exact --corpus wiki18 --port 8101 --device cpu > "$OUT/find_service.$SLURM_JOB_ID.log" 2>&1 &
 CUDA_VISIBLE_DEVICES=0 python run.py serve-retriever --retriever e5 --corpus wiki18 --port 8102 --device cuda:0 \
