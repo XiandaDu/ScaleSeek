@@ -16,6 +16,7 @@
 #   bash submit.sh judge --dataset browsecomp_plus
 #   bash submit.sh score --dataset popqa
 #   bash submit.sh rl --name <run> [--model <hf dir>] [hydra overrides]   # GRPO of our agent
+#   bash submit.sh teacher --name <run> [--nq N --hotpotqa N --samples K]  # 27B trajectories for SFT
 #   ... --time 48:00:00 --dry-run --after <jobid> --after-any <jobid>   (extra sbatch controls, any stage)
 # =====================================================================================
 set -uo pipefail
@@ -126,5 +127,12 @@ case "$STAGE" in
     mkdir -p "${SCALESEEK_ROOT:-/scratch/$USER/scaleseek_v2}/train_runs"
     submit "rl_$N" train/rl.sbatch --gpus-per-node="$GPU_TYPE:4" --cpus-per-task=48 --mem=498G \
       -- "$N" "$M" "${PASS[@]}" ;;
-  *) echo "unknown stage $STAGE"; sed -n '2,18p' "$0"; exit 2 ;;
+  teacher)
+    # Qwen3.5-27B trajectories of our agent on train questions (train/teacher.sbatch), for SFT.
+    N="$(arg name)"; [ -n "$N" ] || { echo "--name required"; exit 2; }
+    PASS=(); for ((i=0; i<${#ARGS[@]}; i++)); do
+      case "${ARGS[$i]}" in --name) i=$((i+1)); continue ;; esac; PASS+=("${ARGS[$i]}"); done
+    submit "teacher_$N" train/teacher.sbatch --gpus-per-node="$GPU_TYPE:4" --cpus-per-task=48 --mem=320G \
+      -- "$N" "${PASS[@]}" ;;
+  *) echo "unknown stage $STAGE"; sed -n '2,19p' "$0"; exit 2 ;;
 esac
