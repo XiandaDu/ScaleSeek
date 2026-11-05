@@ -17,6 +17,7 @@
 #   bash submit.sh score --dataset popqa
 #   bash submit.sh rl --name <run> [--model <hf dir>] [hydra overrides]   # GRPO of our agent
 #   bash submit.sh teacher --name <run> [--nq N --hotpotqa N --samples K]  # 27B trajectories for SFT
+#   bash submit.sh sft --name <run> --data <dir> [--model <hf dir>] [hydra overrides]   # SFT warm start
 #   ... --time 48:00:00 --dry-run --after <jobid> --after-any <jobid>   (extra sbatch controls, any stage)
 # =====================================================================================
 set -uo pipefail
@@ -127,6 +128,14 @@ case "$STAGE" in
     mkdir -p "${SCALESEEK_ROOT:-/scratch/$USER/scaleseek_v2}/train_runs"
     submit "rl_$N" train/rl.sbatch --gpus-per-node="$GPU_TYPE:4" --cpus-per-task=48 --mem=498G \
       -- "$N" "$M" "${PASS[@]}" ;;
+  sft)
+    # SFT warm start (train/sft.sbatch); --model defaults to the pinned base Qwen3.5-9B.
+    N="$(arg name)"; D="$(arg data)"; [ -n "$N" ] && [ -n "$D" ] || { echo "--name and --data required"; exit 2; }
+    M="$(arg model)"; M="${M:-${SCALESEEK_ROOT:-/scratch/$USER/scaleseek_v2}/hf/hub/models--Qwen--Qwen3.5-9B/snapshots/c202236235762e1c871ad0ccb60c8ee5ba337b9a}"
+    PASS=(); for ((i=0; i<${#ARGS[@]}; i++)); do
+      case "${ARGS[$i]}" in --name|--model|--data) i=$((i+1)); continue ;; esac; PASS+=("${ARGS[$i]}"); done
+    submit "sft_$N" train/sft.sbatch --gpus-per-node="$GPU_TYPE:4" --cpus-per-task=48 --mem=498G \
+      -- "$N" "$M" "$D" "${PASS[@]}" ;;
   teacher)
     # Qwen3.5-27B trajectories of our agent on train questions (train/teacher.sbatch), for SFT.
     N="$(arg name)"; [ -n "$N" ] || { echo "--name required"; exit 2; }
@@ -134,5 +143,5 @@ case "$STAGE" in
       case "${ARGS[$i]}" in --name) i=$((i+1)); continue ;; esac; PASS+=("${ARGS[$i]}"); done
     submit "teacher_$N" train/teacher.sbatch --gpus-per-node="$GPU_TYPE:4" --cpus-per-task=48 --mem=320G \
       -- "$N" "${PASS[@]}" ;;
-  *) echo "unknown stage $STAGE"; sed -n '2,19p' "$0"; exit 2 ;;
+  *) echo "unknown stage $STAGE"; sed -n '2,20p' "$0"; exit 2 ;;
 esac

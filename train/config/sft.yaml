@@ -1,0 +1,63 @@
+# SFT warm start of the ScaleSeek agent on Qwen3.5-27B teacher trajectories (train/build_sft.py),
+# verl's FSDP SFT trainer.  GrepSeek's recipe (repos/grepseek/sft/run_sft.sh): lr 5e-6, weight
+# decay 0.01, 5% warmup, 1 epoch, global batch 32, 16K tokens, Ulysses SP 4 on 4 GPUs, full
+# offload.  What differs: the rows are our agent's trajectories, tokenized segment by segment
+# as verl's agent loop builds a rollout (train/scaleseek_rl/sft_dataset.py).
+#
+# Paths come from the environment (train/sft.sbatch sets them): VERL_DIR, SCALESEEK_REPO,
+# SCALESEEK_SFT_MODEL, SCALESEEK_SFT_DATA, SCALESEEK_SFT_OUT.
+
+hydra:
+  searchpath:
+    - file://${oc.env:VERL_DIR}/verl/trainer/config
+
+defaults:
+  - sft_trainer_engine
+  - _self_
+
+data:
+  train_files: ${oc.env:SCALESEEK_SFT_DATA}/train.parquet
+  val_files: null
+  custom_cls:
+    path: ${oc.env:SCALESEEK_REPO}/train/scaleseek_rl/sft_dataset.py
+    name: TrajectorySFTDataset
+  train_batch_size: 32
+  micro_batch_size_per_gpu: 1
+  max_token_len_per_gpu: 16384
+  use_dynamic_bsz: true
+  max_length: 16384
+  pad_mode: no_padding
+
+model:
+  path: ${oc.env:SCALESEEK_SFT_MODEL}
+  use_remove_padding: true
+  enable_gradient_checkpointing: true
+  enable_activation_offload: true
+
+engine:
+  strategy: fsdp
+  dtype: bfloat16
+  param_offload: true
+  optimizer_offload: true
+  ulysses_sequence_parallel_size: 4
+
+optim:
+  lr: 5e-6
+  weight_decay: 0.01
+  lr_warmup_steps_ratio: 0.05
+
+checkpoint:
+  save_contents: [model, optimizer, extra, hf_model]
+
+trainer:
+  project_name: scaleseek_sft
+  experiment_name: scaleseek_sft
+  total_epochs: 1
+  save_freq: 50
+  test_freq: -1
+  max_ckpt_to_keep: 1
+  logger: [console, tensorboard]
+  default_local_dir: ${oc.env:SCALESEEK_SFT_OUT}
+  nnodes: 1
+  n_gpus_per_node: 4
+  resume_mode: auto
