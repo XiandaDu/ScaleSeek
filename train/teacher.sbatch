@@ -1,7 +1,7 @@
 #!/bin/bash
 # =====================================================================================
 # Teacher trajectories (train/teacher_rollouts.py): Qwen3.5-27B, TP4, on one 4xA100 node.
-#     bash submit.sh teacher --name <run> [--nq N --hotpotqa N --samples K]
+#     bash submit.sh teacher --name <run> [--nq N --hotpotqa N --samples K --take N --model M --revision R --tp T]
 # Output: $SCALESEEK_ROOT/train_data/teacher/<run>; a resubmitted job resumes (records are
 # appended one by one).
 # =====================================================================================

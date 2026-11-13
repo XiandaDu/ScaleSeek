@@ -36,7 +36,7 @@ TEACHER = {"model": "Qwen/Qwen3.5-27B", "revision": "fc05daec18b0a78c049392ed2e7
 SEED = 20261105
 
 
-def questions(base: dict, n: dict[str, int], exclude: Path) -> list[dict]:
+def questions(base: dict, n: dict[str, int], exclude: Path, take: int | None = None) -> list[dict]:
     d = base["datasets"]["nq"]
     snap = snapshot_dir(base, d["hf_repo"], d["revision"], repo_type="dataset")
     held = {e["id"] for e in pq.read_table(exclude).column("extra_info").to_pylist()}
@@ -49,7 +49,7 @@ def questions(base: dict, n: dict[str, int], exclude: Path) -> list[dict]:
             qid, golds = f"{source}_{r['id']}", [g for g in r["golden_answers"] if str(g).strip()]
             if golds and qid not in held and r.get("metadata", {}).get("level") != "easy":
                 rows.append({"id": qid, "question": r["question"], "golden_answers": golds})
-        out += rng.sample(rows, k)
+        out += rng.sample(rows, k)[:take]                 # same rng draws for any take
     return out
 
 
@@ -60,23 +60,28 @@ def main() -> None:
     p.add_argument("--nq", type=int, default=2000)
     p.add_argument("--hotpotqa", type=int, default=4000)
     p.add_argument("--samples", type=int, default=2)
+    p.add_argument("--take", type=int, help="only the first N of each source's questions (a comparison subset)")
+    p.add_argument("--model", default=TEACHER["model"], help="another generator on the same questions")
+    p.add_argument("--revision", default=TEACHER["revision"])
+    p.add_argument("--tp", type=int, default=4)
     a = p.parse_args()
     base = load_base()
     spec = resolve_run(base, "scaleseek_prompt", "hotpotqa", "e5", "formal")
-    server_cfg = spec.method["server"] | {"served_model_name": "qwen3.5-27b", "tensor_parallel_size": 4,
+    generator = {"model": a.model, "revision": a.revision}
+    server_cfg = spec.method["server"] | {"served_model_name": "generator", "tensor_parallel_size": a.tp,
                                           "max_num_seqs": 128}
     client_cfg = spec.method["client"] | {"concurrency": 128}
-    spec = dataclasses.replace(spec, run_dir=a.out_dir, method=spec.method | {"generator": TEACHER,
+    spec = dataclasses.replace(spec, run_dir=a.out_dir, method=spec.method | {"generator": generator,
                                                                               "server": server_cfg})
     a.out_dir.mkdir(parents=True, exist_ok=True)
-    qs = questions(base, {"nq": a.nq, "hotpotqa": a.hotpotqa}, a.exclude)
+    qs = questions(base, {"nq": a.nq, "hotpotqa": a.hotpotqa}, a.exclude, a.take)
     examples = [{**q, "id": f"{q['id']}#{j}"} for q in qs for j in range(a.samples)]
     write_json(a.out_dir / "config.json", {
-        "created": now_iso(), "harness_commit": git_state(repo_root())["commit"], "teacher": TEACHER,
+        "created": now_iso(), "harness_commit": git_state(repo_root())["commit"], "teacher": generator, "take": a.take,
         "server": server_cfg, "profile": spec.profile, "retriever": "e5", "seed": SEED,
         "questions": {"nq": a.nq, "hotpotqa": a.hotpotqa}, "samples": a.samples, "exclude": str(a.exclude)})
 
-    path = local_snapshot(base, TEACHER["model"], TEACHER["revision"])
+    path = local_snapshot(base, a.model, a.revision)
     gpus = job_gpus()
     server = VLLMServer(path, server_cfg, spec.profile["max_model_len"], a.out_dir / "vllm.log", gpus)
     retr = RetrievalProcess(spec, False, gpus[0])

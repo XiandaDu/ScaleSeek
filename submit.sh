@@ -16,7 +16,7 @@
 #   bash submit.sh judge --dataset browsecomp_plus
 #   bash submit.sh score --dataset popqa
 #   bash submit.sh rl --name <run> [--model <hf dir>] [hydra overrides]   # GRPO of our agent
-#   bash submit.sh teacher --name <run> [--nq N --hotpotqa N --samples K]  # 27B trajectories for SFT
+#   bash submit.sh teacher --name <run> [--nq N --hotpotqa N --samples K --take N --model M --revision R --tp 1]  # 27B trajectories for SFT
 #   bash submit.sh sft --name <run> --data <dir> [--model <hf dir>] [hydra overrides]   # SFT warm start
 #   ... --time 48:00:00 --dry-run --after <jobid> --after-any <jobid>   (extra sbatch controls, any stage)
 # =====================================================================================
@@ -141,7 +141,8 @@ case "$STAGE" in
     N="$(arg name)"; [ -n "$N" ] || { echo "--name required"; exit 2; }
     PASS=(); for ((i=0; i<${#ARGS[@]}; i++)); do
       case "${ARGS[$i]}" in --name) i=$((i+1)); continue ;; esac; PASS+=("${ARGS[$i]}"); done
-    submit "teacher_$N" train/teacher.sbatch --gpus-per-node="$GPU_TYPE:4" --cpus-per-task=48 --mem=320G \
-      -- "$N" "${PASS[@]}" ;;
+    TP="$(arg tp)"; TP="${TP:-4}"            # --tp 1 for a 9B generator (--model/--revision)
+    submit "teacher_$N" train/teacher.sbatch --gpus-per-node="$GPU_TYPE:$TP" --cpus-per-task=$((12*TP)) \
+      --mem=$((64*TP + 64))G -- "$N" "${PASS[@]}" ;;
   *) echo "unknown stage $STAGE"; sed -n '2,20p' "$0"; exit 2 ;;
 esac
