@@ -23,6 +23,9 @@ Variants, each off in the baseline:
   relax      an empty result whose first pattern does match is retried without the last
              filter, then without any filter (1,000 of 1,914 empty calls were emptied by
              the AND filters).
+  soft       ranked instead of Boolean filters: when fewer than K lines match every filter,
+             the rest of the K lines are the passages of the first pattern that satisfy
+             the most filters (coordination-level ranking; a generalisation of relax).
   title      matches come title first instead of in file order: the article named by the
              first pattern ("X", "X (...)"), then titles containing it, then the rest
              (36% of the calls are cut by `head`).
@@ -40,7 +43,7 @@ import threading
 
 from inference import tools
 
-VARIANTS = {"budget", "countdown", "dedup", "fold", "relax", "title"}
+VARIANTS = {"budget", "countdown", "dedup", "fold", "relax", "soft", "title"}
 RESERVE = 1536         # tokens kept free for the answering turn
 LOW_ROOM = 4096        # less room than this after a tool response: ask for the answer
 COPY = {False: 2.3, True: 1.15}   # payload tokens per stdout token, with information_lines / with dedup
@@ -155,6 +158,11 @@ def empty(res: tools.ToolResult) -> bool:
     return not res.stdout.strip() and not res.timed_out and res.exit_code in (0, 1)
 
 
+def head_k(stage: str) -> int | None:
+    m = re.fullmatch(r"head(?: -n ?(\d+)| -(\d+))?", stage)
+    return int(m.group(1) or m.group(2) or 10) if m else None
+
+
 def search(run, cmd: str, v: set[str], notes: list[str]) -> tools.ToolResult:
     go = (lambda c: title_first(run, c)) if "title" in v else run
     st = stages(cmd)
@@ -163,15 +171,20 @@ def search(run, cmd: str, v: set[str], notes: list[str]) -> tools.ToolResult:
               "".join(c if ord(c) < 128 else json.dumps(c)[1:-1] for c in s) for s in st]
     res = go(" | ".join(st)) if "fold" in v else go(cmd)
     first = flags(st[0])
-    if not empty(res) or first is None:
+    if first is None or res.timed_out or res.exit_code not in (0, 1):
         return res
-    if "fold" in v and not first[1] & {"i", "--ignore-case"}:
+    if "soft" in v:
+        res = soften(run, st, res, v, notes)
+    if empty(res) and "fold" in v and not first[1] & {"i", "--ignore-case"}:
         st[0] = st[0].replace(first[0], first[0] + " -i", 1)
+        more: list[str] = []
         alt = go(" | ".join(st))
+        if "soft" in v:
+            alt = soften(run, st, alt, v, more)
         if not empty(alt):
-            notes.append("No match with this exact case; these are case-insensitive matches.")
+            notes += ["No match with this exact case; these are case-insensitive matches."] + more
             return alt
-    if "relax" in v:
+    if empty(res) and "relax" in v:
         filters = [i for i in range(1, len(st)) if flags(st[i])]
         for drop in dict.fromkeys((tuple(filters[-1:]), tuple(filters))):
             if drop:
@@ -181,6 +194,47 @@ def search(run, cmd: str, v: set[str], notes: list[str]) -> tools.ToolResult:
                                  + " | ".join(st[i] for i in drop))
                     return alt
     return res
+
+
+# ----------------------------------------------------------------------------- soft filters
+CANDIDATES = 2000      # lines of the first pattern (file order) that are scored
+
+
+def soften(run, st: list[str], res: tools.ToolResult, v: set[str], notes: list[str]) -> tools.ToolResult:
+    """Ranked instead of Boolean filters, for `rg -F "X" corpus.jsonl | rg -F "f1" | ... | head -n K`.
+    The lines matching every filter come first, as before.  When there are fewer than K of
+    them, the rest of the K lines are the passages matching X that satisfy the most filters
+    (with `title`: the article X first among equals; then file order)."""
+    k = head_k(st[-1])
+    tests = [line_test(s) for s in st[1:-1]]
+    if k is None or not tests or None in tests or flags(st[0])[2][-1:] != [tools.CORPUS_FILENAME_LOGICAL]:
+        return res
+    full = [ln for ln in res.stdout.split("\n") if ln]
+    if len(full) >= k:
+        return res
+    cand = run(f"{st[0]} | head -n {CANDIDATES}")
+    if cand.timed_out or cand.exit_code not in (0, 1):
+        return res
+    plan = title_plan(" | ".join(st)) if "title" in v else None
+    tiers = plan[2] if plan else []
+    seen = set(full)
+    rest = [ln for ln in dict.fromkeys(cand.stdout.split("\n")) if ln and ln not in seen]
+    rest.sort(key=lambda ln: [-sum(t(ln) for t in tests)] + [not p.match(ln) for p in tiers])
+    lines = (full + rest)[:k]
+    if len(lines) > len(full):
+        which = {0: "No line matches", 1: "Only the first line matches"}.get(len(full), f"Only the first {len(full)} lines match")
+        notes.append(f"{which} all the patterns; the {'others' if full else 'lines shown'} match fewer of them, best first.")
+        res.stdout = "\n".join(lines) + "\n"
+    return res
+
+
+def line_test(stage: str):
+    """The filter `rg|grep -F [-i] [-w] "pattern"` as a predicate on a line; None for any other stage."""
+    f = flags(stage)
+    if f is None or f[1] - {"F", "i", "w"} or "F" not in f[1] or len(f[2]) != 1:
+        return None
+    rx = re.compile((r"\b%s\b" if "w" in f[1] else "%s") % re.escape(f[2][0]), re.IGNORECASE if "i" in f[1] else 0)
+    return lambda line: bool(rx.search(line))
 
 
 # ----------------------------------------------------------------------------- title first
@@ -206,10 +260,9 @@ def title_plan(cmd: str):
     for i, s in enumerate(st[1:], 1):
         if flags(s):
             continue
-        m = re.fullmatch(r"head(?: -n ?(\d+)| -(\d+))?", s)
-        if not m or i != len(st) - 1:
+        k = head_k(s)
+        if k is None or i != len(st) - 1:
             return None
-        k = int(m.group(1) or m.group(2) or 10)
     x = "".join("\\" + c if c in _META else c for c in first[2][0])
     b = r"\b" if "w" in first[1] else ""
     regexes = [_LINE + x + r" ?[\\(]", _LINE + _TEXT + b + x + b]
