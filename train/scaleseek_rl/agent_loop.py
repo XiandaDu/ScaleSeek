@@ -3,6 +3,8 @@ calling, tool schemas rendered by the chat template) plus
 
   - a generation cap of agent.MAX_TURN_TOKENS per assistant turn;
   - an `answer` call ends the episode (nothing is executed);
+  - the protocol variants of config scaleseek.variants (agent.VARIANTS; "budget" only so far:
+    the turn's last tool response ends with agent.budget_note, as in evaluation);
   - the outcome fields the reward reads, in extra_fields:
       answer      the `answer` call's answer, or None
       draft       last informative current_answer (agent.draft)
@@ -26,6 +28,11 @@ from scaleseek import agent
 @register("scaleseek_agent")
 class ScaleSeekAgentLoop(ToolAgentLoop):
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.variants = set(self.config.scaleseek.variants)
+        assert self.variants <= {"budget"}, f"not implemented in training: {self.variants - {'budget'}}"
+
     async def process_vision_info(self, messages: list[dict]) -> dict:
         return {}       # text only (Qwen3.5 ships an image processor; GrepSeek skips it the same way)
 
@@ -46,8 +53,14 @@ class ScaleSeekAgentLoop(ToolAgentLoop):
     async def _call_tool(self, tool_call, tools_kwargs, agent_data):
         if err := agent.call_error(tool_call.name):     # same message as evaluation (methods/scaleseek.py)
             agent_data.extra_fields["n_invalid"] = agent_data.extra_fields.get("n_invalid", 0) + 1
-            return ToolResponse(text=f"Error: {err}"), 0.0, {}
-        return await super()._call_tool(tool_call, tools_kwargs, agent_data)
+            response, reward, res = ToolResponse(text=f"Error: {err}"), 0.0, {}
+        else:
+            response, reward, res = await super()._call_tool(tool_call, tools_kwargs, agent_data)
+        if "budget" in self.variants and tool_call is agent_data.tool_calls[: self.max_parallel_calls][-1]:
+            # assistant_turns counts this turn: search turns left = turns - 1 (answering) - this one
+            note = agent.budget_note(self.max_assistant_turns - 1 - agent_data.assistant_turns)
+            response = ToolResponse(text=(response.text or "") + note)
+        return response, reward, res
 
     @rollout_trace_op
     async def run(self, sampling_params: dict[str, Any], **kwargs: Any) -> AgentLoopOutput:

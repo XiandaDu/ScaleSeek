@@ -30,6 +30,8 @@ client:
   max_retries: 5
   retry_backoff_s: 15
 
+variants: []                            # protocol variants (scaleseek/agent.py VARIANTS): none = v1
+
 prompts:
   system: {constant: scaleseek.agent.SYSTEM_PROMPT, sha256: dc4edc97f03beba453a58c6b0056135d6e86c2bcded42c0fa554723895e4eca1}
   tools: {constant: scaleseek.agent.TOOLS, sha256: cdd5d5424ea2c0f6ab25ad0fbe4532c4a20208d00dafa4a1a07aa0d33cb0c748}

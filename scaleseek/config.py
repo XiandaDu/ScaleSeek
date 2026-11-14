@@ -18,6 +18,7 @@ from typing import Any
 
 import yaml
 
+from . import agent
 from .utils import PipelineError, canonical_json, repo_root, sha256_json, sha256_text
 
 
@@ -228,7 +229,8 @@ METHOD_SCHEMAS = {
                                          "reasoning_effort": OneOf("low", "medium", "high"),
                                          "request_timeout_s": float, "max_retries": int}},
                               retrieval=RETRIEVAL),
-    "scaleseek": _method_schema({"client": CLIENT, "prompts": MapOf(PROMPT_REF)}, retrieval=RETRIEVAL),
+    "scaleseek": _method_schema({"client": CLIENT, "prompts": MapOf(PROMPT_REF),
+                                 "variants": ListOf(OneOf(*sorted(agent.VARIANTS)))}, retrieval=RETRIEVAL),
     "bcp_judge": _method_schema({"official_repo": OFFICIAL_REPO, "client": CLIENT,
                                  "decoding": {"temperature": float, "top_p": float,
                                               "max_new_tokens": int},
