@@ -13,6 +13,7 @@
 #   bash submit.sh check-retrievers --corpus wiki18
 #   bash submit.sh eval  --method rag --dataset popqa --retriever bm25
 #   bash submit.sh eval-all --dataset popqa          # the 15 runs of one dataset
+#   bash submit.sh grepseek-pilot --name <run> [--variants budget,dedup] [--cap 2048]   # GrepSeek+ on validation questions
 #   bash submit.sh judge --dataset browsecomp_plus
 #   bash submit.sh score --dataset popqa
 #   bash submit.sh rl --name <run> [--model <hf dir>] [hydra overrides]   # GRPO of our agent
@@ -113,6 +114,10 @@ case "$STAGE" in
       if [ "$R" = "-" ]; then bash "$0" eval --method "$M" --dataset "$D" ${TIME:+--time $TIME} $([ $DRY -eq 1 ] && echo --dry-run)
       else bash "$0" eval --method "$M" --dataset "$D" --retriever "$R" ${TIME:+--time $TIME} $([ $DRY -eq 1 ] && echo --dry-run); fi
     done < <(matrix) ;;
+  grepseek-pilot)
+    # GrepSeek+ variants on validation questions (scaleseek/grepseek_pilot.py); resources = a GrepSeek eval.
+    submit "gpilot_$(arg name)" slurm/job.sh --gpus-per-node="$GPU_TYPE:1" --cpus-per-task=12 --mem=128G \
+      --time=08:00:00 -- grepseek-pilot "${ARGS[@]}" ;;
   judge)
     TP="$(yaml_tp bcp_judge)"
     submit "judge_$(arg dataset)" slurm/job.sh --gpus-per-node="$GPU_TYPE:$TP" --cpus-per-task=$((12*TP)) \
@@ -144,5 +149,5 @@ case "$STAGE" in
     TP="$(arg tp)"; TP="${TP:-4}"            # --tp 1 for a 9B generator (--model/--revision)
     submit "teacher_$N" train/teacher.sbatch --gpus-per-node="$GPU_TYPE:$TP" --cpus-per-task=$((12*TP)) \
       --mem=$((64*TP + 64))G -- "$N" "${PASS[@]}" ;;
-  *) echo "unknown stage $STAGE"; sed -n '2,20p' "$0"; exit 2 ;;
+  *) echo "unknown stage $STAGE"; sed -n '2,21p' "$0"; exit 2 ;;
 esac

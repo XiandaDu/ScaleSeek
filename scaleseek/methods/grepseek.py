@@ -45,7 +45,9 @@ def harness_command(spec, server: VLLMServer, model_path: Path, input_file: Path
                     corpus: Path, out_dir: Path) -> list[str]:
     h = spec.method["harness"]
     settings = {"presence_penalty": spec.profile["presence_penalty"],
-                "request_timeout_s": h["request_timeout_s"], "max_retries": h["max_retries"]}
+                "request_timeout_s": h["request_timeout_s"], "max_retries": h["max_retries"],
+                "variants": h.get("variants", []),          # GrepSeek+ only (grepseek_plus.py)
+                "context": spec.profile["max_model_len"]}
     return [sys.executable, str(repo_root() / "scaleseek" / "grepseek_entry.py"),
             json.dumps(settings), "--",
             "--base_url", server.base_url + "/v1",

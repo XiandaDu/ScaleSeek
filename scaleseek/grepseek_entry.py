@@ -9,6 +9,9 @@ OpenAI client the same settings as every other method's client (docs/deviations.
     has no flag for it, and vLLM cannot default it server-side);
   * the client's per-request timeout and retries are `request_timeout_s` / `max_retries`
     (the SDK default 600 s / 2 cut long BCP turns short).
+
+With settings["variants"] (GrepSeek+, never the GrepSeek baseline) it also installs the
+harness-side fixes of scaleseek/grepseek_plus.py.
 """
 
 from __future__ import annotations
@@ -37,6 +40,10 @@ def main() -> None:
         kw.update(timeout=settings["request_timeout_s"], max_retries=settings["max_retries"])
         return with_presence_penalty(real_openai(*args, **kw), settings["presence_penalty"])
 
+    if settings["variants"]:
+        sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
+        import grepseek_plus
+        make_client = grepseek_plus.install(official, make_client, settings)
     official.OpenAI = make_client
     sys.argv = ["inference/run.py"] + sys.argv[3:]
     official.main()
