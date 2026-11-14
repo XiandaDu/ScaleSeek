@@ -7,6 +7,9 @@ Same tokenizer and chat template as Qwen3.5-9B, so a trajectory's text is the st
 format as is.  train/build_sft.py keeps the correct, well-formed ones.
 
     python train/teacher_rollouts.py <out_dir> --exclude <rl dev.parquet> --nq 2000 --hotpotqa 4000 --samples 2
+
+Also the protocol pilots: another generator (--model/--revision/--tp) on the first --take
+questions of each source, with --variants (agent.VARIANTS) switched on.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ import pyarrow.parquet as pq
 from transformers import AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scaleseek import agent
 from scaleseek.config import load_base, resolve_run
 from scaleseek.hub import local_snapshot, snapshot_dir
 from scaleseek.llm import LLMClient, VLLMServer
@@ -64,7 +68,10 @@ def main() -> None:
     p.add_argument("--model", default=TEACHER["model"], help="another generator on the same questions")
     p.add_argument("--revision", default=TEACHER["revision"])
     p.add_argument("--tp", type=int, default=4)
+    p.add_argument("--variants", default="", help="protocol variants under test, comma-separated (agent.VARIANTS)")
     a = p.parse_args()
+    variants = sorted(filter(None, a.variants.split(",")))
+    assert set(variants) <= agent.VARIANTS, variants
     base = load_base()
     spec = resolve_run(base, "scaleseek_prompt", "hotpotqa", "e5", "formal")
     generator = {"model": a.model, "revision": a.revision}
@@ -79,7 +86,8 @@ def main() -> None:
     write_json(a.out_dir / "config.json", {
         "created": now_iso(), "harness_commit": git_state(repo_root())["commit"], "teacher": generator, "take": a.take,
         "server": server_cfg, "profile": spec.profile, "retriever": "e5", "seed": SEED,
-        "questions": {"nq": a.nq, "hotpotqa": a.hotpotqa}, "samples": a.samples, "exclude": str(a.exclude)})
+        "questions": {"nq": a.nq, "hotpotqa": a.hotpotqa}, "samples": a.samples, "exclude": str(a.exclude),
+        "variants": variants})
 
     path = local_snapshot(base, a.model, a.revision)
     gpus = job_gpus()
@@ -93,7 +101,7 @@ def main() -> None:
         timeout = client_cfg["request_timeout_s"]
         ctx = SimpleNamespace(spec=spec, llm=LLMClient(server, client_cfg),
                               retrieval=RetrievalClient(retr.url, timeout),
-                              exact=RetrievalClient(exact.url, timeout),
+                              exact=RetrievalClient(exact.url, timeout), variants=variants,
                               tokenizer=AutoTokenizer.from_pretrained(str(path)))
         print(run_examples(ScaleSeek(ctx), examples, a.out_dir / "trajectories.jsonl", client_cfg["concurrency"]))
     finally:

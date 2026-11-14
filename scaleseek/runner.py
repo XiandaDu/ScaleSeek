@@ -209,6 +209,7 @@ def eval_run(spec: RunSpec, smoke_n: int | None = None) -> dict:
                 spec=spec, prompts=prompts, llm=LLMClient(server, method["client"]),
                 retrieval=RetrievalClient(retr.url, timeout) if retr else None,
                 exact=RetrievalClient(exact.url, timeout) if exact else None,
+                variants=(),                  # scaleseek: the v1 protocol
                 tokenizer=AutoTokenizer.from_pretrained(str(serve_path)),
                 title_rule=load_corpus_manifest(base, spec.corpus, smoke)["title_rule"])
             result = run_examples(METHODS[kind](ctx), examples, out_path, method["client"]["concurrency"])

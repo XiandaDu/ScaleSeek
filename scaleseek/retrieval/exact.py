@@ -123,21 +123,25 @@ class ExactSearcher:
             b.add(self._clause([t]), self.SHOULD)
         return b.build()
 
-    def find(self, query: str, k: int, store: DocStore) -> dict:
+    def find(self, query: str, k: int, store: DocStore, relax: bool = False) -> dict:
         """{"hits": [(id, score)], "count": passages containing every phrase,
             "phrase_counts": count of each phrase alone (in query order), only when
-            several phrases never co-occur}"""
+            several phrases never co-occur,
+            "relaxed_count": with `relax` and no exact match, passages containing every
+            word of the phrases in any order -- the hits are then those passages}"""
         phrases = [self.analyzer.analyze(fold(p)) for p in re.findall(r'"([^"]*)"', query)]
         hint = self.analyzer.analyze(fold(re.sub(r'"[^"]*"', " ", query)))
         if not phrases or not all(phrases):
             raise ValueError("every phrase needs at least one word or number")
         q = self._query(phrases, hint)
         count = self.searcher.count(q)
-        out = {"count": count, "phrase_counts": None}
+        out = {"count": count, "phrase_counts": None, "relaxed_count": None, "hits": []}
+        if count == 0 and len(phrases) > 1:
+            out["phrase_counts"] = [self.searcher.count(self._clause(p)) for p in phrases]
+        if count == 0 and relax:
+            q = self._query([[w] for w in dict.fromkeys(w for p in phrases for w in p)], hint)
+            count = out["relaxed_count"] = self.searcher.count(q)
         if count == 0:
-            if len(phrases) > 1:
-                out["phrase_counts"] = [self.searcher.count(self._clause(p)) for p in phrases]
-            out["hits"] = []
             return out
         top = self.searcher.search(q, max(k, self.pool)).scoreDocs
         hits = [(self.stored.document(sd.doc).get("id"), float(sd.score)) for sd in top]

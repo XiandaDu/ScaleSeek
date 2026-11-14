@@ -18,6 +18,7 @@ non-"unknown" current_answer is the prediction (anytime answering).
 
 from __future__ import annotations
 
+import json
 import re
 
 from .metrics import exact_match
@@ -152,6 +153,44 @@ def render_find(args: dict, res: dict) -> str:
 
 def render_search(args: dict, hits: list[dict]) -> str:
     return f"Top {len(hits)} passages for \"{str(args.get('query')).strip()}\":\n\n" + _passages(hits)
+
+
+# ----------------------------------------------------------------------------- protocol variants
+# Under test in zero-training pilots (train/teacher_rollouts.py --variants); none of them is
+# part of the v1 protocol above, whose prompts stay frozen.
+#   wide    TURN_PASSAGES passages per turn, split between the turn's calls (GrepSeek shows
+#           up to 2,048 tool-output tokens per turn; 10 passages are ~1,600)
+#   relax   a find with no exact match falls back to passages containing all its words
+#   budget  each tool turn ends with the number of search turns left; the last asks for answer
+VARIANTS = {"wide", "relax", "budget"}
+TURN_PASSAGES = 10
+
+
+def top_k(variants: set[str], n_calls: int) -> int:
+    return TURN_PASSAGES // n_calls if "wide" in variants else SEARCH_TOP_K
+
+
+def tools(variants: set[str]) -> list[dict]:
+    if "wide" not in variants:
+        return TOOLS
+    share = f"{TURN_PASSAGES} ({TURN_PASSAGES // 2} each when two calls share a turn)"
+    return json.loads(json.dumps(TOOLS).replace("the top 5", f"the top {share}")
+                      .replace("the 5 passages", f"the {share} passages"))
+
+
+def render_relaxed(args: dict, res: dict) -> str:
+    """render_find, plus the fallback hits when there was no exact match."""
+    text = render_find(args, res)
+    if res["count"] or not res["relaxed_count"]:
+        return text
+    return (f"{text} {res['relaxed_count']:,} passages contain all of its words in any order "
+            f"(showing {len(res['hits'])}, title matches first).\n\n" + _passages(res["hits"]))
+
+
+def budget_note(turns_left: int) -> str:
+    if turns_left:
+        return f"\n\n(You have {turns_left} search turn{'s' if turns_left > 1 else ''} left.)"
+    return "\n\n(You have used all your search turns. Call answer now with your best answer.)"
 
 
 # ----------------------------------------------------------------------------- answers
