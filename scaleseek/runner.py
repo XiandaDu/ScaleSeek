@@ -213,7 +213,7 @@ def eval_run(spec: RunSpec, smoke_n: int | None = None) -> dict:
                 tokenizer=AutoTokenizer.from_pretrained(str(serve_path)),
                 title_rule=load_corpus_manifest(base, spec.corpus, smoke)["title_rule"])
             result = run_examples(METHODS[kind](ctx), examples, out_path, method["client"]["concurrency"])
-        elif kind == "grepseek":
+        elif kind in ("grepseek", "grepseek_plus"):
             from .methods import grepseek
             pred = grepseek.run(spec, server, serve_path, examples, smoke)
             write_jsonl(out_path, grepseek.convert(spec, pred, examples))

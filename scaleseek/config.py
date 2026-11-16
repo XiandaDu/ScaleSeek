@@ -205,6 +205,10 @@ def _method_schema(extra: dict, server: dict = SERVER, retrieval: Any = None) ->
     return schema
 
 
+GREPSEEK_HARNESS = {"max_tokens_per_turn": int, "tool_max_tokens": PerProfile(int),
+                    "tool_timeout": float, "parallel": int, "engine_mode": OneOf("none"),
+                    "request_timeout_s": float, "max_retries": int}
+
 METHOD_SCHEMAS = {
     "direct": _method_schema({"client": CLIENT, "prompts": MapOf(PROMPT_REF)}),
     "rag": _method_schema({"client": CLIENT, "prompts": MapOf(PROMPT_REF)}, retrieval=RETRIEVAL),
@@ -213,12 +217,10 @@ METHOD_SCHEMAS = {
     "search_o1": _method_schema({"official_repo": OFFICIAL_REPO, "client": CLIENT,
                                  "prompts": MapOf(PROMPT_REF),
                                  "search_o1": {"max_doc_len": int}}, retrieval=RETRIEVAL),
-    "grepseek": _method_schema({"official_repo": OFFICIAL_REPO,
-                                "harness": {"max_tokens_per_turn": int,
-                                            "tool_max_tokens": PerProfile(int),
-                                            "tool_timeout": float, "parallel": int,
-                                            "engine_mode": OneOf("none"),
-                                            "request_timeout_s": float, "max_retries": int}}),
+    "grepseek": _method_schema({"official_repo": OFFICIAL_REPO, "harness": GREPSEEK_HARNESS}),
+    # GrepSeek+ (grepseek_plus.py): the same harness and checkpoint, harness-side variants on.
+    "grepseek_plus": _method_schema({"official_repo": OFFICIAL_REPO, "harness": GREPSEEK_HARNESS | {
+        "variants": ListOf(OneOf("budget", "countdown", "dedup", "fold", "relax", "soft", "title"), min_len=1)}}),
     "agentir": _method_schema({"official_repo": OFFICIAL_REPO,
                                "agent": {"scaffold": OneOf("oss_client"),
                                          "task_prefix": str, "reasoning_aware": bool,
