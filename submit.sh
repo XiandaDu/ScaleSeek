@@ -13,7 +13,7 @@
 #   bash submit.sh check-retrievers --corpus wiki18
 #   bash submit.sh eval  --method rag --dataset popqa --retriever bm25
 #   bash submit.sh eval-all --dataset popqa          # the 15 runs of one dataset
-#   bash submit.sh grepseek-pilot --name <run> [--variants budget,dedup] [--cap 2048]   # GrepSeek+ on validation questions
+#   bash submit.sh grepseek-pilot --name <run> [--variants budget,dedup] [--cap 2048] [--replay a,b --turns 1]   # GrepSeek+ on validation questions
 #   bash submit.sh judge --dataset browsecomp_plus
 #   bash submit.sh score --dataset popqa
 #   bash submit.sh rl --name <run> [--model <hf dir>] [hydra overrides]   # GRPO of our agent

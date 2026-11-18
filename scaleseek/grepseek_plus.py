@@ -32,6 +32,16 @@ Variants, each off in the baseline:
 
 Whatever a fallback did is said in the response's `notice` field; `command` stays as the
 model wrote it.
+
+Under test for the next method (not part of GrepSeek+; they also wrap inference.agent.
+_chat_completion):
+  verify     an answer whose string is in no tool output so far is not accepted at once:
+             the model is told so and asked to check it with one more search, once per
+             question and only while two turns are left (answers found in a tool output are
+             right 57% of the time, the others 24%).
+  settings["inject"]  a json file {question id: [messages]}: the example starts from these
+             messages (the tool calls and outputs of earlier rollouts, replayed without the
+             reasoning; grepseek_pilot.py builds them), e.g. to re-read pooled evidence.
 """
 
 from __future__ import annotations
@@ -43,12 +53,16 @@ import threading
 
 from inference import tools
 
-VARIANTS = {"budget", "countdown", "dedup", "fold", "relax", "soft", "title"}
+VARIANTS = {"budget", "countdown", "dedup", "fold", "relax", "soft", "title", "verify"}
 RESERVE = 1536         # tokens kept free for the answering turn
 LOW_ROOM = 4096        # less room than this after a tool response: ask for the answer
 COPY = {False: 2.3, True: 1.15}   # payload tokens per stdout token, with information_lines / with dedup
 
-CFG: dict = {}                 # {"variants": set, "context": int}, set by install()
+VERIFY = ('Your answer "%s" does not appear in any search result so far. Check it with one more search '
+          "(for example the answer together with a key term of the question), then give your final answer: "
+          "keep it if the search supports it, otherwise give the answer the evidence supports.")
+
+CFG: dict = {}                 # {"variants": set, "context": int, "inject": dict}, set by install()
 S = threading.local()          # per example (one worker thread runs one example at a time)
 
 
@@ -57,12 +71,14 @@ def install(official_run, client_factory, settings: dict):
     """Patch the official modules; returns the client factory to use."""
     import inference.agent as agent
 
-    CFG.update(variants=set(settings["variants"]), context=settings["context"])
+    CFG.update(variants=set(settings["variants"]), context=settings["context"],
+               inject=json.load(open(settings["inject"])) if settings.get("inject") else {})
     assert CFG["variants"] <= VARIANTS, CFG["variants"] - VARIANTS
     run_example = official_run.run_agent_on_example
 
     def run_agent_on_example(example, **kw):
-        S.turn, S.used, S.turns = 0, 0, kw["max_assistant_turns"]
+        S.turn, S.used, S.turns, S.verified = 0, 0, kw["max_assistant_turns"], False
+        S.inject = CFG["inject"].get(str(example["id"]))
         return run_example(example, **kw)
 
     def make_client(*args, **kw):
@@ -78,9 +94,53 @@ def install(official_run, client_factory, settings: dict):
         client.chat.completions.create = tracked
         return client
 
+    chat = agent._chat_completion
+
+    def _chat_completion(client, *, messages, **kw):
+        if S.turn == 0 and S.inject:
+            messages.extend(S.inject)
+        if S.turn >= S.turns:                   # a verification already took the last generation
+            return "", "stop", None
+        out = chat(client, messages=messages, **kw)
+        if "verify" in CFG["variants"] and out[0] and not S.verified and S.turn <= S.turns - 2:
+            answer = agent.parse_assistant(out[0]).answer
+            if answer is not None and not grounded(answer, messages):
+                S.verified = True
+                ask = {"command": "", "stdout": "", "stderr": "", "exit_code": 0, "timed_out": False,
+                       "truncated": False, "notice": VERIFY % answer}
+                messages += [{"role": "assistant", "content": out[0]},
+                             {"role": "tool", "content": json.dumps(ask, ensure_ascii=False)}]
+                out = chat(client, messages=messages, **kw)
+        return out
+
     official_run.run_agent_on_example = run_agent_on_example
     agent.run_tool = run_tool
+    if "verify" in CFG["variants"] or CFG["inject"]:
+        agent._chat_completion = _chat_completion
     return make_client
+
+
+def normalize(text: str) -> str:
+    """The usual answer normalisation (lower case, no punctuation, no articles)."""
+    text = re.sub(r"[^\w\s]", " ", text.lower())
+    return " ".join(w for w in text.split() if w not in ("a", "an", "the"))
+
+
+def grounded(answer: str, messages: list) -> bool:
+    """Is the answer string in some tool output of the transcript?  (yes/no and very short
+    answers cannot be checked this way and count as grounded.)"""
+    a = normalize(answer)
+    if len(a) < 3 or a in ("yes", "no"):
+        return True
+    text = []
+    for m in messages:
+        if m["role"] == "tool":
+            for line in json.loads(m["content"])["stdout"].split("\n"):
+                try:
+                    text.append(json.loads(line)["contents"])
+                except (ValueError, TypeError, KeyError):
+                    text.append(line)
+    return f" {a} " in f" {normalize(' '.join(text))} "
 
 
 class Response:
