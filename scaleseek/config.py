@@ -49,6 +49,13 @@ class OneOf:
         self.values = values
 
 
+class Opt:
+    """A key that may be left out."""
+
+    def __init__(self, inner: Any):
+        self.inner = inner
+
+
 class Pattern:
     def __init__(self, regex: str, what: str):
         self.regex, self.what = re.compile(regex), what
@@ -82,13 +89,14 @@ def _check(node: Any, value: Any, where: str) -> None:
         if not isinstance(value, dict):
             raise ConfigError(f"{where}: expected a mapping, got {type(value).__name__}")
         unknown = sorted(set(value) - set(node))
-        missing = sorted(set(node) - set(value))
+        missing = sorted(k for k in set(node) - set(value) if not isinstance(node[k], Opt))
         if unknown:
             raise ConfigError(f"{where}: unknown key(s) {unknown}; valid: {sorted(node)}")
         if missing:
             raise ConfigError(f"{where}: missing key(s) {missing} (there are no defaults)")
         for k, sub in node.items():
-            _check(sub, value[k], f"{where}.{k}")
+            if k in value:
+                _check(sub.inner if isinstance(sub, Opt) else sub, value[k], f"{where}.{k}")
         return
     if isinstance(node, MapOf):
         if not isinstance(value, dict) or not value:
@@ -207,7 +215,9 @@ def _method_schema(extra: dict, server: dict = SERVER, retrieval: Any = None) ->
 
 GREPSEEK_HARNESS = {"max_tokens_per_turn": int, "tool_max_tokens": PerProfile(int),
                     "tool_timeout": float, "parallel": int, "engine_mode": OneOf("none"),
-                    "request_timeout_s": float, "max_retries": int}
+                    "request_timeout_s": float, "max_retries": int,
+                    # grep BrowseComp-Plus as 700-word passages, as the GrepSeek paper does (corpus.py)
+                    "corpus": Opt(OneOf("passages"))}
 
 METHOD_SCHEMAS = {
     "direct": _method_schema({"client": CLIENT, "prompts": MapOf(PROMPT_REF)}),

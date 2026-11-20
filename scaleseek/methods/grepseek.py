@@ -31,9 +31,12 @@ def stage_corpus(spec, smoke: bool) -> Path:
     """The harness greps its corpus directory constantly: inside a job, read a node-local
     copy (same bytes) instead of Lustre."""
     src = corpus_dir(spec.base, spec.corpus, smoke) / "grepseek"
+    passages = src.with_name("grepseek_passages")       # harness.corpus: passages (wiki18 is passages already)
+    if spec.method["harness"].get("corpus") == "passages" and passages.exists():
+        src = passages
     if not os.environ.get("SLURM_TMPDIR"):
         return src
-    dst = Path(os.environ["SLURM_TMPDIR"]) / f"grepseek_{spec.corpus}{'_mini' if smoke else ''}"
+    dst = Path(os.environ["SLURM_TMPDIR"]) / f"{src.name}_{spec.corpus}{'_mini' if smoke else ''}"
     if not (dst / "wiki_corpus.jsonl").exists():
         dst.mkdir(parents=True, exist_ok=True)
         log(f"staging {src / 'wiki_corpus.jsonl'} -> {dst}")

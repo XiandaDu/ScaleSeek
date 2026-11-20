@@ -109,6 +109,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     s.add_argument("--retriever")
     s.add_argument("--smoke", action="store_true")
 
+    s = sub.add_parser("passages", help="a corpus as 700-word passages for grep (CPU job)")
+    s.add_argument("--corpus", required=True)
+
     s = sub.add_parser("grepseek-pilot", help="GrepSeek+ variants on validation questions (GPU job)")
     s.add_argument("--name", required=True)
     s.add_argument("--variants", default="", help="comma-separated (scaleseek/grepseek_plus.py)")
@@ -249,6 +252,9 @@ def main(argv=None) -> int:
             res = eval_run(spec, base["smoke"]["n_questions"] if a.smoke else None)
             print(json.dumps({k: v for k, v in res.items() if k != "missing"} | {"n_missing": len(res["missing"])}))
             return 0 if not res["missing"] else 3
+        elif a.cmd == "passages":
+            from scaleseek.corpus import write_passages
+            write_passages(base, a.corpus)
         elif a.cmd == "grepseek-pilot":
             from scaleseek.grepseek_pilot import pilot
             pilot(base, a.name, sorted(filter(None, a.variants.split(","))), a.cap, a.n,
