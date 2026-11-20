@@ -116,6 +116,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     s.add_argument("--n", type=int, default=500, help="validation questions per source")
     s.add_argument("--replay", default="", help="comma-separated pilot runs whose tool outputs every question starts from")
     s.add_argument("--turns", type=int, help="assistant turns (default: the profile's)")
+    s.add_argument("--model", help="another generator in the same harness (with --revision)")
+    s.add_argument("--revision")
 
     s = sub.add_parser("judge", help="BrowseComp-Plus judge over finished runs")
     s.add_argument("--dataset", required=True)
@@ -250,7 +252,8 @@ def main(argv=None) -> int:
         elif a.cmd == "grepseek-pilot":
             from scaleseek.grepseek_pilot import pilot
             pilot(base, a.name, sorted(filter(None, a.variants.split(","))), a.cap, a.n,
-                  list(filter(None, a.replay.split(","))), a.turns)
+                  list(filter(None, a.replay.split(","))), a.turns,
+                  {"model": a.model, "revision": a.revision} if a.model else None)
         elif a.cmd == "judge":
             from scaleseek.judge import judge_runs
             judge_runs(base, _bcp_run_dirs(base, a.dataset, a.runs, a.smoke), a.judge)

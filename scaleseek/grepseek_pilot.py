@@ -9,6 +9,8 @@ variants are chosen without touching a test question.
 Output: <root>/pilots/grepseek/<run>/trajectories.jsonl, in the unified record format.
 `--cap` is the harness's own per-turn generation cap (0 = none, as the baseline runs).
 
+`--model M --revision R`: another generator (e.g. the untrained Qwen3.5-9B) in the same harness.
+
 `--replay a,b --turns N`: a second stage.  Every question starts from the tool calls and
 outputs of the earlier pilot runs a, b (interleaved, repeated lines dropped, the model's
 reasoning left out) and has N turns from there; with N = 1 it can only answer, i.e. it
@@ -88,19 +90,21 @@ def replay(root: Path, runs: list[str], tokenizer) -> dict[str, list[dict]]:
     return out
 
 
-def pilot(base: dict, name: str, variants: list[str], cap: int, n: int, sources: list[str], turns: int | None) -> None:
+def pilot(base: dict, name: str, variants: list[str], cap: int, n: int, sources: list[str], turns: int | None,
+          generator: dict | None) -> None:
     spec = resolve_run(base, "grepseek", "hotpotqa", None, "formal")
     root = Path(base["paths"]["root"]) / "pilots" / "grepseek"
     out = root / name
     out.mkdir(parents=True, exist_ok=True)
-    g = spec.method["generator"]
+    g = generator or spec.method["generator"]          # e.g. the untrained backbone in the same harness
     path = local_snapshot(base, g["model"], g["revision"])
     harness = spec.method["harness"] | {"variants": variants, "max_tokens_per_turn": cap}
     if sources:
         write_json(out / "inject.json", replay(root, sources, AutoTokenizer.from_pretrained(str(path))))
         harness["inject"] = str(out / "inject.json")
     profile = spec.profile | ({"max_assistant_turns": turns} if turns else {})
-    spec = dataclasses.replace(spec, run_dir=out, profile=profile, method=spec.method | {"harness": harness})
+    spec = dataclasses.replace(spec, run_dir=out, profile=profile,
+                               method=spec.method | {"harness": harness, "generator": g})
     examples = questions(base, n)
     write_json(out / "config.json", {
         "created": now_iso(), "harness_commit": git_state(repo_root())["commit"], "variants": variants,

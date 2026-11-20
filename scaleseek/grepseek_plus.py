@@ -39,6 +39,9 @@ _chat_completion):
              the model is told so and asked to check it with one more search, once per
              question and only while two turns are left (answers found in a tool output are
              right 57% of the time, the others 24%).
+  form       every tool response ends with a one-line reminder of the answer format (one
+             short answer, no alternatives): 12% of GrepSeek+'s validation answers are wrong
+             only in form (they contain the gold answer or are contained in it).
   settings["inject"]  a json file {question id: [messages]}: the example starts from these
              messages (the tool calls and outputs of earlier rollouts, replayed without the
              reasoning; grepseek_pilot.py builds them), e.g. to re-read pooled evidence.
@@ -53,7 +56,7 @@ import threading
 
 from inference import tools
 
-VARIANTS = {"budget", "countdown", "dedup", "fold", "relax", "soft", "title", "verify"}
+VARIANTS = {"budget", "countdown", "dedup", "fold", "form", "relax", "soft", "title", "verify"}
 RESERVE = 1536         # tokens kept free for the answering turn
 LOW_ROOM = 4096        # less room than this after a tool response: ask for the answer
 COPY = {False: 2.3, True: 1.15}   # payload tokens per stdout token, with information_lines / with dedup
@@ -61,6 +64,9 @@ COPY = {False: 2.3, True: 1.15}   # payload tokens per stdout token, with inform
 VERIFY = ('Your answer "%s" does not appear in any search result so far. Check it with one more search '
           "(for example the answer together with a key term of the question), then give your final answer: "
           "keep it if the search supports it, otherwise give the answer the evidence supports.")
+
+FORM = ("Answer format: one short answer only, a single name, entity, number or date (the full date when the "
+        "question asks when); no alternatives, no explanation.")
 
 CFG: dict = {}                 # {"variants": set, "context": int, "inject": dict}, set by install()
 S = threading.local()          # per example (one worker thread runs one example at a time)
@@ -175,6 +181,8 @@ def run_tool(cmd: str, *, corpus_dir, timeout, max_tokens, tokenizer, engine=Non
     fields = {k: getattr(res, k) for k in ("command", "stdout", "stderr", "exit_code", "timed_out", "truncated")}
     if "dedup" not in v:
         fields["information_lines"] = res.information_lines
+    if "form" in v:
+        notes.append(FORM)
     if "budget" in v:
         left = S.turns - S.turn                 # assistant turns after this tool response
         used = S.used + len(tokenizer(json.dumps(fields, ensure_ascii=False), add_special_tokens=False)["input_ids"])
