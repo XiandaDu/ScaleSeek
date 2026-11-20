@@ -89,4 +89,10 @@
 | base_all_form | 未训练 Qwen3.5-9B | 上面五个 + form |
 | form | GrepSeek checkpoint | 五个 + form |
 
-**结果**：待填。
+**结果**：待填（作业 9965684–9965688，2026-11-20 13:30 开始运行）。
+
+**方向 C 已顺带完成准备并提交**（设置对齐，不是新方法）
+- `python run.py passages --corpus bcp`：把 BCP 的 100,195 篇文档切成 700 词一段、步长 630 词，共 **862,948 段**（论文是 864,837 段，差 0.2%；如果把文档开头的元数据也算进正文是 866,704 段，论文的数字在两者之间）。每行格式与 Wikipedia 语料相同（`"\"标题\"\n正文"`，ASCII 转义），这样标题分层和 Unicode 兜底在 BCP 上也能生效。
+- 新配置 `grepseek_passages.yaml`、`grepseek_plus_passages.yaml`（`harness.corpus: passages`），只用于 BCP。
+- 已提交：GrepSeek 官方 harness 和 GrepSeek+ 各跑一遍 BCP（作业 9966004、9966008，500 题），跑完后过 judge。预期 GrepSeek 的 BCP 分数会从 21.6 向论文的 26–34 靠近。
+- 顺带发现：GrepSeek+ 的 Unicode 兜底假设语料是 ASCII 转义的，而我们原来的 BCP 语料是 UTF-8，所以它在原来那次 BCP 运行里对非 ASCII 模式起了反作用。切段后的语料是 ASCII 转义的，没有这个问题。
