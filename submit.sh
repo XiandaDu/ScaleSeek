@@ -107,6 +107,7 @@ case "$STAGE" in
     M="$(arg method)"; TP="$(yaml_tp "$M")"; R="$(arg retriever)"
     # The flat AgentIR index and the qwen3 HNSW index each need ~220 GB of RAM.
     if [ "$M" = "agentir" ] || [ "$R" = "qwen3_emb_4b" ]; then MEM=498G; CPU=48; else MEM=$((64*TP + 64))G; CPU=$((12*TP)); fi
+    case "$M" in scaleseek*) [ "$R" = e5 ] && MEM=200G ;; esac    # + the exact index and the corpus for `find`
     submit "$(arg dataset)_${M}${R:+_$R}" slurm/job.sh --gpus-per-node="$GPU_TYPE:$TP" --cpus-per-task="$CPU" \
       --mem="$MEM" --time=72:00:00 -- eval "${ARGS[@]}" ;;
   eval-all)
@@ -150,7 +151,8 @@ case "$STAGE" in
     PASS=(); for ((i=0; i<${#ARGS[@]}; i++)); do
       case "${ARGS[$i]}" in --name) i=$((i+1)); continue ;; esac; PASS+=("${ARGS[$i]}"); done
     TP="$(arg tp)"; TP="${TP:-4}"            # --tp 1 for a 9B generator (--model/--revision)
+    # the e5 HNSW index (69 GB) + corpus + exact index must stay in RAM: 128 GB thrashed the page cache
     submit "teacher_$N" train/teacher.sbatch --gpus-per-node="$GPU_TYPE:$TP" --cpus-per-task=$((12*TP)) \
-      --mem=$((64*TP + 64))G -- "$N" "${PASS[@]}" ;;
+      --mem=$((64*TP + 136))G -- "$N" "${PASS[@]}" ;;
   *) echo "unknown stage $STAGE"; sed -n '2,22p' "$0"; exit 2 ;;
 esac
