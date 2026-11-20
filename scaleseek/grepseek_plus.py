@@ -42,6 +42,9 @@ _chat_completion):
   form       every tool response ends with a one-line reminder of the answer format (one
              short answer, no alternatives): 12% of GrepSeek+'s validation answers are wrong
              only in form (they contain the gold answer or are contained in it).
+  commit     the generation that follows an "answer now" notice must be an <answer> block
+             (constrained decoding of the text after the reasoning): no question ends
+             without an answer because the model kept searching.
   settings["inject"]  a json file {question id: [messages]}: the example starts from these
              messages (the tool calls and outputs of earlier rollouts, replayed without the
              reasoning; grepseek_pilot.py builds them), e.g. to re-read pooled evidence.
@@ -56,15 +59,17 @@ import threading
 
 from inference import tools
 
-VARIANTS = {"budget", "countdown", "dedup", "fold", "form", "relax", "soft", "title", "verify"}
+VARIANTS = {"budget", "commit", "countdown", "dedup", "fold", "form", "relax", "soft", "title", "verify"}
 RESERVE = 1536         # tokens kept free for the answering turn
 LOW_ROOM = 4096        # less room than this after a tool response: ask for the answer
+MAX_BYTES = 20_000_000   # of one command's output read into memory (2,048 tokens are ~8 KB)
 COPY = {False: 2.3, True: 1.15}   # payload tokens per stdout token, with information_lines / with dedup
 
 VERIFY = ('Your answer "%s" does not appear in any search result so far. Check it with one more search '
           "(for example the answer together with a key term of the question), then give your final answer: "
           "keep it if the search supports it, otherwise give the answer the evidence supports.")
 
+ANSWER = r"<answer>\n[^<\n]{1,200}\n</answer>"      # the harness's answer block (commit)
 FORM = ("Answer format: one short answer only, a single name, entity, number or date (the full date when the "
         "question asks when); no alternatives, no explanation.")
 
@@ -83,7 +88,7 @@ def install(official_run, client_factory, settings: dict):
     run_example = official_run.run_agent_on_example
 
     def run_agent_on_example(example, **kw):
-        S.turn, S.used, S.turns, S.verified = 0, 0, kw["max_assistant_turns"], False
+        S.turn, S.used, S.turns, S.verified, S.commit = 0, 0, kw["max_assistant_turns"], False, False
         S.inject = CFG["inject"].get(str(example["id"]))
         return run_example(example, **kw)
 
@@ -92,6 +97,8 @@ def install(official_run, client_factory, settings: dict):
         create = client.chat.completions.create
 
         def tracked(**request):
+            if S.commit and "commit" in CFG["variants"]:
+                request["extra_body"] = {"structured_outputs": {"regex": ANSWER}}
             resp = create(**request)
             S.turn += 1
             S.used = resp.usage.prompt_tokens + resp.usage.completion_tokens
@@ -164,8 +171,13 @@ def run_tool(cmd: str, *, corpus_dir, timeout, max_tokens, tokenizer, engine=Non
     v = CFG["variants"]
 
     def run(c: str) -> tools.ToolResult:        # untruncated: we cut once, at the end
-        return tools.run_tool(c, corpus_dir=corpus_dir, timeout=timeout, max_tokens=10 ** 9,
-                              tokenizer=tokenizer, engine=engine)
+        last = stages(c)[-1].split()[0]
+        open_end = last not in ("head", "tail", "wc")       # e.g. `rg -F "the" corpus.jsonl`: gigabytes
+        res = tools.run_tool(c + f" | head -c {MAX_BYTES}" if open_end else c, corpus_dir=corpus_dir, timeout=timeout,
+                             max_tokens=10 ** 9, tokenizer=tokenizer, engine=engine)
+        if open_end and last in ("rg", "grep") and res.exit_code == 0 and not res.stdout:
+            res.exit_code = 1                   # what rg/grep itself returns without a match
+        return res
 
     notes: list[str] = []
     res = search(run, cmd, v, notes)
@@ -186,10 +198,11 @@ def run_tool(cmd: str, *, corpus_dir, timeout, max_tokens, tokenizer, engine=Non
     if "budget" in v:
         left = S.turns - S.turn                 # assistant turns after this tool response
         used = S.used + len(tokenizer(json.dumps(fields, ensure_ascii=False), add_special_tokens=False)["input_ids"])
+        S.commit = left <= 1 or CFG["context"] - used < LOW_ROOM
         if left <= 1:
             notes.append("This was your last tool call. Give your final answer now in an <answer> block: "
                          "the best answer supported by what you have read.")
-        elif CFG["context"] - used < LOW_ROOM:
+        elif S.commit:
             notes.append("The context window is almost full. Give your final answer now in an <answer> block: "
                          "the best answer supported by what you have read.")
         elif "countdown" in v:

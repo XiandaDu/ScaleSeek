@@ -162,7 +162,11 @@ def render_search(args: dict, hits: list[dict]) -> str:
 #           up to 2,048 tool-output tokens per turn; 10 passages are ~1,600)
 #   relax   a find with no exact match falls back to passages containing all its words
 #   budget  each tool turn ends with the number of search turns left; the last asks for answer
-VARIANTS = {"wide", "relax", "budget"}
+#   commit  the last turn must answer: the model reasons freely, then the opening of the
+#           `answer` call is written for it (COMMIT) and it only fills in the answer
+VARIANTS = {"wide", "relax", "budget", "commit"}
+COMMIT = "</think>\n\n<tool_call>\n<function=answer>\n<parameter=answer>\n"
+COMMIT_TOKENS = 64
 TURN_PASSAGES = 10
 
 

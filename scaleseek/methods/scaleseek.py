@@ -65,6 +65,18 @@ class ScaleSeek(Method):
                                  | ({"relaxed": True} if name == "find" and res["relaxed_count"] else {}))
         return text
 
+    def commit(self, rec: dict, prompt: str) -> dict | None:
+        """The last turn under `commit`: free reasoning, then the forced opening of the answer call."""
+        think = self.generate(rec, prompt, cap=agent.MAX_TURN_TOKENS, stop=["</think>"])
+        if think is None:
+            return None
+        head = think["text"] + agent.COMMIT
+        out = self.generate(rec, prompt + head, cap=agent.COMMIT_TOKENS, stop=["</parameter>"])
+        if out is None:
+            return None
+        return out | {"text": head + out["text"].strip() + "\n</parameter>\n</function>\n</tool_call>",
+                      "finish_reason": "stop"}
+
     def run_example(self, ex: dict, rec: dict) -> None:
         messages = [{"role": "system", "content": agent.SYSTEM_PROMPT},
                     {"role": "user", "content": agent.user_message(ex["question"])}]
@@ -73,7 +85,8 @@ class ScaleSeek(Method):
         calls, answer = [], None
         turns = self.profile["max_assistant_turns"]
         for turn in range(turns):
-            out = self.generate(rec, prompt, cap=agent.MAX_TURN_TOKENS)
+            last = "commit" in self.variants and turn == turns - 1
+            out = self.commit(rec, prompt) if last else self.generate(rec, prompt, cap=agent.MAX_TURN_TOKENS)
             if out is None:
                 break                                        # context_exhausted (marked)
             rec["n_turns"] += 1
