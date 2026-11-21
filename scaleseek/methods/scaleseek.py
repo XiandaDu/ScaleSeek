@@ -112,7 +112,7 @@ class ScaleSeek(Method):
             k = agent.top_k(self.variants, len(batch))
             texts = [self.call(rec, n, a, k) for n, a in batch]
             if "budget" in self.variants:
-                texts[-1] += agent.budget_note(turns - 2 - turn)
+                texts[-1] += agent.budget_note(turns - 2 - turn, "guess" in self.variants)
             prompt += self.tool_turn(texts)
         rec["trajectory"].append({"type": "final_sequence", "text": prompt})
         rec["answered"] = answer is not None

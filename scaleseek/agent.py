@@ -164,7 +164,9 @@ def render_search(args: dict, hits: list[dict]) -> str:
 #   budget  each tool turn ends with the number of search turns left; the last asks for answer
 #   commit  the last turn must answer: the model reasons freely, then the opening of the
 #           `answer` call is written for it (COMMIT) and it only fills in the answer
-VARIANTS = {"wide", "relax", "budget", "commit"}
+#   guess   with commit: the last budget note asks for a best guess instead of "unknown"
+#           (10% of the forced answers on the test sets were "unknown")
+VARIANTS = {"wide", "relax", "budget", "commit", "guess"}
 COMMIT = "</think>\n\n<tool_call>\n<function=answer>\n<parameter=answer>\n"
 COMMIT_TOKENS = 64
 TURN_PASSAGES = 10
@@ -191,9 +193,12 @@ def render_relaxed(args: dict, res: dict) -> str:
             f"(showing {len(res['hits'])}, title matches first).\n\n" + _passages(res["hits"]))
 
 
-def budget_note(turns_left: int) -> str:
+def budget_note(turns_left: int, guess: bool = False) -> str:
     if turns_left:
         return f"\n\n(You have {turns_left} search turn{'s' if turns_left > 1 else ''} left.)"
+    if guess:
+        return ("\n\n(You have used all your search turns. Call answer now. If you are not sure, give your best "
+                'guess: a guess can be right, "unknown" never is.)')
     return "\n\n(You have used all your search turns. Call answer now with your best answer.)"
 
 
