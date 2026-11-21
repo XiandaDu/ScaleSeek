@@ -41,6 +41,10 @@ model:
 engine:
   strategy: fsdp
   dtype: bfloat16
+  model_dtype: bfloat16                 # as GrepSeek's RL config; fp32 weights + Adam states do not fit 4 x 40 GB
+  wrap_policy:
+    transformer_layer_cls_to_wrap: [Qwen3_5DecoderLayer]
+  fsdp_size: 4
   param_offload: true
   optimizer_offload: true
   ulysses_sequence_parallel_size: 1     # GrepSeek uses 4 on 80 GB cards; that ran out of memory on 40 GB (GatedDeltaNet backward)
