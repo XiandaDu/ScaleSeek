@@ -1,8 +1,9 @@
 # SFT warm start of the ScaleSeek agent on Qwen3.5-27B teacher trajectories (train/build_sft.py),
 # verl's FSDP SFT trainer.  GrepSeek's recipe (repos/grepseek/sft/run_sft.sh): lr 5e-6, weight
-# decay 0.01, 5% warmup, 1 epoch, global batch 32, 16K tokens, Ulysses SP 4 on 4 GPUs, full
-# offload.  What differs: the rows are our agent's trajectories, tokenized segment by segment
-# as verl's agent loop builds a rollout (train/scaleseek_rl/sft_dataset.py).
+# decay 0.01, 5% warmup, 1 epoch, global batch 32, 16K tokens, full offload; fused log-prob
+# kernels and no sequence parallel (40 GB cards), as in grpo.yaml.  What differs: the rows
+# are our agent's trajectories, tokenized segment by segment as verl's agent loop builds a
+# rollout (train/scaleseek_rl/sft_dataset.py).
 #
 # Paths come from the environment (train/sft.sbatch sets them): VERL_DIR, SCALESEEK_REPO,
 # SCALESEEK_SFT_MODEL, SCALESEEK_SFT_DATA, SCALESEEK_SFT_OUT.
@@ -33,13 +34,16 @@ model:
   use_remove_padding: true
   enable_gradient_checkpointing: true
   enable_activation_offload: true
+  use_fused_kernels: true               # log-probs without the full 248K-vocabulary logits (as in grpo.yaml)
+  fused_kernel_options:
+    impl_backend: torch
 
 engine:
   strategy: fsdp
   dtype: bfloat16
   param_offload: true
   optimizer_offload: true
-  ulysses_sequence_parallel_size: 4
+  ulysses_sequence_parallel_size: 1     # GrepSeek uses 4 on 80 GB cards; that ran out of memory on 40 GB (GatedDeltaNet backward)
 
 optim:
   lr: 5e-6
