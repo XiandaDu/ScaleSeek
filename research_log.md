@@ -241,4 +241,34 @@
 
 **实验配置**：`index-exact --corpus bcp`，然后 `eval --method scaleseek_v3_prompt --dataset browsecomp_plus --retriever e5`，再过 judge（Qwen3-32B，500 题）。参照：GrepSeek 21.6，GrepSeek+ 25.8，Search-o1 e5 11.6，RAG e5 9.2，AgentIR 31.0。
 
-**结果**：待填。
+**结果**（BCP 500 题，Qwen3-32B 判分）
+
+| | judge 准确率 | 给出答案 | 平均轮数 |
+|---|---:|---:|---:|
+| **ScaleSeek v3 (Prompt)** | **41.6**（208 题） | 498 | 14.2 |
+| AgentIR | 31.0（155 题） | 175 | 14.0 |
+| GrepSeek+ | 25.8 | 377 | 8.9 |
+| GrepSeek 我们的复现（整篇网页一行） | 21.6 | 306 | 7.6 |
+| Search-o1 + e5（同一个未训练的 9B） | 11.6 | 107 | 12.1 |
+| RAG + e5 | 9.2 | — | 1 |
+| GrepSeek 论文（切段语料、GPT-4.1 判分、830 题） | 34.22（Table 1）/ 26.02（Table 6） | | |
+
+- v3 对 AgentIR：赢 93 输 40，p = 5e-6；对 GrepSeek：赢 151 输 51，p = 1e-12；对 GrepSeek+：p = 3e-8。
+- **核查**：判对的 208 题里，185 题的答案与标准答案归一化后完全相同，9 题是包含关系，14 题是 judge 接受的改写；只按字符串完全匹配算是 37.2%。答 “unknown” 的 95 题全部判错。所以这个数字不是 judge 放水。
+- 在最后一轮之前作答的 144 题里 126 题对（87.5%）；被强制作答的 356 题里 82 题对（23%）。基线在 BCP 上大多数题根本没作答（Search-o1 只答了 107 题，AgentIR 175 题）。
+- 用时 4.4 小时（GrepSeek 17–18 小时，Search-o1 约 20 小时）。
+
+**含 BCP 的主指标**（论文 Table 1 的 8 个数据集宏平均；BCP 一列用 judge 准确率）
+
+| | F1 口径 | EM 口径 |
+|---|---:|---:|
+| GrepSeek 论文 | 52.26 | 43.47 |
+| GrepSeek 我们的复现 | 50.55 | 42.83 |
+| GrepSeek+ | 55.08 | 46.03 |
+| **v3（QA 取两遍平均）** | **56.51** | **48.16** |
+
+**结论**：v3 在论文主指标上也高于论文数值（F1 口径 +4.2，EM 口径 +4.7），并且 8 个数据集里 7 个高于论文（HotpotQA 除外）。
+
+**局限**：BCP 只跑了一遍（重复运行已提交）；判分模型和题目数与论文不同；BCP 上系统提示仍写的是 Wikipedia 语料和 5 轮检索；19% 的题答了 “unknown”。
+
+**下一步**：BCP 第二遍（作业已提交）；GrepSeek / GrepSeek+ 切段版 BCP 跑完后过 judge，得到论文设置下的 GrepSeek 基线。
