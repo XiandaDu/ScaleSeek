@@ -9,6 +9,8 @@ variants are chosen without touching a test question.
 Output: <root>/pilots/grepseek/<run>/trajectories.jsonl, in the unified record format.
 `--cap` is the harness's own per-turn generation cap (0 = none, as the baseline runs).
 
+`--presence-penalty 0`: the paper's decoding (no presence penalty), to measure what our shared 2.0 costs GrepSeek.
+
 `--model M --revision R`: another generator (e.g. the untrained Qwen3.5-9B) in the same harness.
 
 `--replay a,b --turns N`: a second stage.  Every question starts from the tool calls and
@@ -91,7 +93,7 @@ def replay(root: Path, runs: list[str], tokenizer) -> dict[str, list[dict]]:
 
 
 def pilot(base: dict, name: str, variants: list[str], cap: int, n: int, sources: list[str], turns: int | None,
-          generator: dict | None) -> None:
+          generator: dict | None, presence_penalty: float | None) -> None:
     spec = resolve_run(base, "grepseek", "hotpotqa", None, "formal")
     root = Path(base["paths"]["root"]) / "pilots" / "grepseek"
     out = root / name
@@ -103,6 +105,8 @@ def pilot(base: dict, name: str, variants: list[str], cap: int, n: int, sources:
         write_json(out / "inject.json", replay(root, sources, AutoTokenizer.from_pretrained(str(path))))
         harness["inject"] = str(out / "inject.json")
     profile = spec.profile | ({"max_assistant_turns": turns} if turns else {})
+    if presence_penalty is not None:                   # 0 = the GrepSeek paper's decoding (ours adds 2.0 for every method)
+        profile["presence_penalty"] = presence_penalty
     spec = dataclasses.replace(spec, run_dir=out, profile=profile,
                                method=spec.method | {"harness": harness, "generator": g})
     examples = questions(base, n)

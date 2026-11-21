@@ -120,6 +120,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     s.add_argument("--replay", default="", help="comma-separated pilot runs whose tool outputs every question starts from")
     s.add_argument("--turns", type=int, help="assistant turns (default: the profile's)")
     s.add_argument("--model", help="another generator in the same harness (with --revision)")
+    s.add_argument("--presence-penalty", type=float, help="override the profile's presence penalty (0 = the paper's decoding)")
     s.add_argument("--revision")
 
     s = sub.add_parser("judge", help="BrowseComp-Plus judge over finished runs")
@@ -259,7 +260,7 @@ def main(argv=None) -> int:
             from scaleseek.grepseek_pilot import pilot
             pilot(base, a.name, sorted(filter(None, a.variants.split(","))), a.cap, a.n,
                   list(filter(None, a.replay.split(","))), a.turns,
-                  {"model": a.model, "revision": a.revision} if a.model else None)
+                  {"model": a.model, "revision": a.revision} if a.model else None, a.presence_penalty)
         elif a.cmd == "judge":
             from scaleseek.judge import judge_runs
             judge_runs(base, _bcp_run_dirs(base, a.dataset, a.runs, a.smoke), a.judge)
