@@ -3,8 +3,10 @@ calling, tool schemas rendered by the chat template) plus
 
   - a generation cap of agent.MAX_TURN_TOKENS per assistant turn;
   - an `answer` call ends the episode (nothing is executed);
-  - the protocol variants of config scaleseek.variants (agent.VARIANTS; "budget" only so far:
-    the turn's last tool response ends with agent.budget_note, as in evaluation);
+  - the protocol variants of config scaleseek.variants, as in evaluation (methods/scaleseek.py):
+      budget   the turn's last tool response ends with agent.budget_note
+      commit   the last turn: free reasoning, then the harness writes the opening of the
+               `answer` call (agent.COMMIT, no loss) and the model fills in the answer
   - the outcome fields the reward reads, in extra_fields:
       answer      the `answer` call's answer, or None
       draft       last informative current_answer (agent.draft)
@@ -31,18 +33,28 @@ class ScaleSeekAgentLoop(ToolAgentLoop):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.variants = set(self.config.scaleseek.variants)
-        assert self.variants <= {"budget"}, f"not implemented in training: {self.variants - {'budget'}}"
+        assert self.variants <= {"budget", "commit"}, f"not implemented in training: {self.variants}"
+        self.commit_ids = self.tokenizer.encode(agent.COMMIT, add_special_tokens=False)     # starts with </think>
 
     async def process_vision_info(self, messages: list[dict]) -> dict:
         return {}       # text only (Qwen3.5 ships an image processor; GrepSeek skips it the same way)
 
     async def _handle_generating_state(self, agent_data: AgentData, sampling_params: dict[str, Any],
                                        ignore_termination: bool = False) -> AgentState:
-        state = await super()._handle_generating_state(
-            agent_data, {**sampling_params, "max_tokens": agent.MAX_TURN_TOKENS}, ignore_termination)
+        start, cap = len(agent_data.prompt_ids), agent.MAX_TURN_TOKENS
+        if "commit" in self.variants and agent_data.assistant_turns == self.max_assistant_turns - 1:
+            end = [self.commit_ids[0], self.tokenizer.eos_token_id]
+            think = await self.server_manager.generate(
+                request_id=agent_data.request_id, prompt_ids=agent_data.prompt_ids,
+                sampling_params={**sampling_params, "max_tokens": cap, "stop_token_ids": end})
+            ids = [t for t in think.token_ids if t not in end]
+            agent_data.prompt_ids += ids + self.commit_ids
+            agent_data.response_mask += [1] * len(ids) + [0] * len(self.commit_ids)
+            cap = agent.COMMIT_TOKENS + 16          # + the closing tags, which the harness writes in evaluation
+        state = await super()._handle_generating_state(agent_data, {**sampling_params, "max_tokens": cap}, ignore_termination)
         x = agent_data.extra_fields
-        x["last_text"] = self.tokenizer.decode(agent_data.response_ids, skip_special_tokens=False)
-        x["n_cut"] = x.get("n_cut", 0) + (len(agent_data.response_ids) >= agent.MAX_TURN_TOKENS)
+        x["last_text"] = self.tokenizer.decode(agent_data.prompt_ids[start:], skip_special_tokens=False)
+        x["n_cut"] = x.get("n_cut", 0) + (len(agent_data.response_ids) >= cap)
         # (agent_data.tool_calls is only refreshed when the loop goes on to run tools)
         if state == AgentState.PROCESSING_TOOLS:
             x["n_multi"] = x.get("n_multi", 0) + (len(agent_data.tool_calls) > agent.MAX_PARALLEL_CALLS)

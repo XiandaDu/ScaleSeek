@@ -53,7 +53,7 @@ trainer:
   seed: 42
   logger: [console, tensorboard]
 
-# The agent protocol (scaleseek/agent.py): variants switched on, e.g. scaleseek.variants=[budget]
+# The agent protocol (scaleseek/agent.py): variants switched on, e.g. scaleseek.variants=[budget,commit] (= v3)
 scaleseek:
   variants: []
 
