@@ -43,14 +43,18 @@ class ScaleSeekAgentLoop(ToolAgentLoop):
                                        ignore_termination: bool = False) -> AgentState:
         start, cap = len(agent_data.prompt_ids), agent.MAX_TURN_TOKENS
         if "commit" in self.variants and agent_data.assistant_turns == self.max_assistant_turns - 1:
+            fill = agent.COMMIT_TOKENS + 16         # + the closing tags, which the harness writes in evaluation
+            room = self.prompt_length + self.response_length - start - len(self.commit_ids) - fill
+            if room <= 0:
+                return AgentState.TERMINATED        # the context is full: the episode ends without an answer
             end = [self.commit_ids[0], self.tokenizer.eos_token_id]
             think = await self.server_manager.generate(
                 request_id=agent_data.request_id, prompt_ids=agent_data.prompt_ids,
-                sampling_params={**sampling_params, "max_tokens": cap, "stop_token_ids": end})
+                sampling_params={**sampling_params, "max_tokens": min(cap, room), "stop_token_ids": end})
             ids = [t for t in think.token_ids if t not in end]
             agent_data.prompt_ids += ids + self.commit_ids
             agent_data.response_mask += [1] * len(ids) + [0] * len(self.commit_ids)
-            cap = agent.COMMIT_TOKENS + 16          # + the closing tags, which the harness writes in evaluation
+            cap = fill
         state = await super()._handle_generating_state(agent_data, {**sampling_params, "max_tokens": cap}, ignore_termination)
         x = agent_data.extra_fields
         x["last_text"] = self.tokenizer.decode(agent_data.prompt_ids[start:], skip_special_tokens=False)
