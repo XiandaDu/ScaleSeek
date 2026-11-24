@@ -52,6 +52,12 @@ loop; the report states the share of window-full records per run.
   `<answer>…</answer>` **after** `</think>`. A thinking block that never closes yields no
   answer.
 * RAG passes the 3 passages whole, identical template for all retrievers.
+* 2026-10-21: the RAG prompt gained one sentence, "If the documents do not contain the answer,
+  answer from your own knowledge." (the v1 prompt had the same fallback). Without it the
+  reader answered "Not mentioned" whenever the top-3 missed the answer: 302 / 500 2Wiki and
+  211 / 500 MuSiQue questions with Qwen3-Emb, so RAG scored below Direct on 2Wiki and
+  Bamboogle (reports/other_methods_failures.md §4.3). All 24 RAG runs were re-run with it;
+  the earlier runs are kept under `archive/rag_no_fallback/`.
 
 ## Search-R1 (`scaleseek/methods/search_r1.py`, loop re-implemented)
 

@@ -188,6 +188,15 @@ retrievers:
     k1: 1.2
     b: 0.75
     index_threads: 32
+  # The new agent's `find` tool (scaleseek/retrieval/exact.py), not a baseline retriever:
+  # phrase search over a case/accent-folded copy of the corpus.  k1/b = Anserini/BRIGHT
+  # defaults; the top `rerank_pool` BM25 hits are re-ordered title-matches-first.
+  exact:
+    kind: exact
+    k1: 0.9
+    b: 0.4
+    index_threads: 32
+    rerank_pool: 50
   e5:
     kind: dense
     model: intfloat/e5-base-v2

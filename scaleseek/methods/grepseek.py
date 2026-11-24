@@ -31,9 +31,12 @@ def stage_corpus(spec, smoke: bool) -> Path:
     """The harness greps its corpus directory constantly: inside a job, read a node-local
     copy (same bytes) instead of Lustre."""
     src = corpus_dir(spec.base, spec.corpus, smoke) / "grepseek"
+    passages = src.with_name("grepseek_passages")       # harness.corpus: passages (wiki18 is passages already)
+    if spec.method["harness"].get("corpus") == "passages" and passages.exists():
+        src = passages
     if not os.environ.get("SLURM_TMPDIR"):
         return src
-    dst = Path(os.environ["SLURM_TMPDIR"]) / f"grepseek_{spec.corpus}{'_mini' if smoke else ''}"
+    dst = Path(os.environ["SLURM_TMPDIR"]) / f"{src.name}_{spec.corpus}{'_mini' if smoke else ''}"
     if not (dst / "wiki_corpus.jsonl").exists():
         dst.mkdir(parents=True, exist_ok=True)
         log(f"staging {src / 'wiki_corpus.jsonl'} -> {dst}")
@@ -45,7 +48,9 @@ def harness_command(spec, server: VLLMServer, model_path: Path, input_file: Path
                     corpus: Path, out_dir: Path) -> list[str]:
     h = spec.method["harness"]
     settings = {"presence_penalty": spec.profile["presence_penalty"],
-                "request_timeout_s": h["request_timeout_s"], "max_retries": h["max_retries"]}
+                "request_timeout_s": h["request_timeout_s"], "max_retries": h["max_retries"],
+                "variants": h.get("variants", []),          # GrepSeek+ only (grepseek_plus.py)
+                "context": spec.profile["max_model_len"]}
     return [sys.executable, str(repo_root() / "scaleseek" / "grepseek_entry.py"),
             json.dumps(settings), "--",
             "--base_url", server.base_url + "/v1",

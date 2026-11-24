@@ -168,6 +168,41 @@ def prepare_corpus(base: dict, name: str) -> dict:
     return manifest
 
 
+PASSAGE_WORDS, PASSAGE_STRIDE = 700, 630
+
+
+def write_passages(base: dict, name: str) -> dict:
+    """<corpus>/grepseek_passages/wiki_corpus.jsonl: every document as 700-word passages with
+    a 630-word stride, the way the GrepSeek paper greps BrowseComp-Plus (its Appendix A:
+    100,195 documents -> 864,837 passages); a whole page per line shows one grep call little
+    more than the start of one page.  Lines look like the Wikipedia corpus GrepSeek was
+    trained on: {"id": "<n>", "contents": "\"Title\"\ntext"}, ASCII-escaped."""
+    cdir = corpus_dir(base, name)
+    rule = base["corpora"][name]["title_rule"]
+    out = cdir / "grepseek_passages"
+    out.mkdir(exist_ok=True)
+    docs = n = 0
+    with open(cdir / "corpus.jsonl", encoding="utf-8") as src, open(out / "wiki_corpus.jsonl.part", "w") as dst:
+        for line in src:
+            title, body = split_title(json.loads(line)["contents"], rule)
+            head = f'"{title}"' if " " in title else title
+            words = body.split()
+            docs += 1
+            start = 0
+            while True:
+                dst.write(json.dumps({"id": str(n), "contents": head + "\n" + " ".join(words[start:start + PASSAGE_WORDS])}) + "\n")
+                n += 1
+                if start + PASSAGE_WORDS >= len(words):
+                    break
+                start += PASSAGE_STRIDE
+    os.replace(out / "wiki_corpus.jsonl.part", out / "wiki_corpus.jsonl")
+    manifest = {"corpus": name, "created": now_iso(), "documents": docs, "passages": n, "words": PASSAGE_WORDS,
+                "stride": PASSAGE_STRIDE, "sha256": sha256_file(out / "wiki_corpus.jsonl")}
+    write_json(out / "manifest.json", manifest)
+    log(f"passages ok: {name} documents={docs} passages={n}")
+    return manifest
+
+
 def load_corpus_manifest(base: dict, name: str, smoke: bool = False) -> dict:
     return read_json(corpus_dir(base, name, smoke) / "manifest.json")
 

@@ -5,21 +5,26 @@ import pytest
 from scaleseek import config as C
 
 
+BASELINES = {"direct", "rag", "search_r1_7b", "search_r1_14b", "search_o1", "grepseek", "agentir"}
+OURS = {"grepseek_plus", "grepseek_passages", "grepseek_plus_passages",            # GrepSeek+; BCP as passages
+        "scaleseek_prompt", "scaleseek_v2_prompt",                                 # ablations of the protocol
+        "scaleseek_v3_prompt", "scaleseek_v3_prompt_r2", "scaleseek_v3_sft", "scaleseek_v3_rl"}
+
+
 def test_all_configs_load():
     base = C.load_base()
     methods = C.load_all_methods(base)
-    assert set(methods) == {"direct", "rag", "search_r1_7b", "search_r1_14b", "search_o1",
-                            "grepseek", "agentir", "bcp_judge"}
+    assert set(methods) == BASELINES | OURS | {"bcp_judge"}
     text = (C.config_dir() / "base.yaml").read_text()
     assert "PIN_AT_DOWNLOAD" not in text
     for p in (C.config_dir() / "methods").glob("*.yaml"):
         assert "PIN_AT_DOWNLOAD" not in p.read_text()
 
 
-def test_matrix_has_15_runs_per_dataset():
+def test_baseline_matrix_has_15_runs_per_dataset():
     base = C.load_base()
     for d in base["datasets"]:
-        assert len(C.enumerate_runs(base, d)) == 15
+        assert sum(name in BASELINES for name, _ in C.enumerate_runs(base, d)) == 15
 
 
 def test_unknown_and_missing_keys_are_errors():
@@ -50,9 +55,10 @@ def test_decoding_profiles_match_baselines():
         assert base["retrievers"][r]["hnsw"] == {"M": 32, "ef_construction": 128, "ef_search": 128}
 
 
-def test_every_search_method_uses_top3():
+def test_every_baseline_search_method_uses_top3():
     base = C.load_base()
-    for name, m in C.load_all_methods(base).items():
+    for name in BASELINES:
+        m = C.load_method(name, base)
         if m["retrieval"]:
             assert m["retrieval"]["top_k"] == 3, name
 

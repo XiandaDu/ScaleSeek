@@ -18,6 +18,7 @@ from typing import Any
 
 import yaml
 
+from . import agent
 from .utils import PipelineError, canonical_json, repo_root, sha256_json, sha256_text
 
 
@@ -46,6 +47,13 @@ class MapOf:
 class OneOf:
     def __init__(self, *values: Any):
         self.values = values
+
+
+class Opt:
+    """A key that may be left out."""
+
+    def __init__(self, inner: Any):
+        self.inner = inner
 
 
 class Pattern:
@@ -81,13 +89,14 @@ def _check(node: Any, value: Any, where: str) -> None:
         if not isinstance(value, dict):
             raise ConfigError(f"{where}: expected a mapping, got {type(value).__name__}")
         unknown = sorted(set(value) - set(node))
-        missing = sorted(set(node) - set(value))
+        missing = sorted(k for k in set(node) - set(value) if not isinstance(node[k], Opt))
         if unknown:
             raise ConfigError(f"{where}: unknown key(s) {unknown}; valid: {sorted(node)}")
         if missing:
             raise ConfigError(f"{where}: missing key(s) {missing} (there are no defaults)")
         for k, sub in node.items():
-            _check(sub, value[k], f"{where}.{k}")
+            if k in value:
+                _check(sub.inner if isinstance(sub, Opt) else sub, value[k], f"{where}.{k}")
         return
     if isinstance(node, MapOf):
         if not isinstance(value, dict) or not value:
@@ -172,6 +181,7 @@ CORPUS_SCHEMAS = {
 
 RETRIEVER_SCHEMAS = {
     "bm25": {"kind": str, "k1": float, "b": float, "index_threads": int},
+    "exact": {"kind": str, "k1": float, "b": float, "index_threads": int, "rerank_pool": int},
     "dense": {"kind": str, "model": str, "revision": SHA1_HEX, "query_prefix": TEXT,
               "doc_prefix": TEXT, "pooling": OneOf("mean", "last_token"),
               "normalize": bool, "query_max_length": int, "doc_max_length": int,
@@ -203,6 +213,12 @@ def _method_schema(extra: dict, server: dict = SERVER, retrieval: Any = None) ->
     return schema
 
 
+GREPSEEK_HARNESS = {"max_tokens_per_turn": int, "tool_max_tokens": PerProfile(int),
+                    "tool_timeout": float, "parallel": int, "engine_mode": OneOf("none"),
+                    "request_timeout_s": float, "max_retries": int,
+                    # grep BrowseComp-Plus as 700-word passages, as the GrepSeek paper does (corpus.py)
+                    "corpus": Opt(OneOf("passages"))}
+
 METHOD_SCHEMAS = {
     "direct": _method_schema({"client": CLIENT, "prompts": MapOf(PROMPT_REF)}),
     "rag": _method_schema({"client": CLIENT, "prompts": MapOf(PROMPT_REF)}, retrieval=RETRIEVAL),
@@ -211,12 +227,10 @@ METHOD_SCHEMAS = {
     "search_o1": _method_schema({"official_repo": OFFICIAL_REPO, "client": CLIENT,
                                  "prompts": MapOf(PROMPT_REF),
                                  "search_o1": {"max_doc_len": int}}, retrieval=RETRIEVAL),
-    "grepseek": _method_schema({"official_repo": OFFICIAL_REPO,
-                                "harness": {"max_tokens_per_turn": int,
-                                            "tool_max_tokens": PerProfile(int),
-                                            "tool_timeout": float, "parallel": int,
-                                            "engine_mode": OneOf("none"),
-                                            "request_timeout_s": float, "max_retries": int}}),
+    "grepseek": _method_schema({"official_repo": OFFICIAL_REPO, "harness": GREPSEEK_HARNESS}),
+    # GrepSeek+ (grepseek_plus.py): the same harness and checkpoint, harness-side variants on.
+    "grepseek_plus": _method_schema({"official_repo": OFFICIAL_REPO, "harness": GREPSEEK_HARNESS | {
+        "variants": ListOf(OneOf("budget", "dedup", "fold", "relax", "title"), min_len=1)}}),
     "agentir": _method_schema({"official_repo": OFFICIAL_REPO,
                                "agent": {"scaffold": OneOf("oss_client"),
                                          "task_prefix": str, "reasoning_aware": bool,
@@ -227,6 +241,8 @@ METHOD_SCHEMAS = {
                                          "reasoning_effort": OneOf("low", "medium", "high"),
                                          "request_timeout_s": float, "max_retries": int}},
                               retrieval=RETRIEVAL),
+    "scaleseek": _method_schema({"client": CLIENT, "prompts": MapOf(PROMPT_REF),
+                                 "variants": ListOf(OneOf(*sorted(agent.VARIANTS)))}, retrieval=RETRIEVAL),
     "bcp_judge": _method_schema({"official_repo": OFFICIAL_REPO, "client": CLIENT,
                                  "decoding": {"temperature": float, "top_p": float,
                                               "max_new_tokens": int},
@@ -244,6 +260,7 @@ REQUIRED_PROMPTS = {
                   "begin_search_query", "end_search_query", "begin_search_result",
                   "end_search_result", "extract_between", "limit_message",
                   "repeat_message", "result_message", "step_line", "web_page_header"},
+    "scaleseek": {"system", "tools", "render_find", "render_search"},
     "bcp_judge": {"grader", "create_judge_prompt", "parse_judge_response"},
 }
 
@@ -413,7 +430,7 @@ def resolve_run(base: dict, method_name: str, dataset: str, retriever: str | Non
 
 
 def enumerate_runs(base: dict, dataset: str) -> list[tuple[str, str | None]]:
-    """The full matrix of (method_name, retriever) for one dataset (15 runs, §1)."""
+    """Every (method_name, retriever) run of one dataset: the 15 baseline runs (§1) and ours."""
     runs = []
     for name in method_names():
         m = load_method(name, base)

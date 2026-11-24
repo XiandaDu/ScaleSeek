@@ -67,7 +67,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     s = sub.add_parser("matrix", help="list the runs of one dataset (one per line)")
     s.add_argument("--dataset", required=True)
 
-    for name in ("index-bm25", "check-retrievers"):
+    for name in ("index-bm25", "index-exact", "check-retrievers"):
         s = sub.add_parser(name)
         s.add_argument("--corpus", required=True)
         s.add_argument("--smoke", action="store_true")
@@ -108,6 +108,15 @@ def parse_args(argv=None) -> argparse.Namespace:
     s.add_argument("--dataset", required=True)
     s.add_argument("--retriever")
     s.add_argument("--smoke", action="store_true")
+
+    s = sub.add_parser("passages", help="a corpus as 700-word passages for grep (CPU job)")
+    s.add_argument("--corpus", required=True)
+
+    s = sub.add_parser("grepseek-pilot", help="GrepSeek / GrepSeek+ on the validation questions (GPU job)")
+    s.add_argument("--name", required=True)
+    s.add_argument("--variants", default="", help="comma-separated (scaleseek/grepseek_plus.py); none = GrepSeek")
+    s.add_argument("--n", type=int, default=500, help="validation questions per source")
+    s.add_argument("--presence-penalty", type=float, help="override the profile's presence penalty (0 = the paper's decoding)")
 
     s = sub.add_parser("judge", help="BrowseComp-Plus judge over finished runs")
     s.add_argument("--dataset", required=True)
@@ -212,6 +221,9 @@ def main(argv=None) -> int:
         elif a.cmd == "index-bm25":
             from scaleseek.retrieval import bm25
             bm25.build(base, a.corpus, a.smoke)
+        elif a.cmd == "index-exact":
+            from scaleseek.retrieval import exact
+            exact.build(base, a.corpus, a.smoke)
         elif a.cmd == "encode":
             from scaleseek.retrieval import dense
             dense.encode_shard(base, a.retriever, a.corpus, a.shard[0], a.shard[1], a.smoke, a.device)
@@ -236,6 +248,12 @@ def main(argv=None) -> int:
             res = eval_run(spec, base["smoke"]["n_questions"] if a.smoke else None)
             print(json.dumps({k: v for k, v in res.items() if k != "missing"} | {"n_missing": len(res["missing"])}))
             return 0 if not res["missing"] else 3
+        elif a.cmd == "passages":
+            from scaleseek.corpus import write_passages
+            write_passages(base, a.corpus)
+        elif a.cmd == "grepseek-pilot":
+            from scaleseek.grepseek_pilot import pilot
+            pilot(base, a.name, sorted(filter(None, a.variants.split(","))), a.n, a.presence_penalty)
         elif a.cmd == "judge":
             from scaleseek.judge import judge_runs
             judge_runs(base, _bcp_run_dirs(base, a.dataset, a.runs, a.smoke), a.judge)

@@ -46,6 +46,8 @@ def asset_inventory(base: dict) -> dict[str, list[dict]]:
     models: dict[tuple[str, str], dict] = {}
 
     def add_model(repo: str, rev: str, patterns: list[str] | None, used_by: str) -> None:
+        if repo.startswith("local/"):           # our trained checkpoints (train/export_hf.sh)
+            return
         key = (repo, rev)
         entry = models.setdefault(key, {"repo_id": repo, "revision": rev, "repo_type": "model",
                                         "allow_patterns": patterns, "used_by": []})

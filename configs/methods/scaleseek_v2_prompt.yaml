@@ -1,0 +1,44 @@
+# =====================================================================================
+# ScaleSeek v2 (Prompt) -- our agent on the untrained backbone under the v2 protocol: the v1
+# protocol (scaleseek_prompt.yaml) plus the `budget` variant -- every tool turn ends with the
+# number of search turns left, the last one asks for `answer`.  No extra retrieval: same
+# tools, top-k, turns, context and decoding.  Chosen by a zero-training pilot on 1,000 train
+# questions (HotpotQA +8.4 strict EM, NQ +4.8, both p < 0.001; the `wide` and `relax`
+# variants did not pass the pre-set +3 gate).
+# =====================================================================================
+method: scaleseek
+display_name: ScaleSeek v2 (Prompt)
+
+generator:
+  model: Qwen/Qwen3.5-9B
+  revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a
+
+server:
+  served_model_name: qwen3.5-9b
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.70          # a dense query encoder may share GPU 0
+  max_num_seqs: 64
+  seed: 0
+  reasoning_parser: null
+  tool_call_parser: null                # tool calls are parsed from the text (agent.parse_tool_calls)
+  enable_auto_tool_choice: false
+  language_model_only: true
+  trust_remote_code: false
+
+client:
+  concurrency: 64
+  request_timeout_s: 7200
+  max_retries: 5
+  retry_backoff_s: 15
+
+variants: [budget]                      # v2: each tool turn says how many search turns are left (pilot 2026-11-14)
+
+prompts:
+  system: {constant: scaleseek.agent.SYSTEM_PROMPT, sha256: dc4edc97f03beba453a58c6b0056135d6e86c2bcded42c0fa554723895e4eca1}
+  tools: {constant: scaleseek.agent.TOOLS, sha256: cdd5d5424ea2c0f6ab25ad0fbe4532c4a20208d00dafa4a1a07aa0d33cb0c748}
+  render_find: {constant: scaleseek.agent.render_find, sha256: 8b430dfbaba0f44d665bed62a11f4ecbaec572459105ceaa1a3687165f77e3c5}
+  render_search: {constant: scaleseek.agent.render_search, sha256: abd119689e18b8c820de328d95c40198f7ff948dd5eac34eb9c9c77ab8d122d7}
+
+retrieval:
+  retrievers: [e5, qwen3_emb_4b]
+  top_k: 5                              # = agent.FIND_TOP_K / SEARCH_TOP_K (the agent module rules)
