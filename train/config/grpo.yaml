@@ -2,12 +2,14 @@
 # Started from GrepSeek's paper config (repos/grepseek/rl/grepseek/trainer/config/
 # grpo_trainer.yaml); what differs, and why:
 #   batch 64 questions x n=8 (GrepSeek 256 x 5), 150 steps   -- ~30% of GrepSeek's trajectories
-#   lr 1e-6 (GrepSeek 5e-6)                                   -- no SFT warm start, no KL
+#   start: the SFT checkpoint (train/sft.sbatch)              -- from the untrained backbone RL learns nothing, then collapses
+#   rollouts under protocol v3 (budget + commit)              -- as evaluated; without commit RL learns to answer early
 #   reward: format-gated EM, drafts at draft_credit           -- scaleseek/agent.py
 #   tools: find + search, native Qwen3.5 calls (qwen3_coder)  -- train/scaleseek_rl/
 #   rollout TP 2; fused log-prob kernels, no sequence parallel -- 40 GB A100s, 248K vocab (GrepSeek: 80 GB)
-# Same as GrepSeek: data NQ + HotpotQA train, 16K context (1024 prompt + 15360), at most
-# 5 tool calls + 1 answering turn, temperature 1.0, eager vLLM, full FSDP offload.
+# Same as GrepSeek: data NQ + HotpotQA train, lr 5e-6, 16K context (1024 prompt + 15360), at
+# most 5 tool calls + 1 answering turn, temperature 1.0, eager vLLM, full FSDP offload.
+# The reported checkpoint is step 90: a 24 h job reaches step ~92, and the lr is constant.
 #
 # Paths come from the environment (train/rl.sbatch sets them): VERL_DIR, SCALESEEK_REPO,
 # SCALESEEK_RL_MODEL, SCALESEEK_RL_DATA, SCALESEEK_RL_OUT.
@@ -53,9 +55,9 @@ trainer:
   seed: 42
   logger: [console, tensorboard]
 
-# The agent protocol (scaleseek/agent.py): variants switched on, e.g. scaleseek.variants=[budget,commit] (= v3)
+# The agent protocol (scaleseek/agent.py VARIANTS): v3
 scaleseek:
-  variants: []
+  variants: [budget, commit]
 
 wandb:
   enable: false
@@ -153,7 +155,7 @@ actor_rollout_ref:
     optim:
       optimizer: AdamW
       optimizer_impl: torch.optim
-      lr: 1.0e-6
+      lr: 5.0e-6
       weight_decay: 0.0
       betas: [0.9, 0.999]
       clip_grad: 1.0

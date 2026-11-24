@@ -1,4 +1,4 @@
-"""ScaleSeek v3 (Prompt): two runs on the 7 Wiki test subsets vs the paper's GrepSeek and our reproduction; the guess pilot."""
+"""ScaleSeek v3 (Prompt): two runs on the 7 Wiki test subsets vs the paper's GrepSeek and our reproduction."""
 import json, sys
 from collections import Counter
 sys.path.insert(0, '/home/a32du/ScaleSeek')
@@ -39,16 +39,3 @@ print('run2 vs run1:', mcnemar_exact(pool['r2'], pool['r1']))
 print('run2 vs GrepSeek:', mcnemar_exact(pool['r2'], pool['gs']))
 print('mean of the two runs: macro-7 EM %.2f, F1 %.2f' % (sum((rows[d][0] + rows[d][1]) / 2 for d in DS) / 7, sum((rows[d][2] + rows[d][3]) / 2 for d in DS) / 7),
       '| EM per dataset', {d: round((rows[d][0] + rows[d][1]) / 2, 1) for d in DS})
-
-T = '/scratch/a32du/scaleseek_v2/train_data/teacher/'
-tl = lambda n: {r['id']: r for r in map(json.loads, open(T + n + '/trajectories.jsonl'))}
-A, B = tl('pilot_guess'), tl('pilot_commit')
-for src in ('nq', 'hotpotqa', ''):
-    ids = [i for i in B if i.startswith(src) and i in A]
-    a = {i: exact_match(final_answer(A[i]), A[i]['golden_answers']) for i in ids}
-    b = {i: exact_match(final_answer(B[i]), B[i]['golden_answers']) for i in ids}
-    mc = mcnemar_exact(a, b)
-    print(f"guess pilot {src or 'all':9s} n={len(ids)} guess EM {100 * sum(a.values()) / len(ids):5.1f}  commit EM {100 * sum(b.values()) / len(ids):5.1f} ({100 * (sum(a.values()) - sum(b.values())) / len(ids):+.1f}; won {mc['only_a']} lost {mc['only_b']} p={mc['p_value']:.3f})")
-unk = lambda Rr: [r for r in Rr.values() if (r['prediction'] or '').strip().lower() in ('unknown', '')]
-print('answers "unknown": guess', len(unk(A)), ', commit', len(unk(B)), '| on the questions commit answered "unknown", the guess run is right on',
-      sum(exact_match(final_answer(A[r['id']]), r['golden_answers']) for r in unk(B) if r['id'] in A), 'of', len(unk(B)))

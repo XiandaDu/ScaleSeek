@@ -89,7 +89,7 @@ def serve(base: dict, retriever: str, corpus: str, smoke: bool, port: int, devic
                 req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 t0 = time.time()
                 if self.path == "/find":       # exact search: also counts (exact.py)
-                    res = searcher.find(req["query"], int(req["top_k"]), store, req.get("relax", False))
+                    res = searcher.find(req["query"], int(req["top_k"]), store)
                 else:
                     res = {"hits": searcher.search(req["query"], int(req["top_k"]))}
                 res["hits"] = [{"id": d, "score": s, "contents": show(store.get(d)["contents"])} for d, s in res["hits"]]
@@ -129,11 +129,10 @@ class RetrievalClient:
             raise RetrievalError(r.json().get("error", r.text[:300]))
         return r.json()["hits"]
 
-    def find(self, query: str, top_k: int, relax: bool = False) -> dict:
-        """Exact search (exact.py): {"hits", "count", "phrase_counts", "relaxed_count"}."""
+    def find(self, query: str, top_k: int) -> dict:
+        """Exact search (exact.py): {"hits", "count", "phrase_counts"}."""
         try:
-            r = self.session.post(self.url + "/find", json={"query": query, "top_k": top_k, "relax": relax},
-                                  timeout=self.timeout_s)
+            r = self.session.post(self.url + "/find", json={"query": query, "top_k": top_k}, timeout=self.timeout_s)
         except requests.RequestException as exc:
             raise RetrievalError(f"retrieval service unreachable: {exc}") from exc
         if r.status_code != 200:

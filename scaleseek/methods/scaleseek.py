@@ -11,8 +11,8 @@ max_user_turns = turns - 1).  Decoding is the shared profile.
 `find` goes to the exact-search service, `search` to the run's dense retriever, `answer`
 ends the episode.  The prediction is the `answer` call, else the last informative
 current_answer (agent.draft); `answered` in the record says which (only an `answer` call
-is scored under the shared rule, metrics.final_answer).  ctx.variants switches on the
-protocol variants under test (agent.VARIANTS); formal runs use none.
+is scored under the shared rule, metrics.final_answer).  ctx.variants: the protocol parts
+the method yaml switches on (agent.VARIANTS; v3 = budget + commit).
 """
 
 from __future__ import annotations
@@ -43,16 +43,15 @@ class ScaleSeek(Method):
         pre = tok.apply_chat_template(dummy, add_generation_prompt=False, tokenize=False)
         return full[len(pre):][len(self.implicit_system):]
 
-    def call(self, rec: dict, name: str, args: dict, k: int) -> str:
+    def call(self, rec: dict, name: str, args: dict) -> str:
         try:
             if err := agent.call_error(name):
                 raise agent.ToolCallError(err)
             if name == "find":
-                res = self.ctx.exact.find(agent.find_query(args), k, "relax" in self.variants)
-                text = agent.render_relaxed(args, res) if "relax" in self.variants else agent.render_find(args, res)
-                hits = res["hits"]
+                res = self.ctx.exact.find(agent.find_query(args), agent.FIND_TOP_K)
+                text, hits = agent.render_find(args, res), res["hits"]
             else:
-                hits = self.ctx.retrieval.search(agent.search_query(args), k)
+                hits = self.ctx.retrieval.search(agent.search_query(args), agent.SEARCH_TOP_K)
                 text = agent.render_search(args, hits)
         except (agent.ToolCallError, RetrievalError) as exc:
             if "unreachable" in str(exc):
@@ -61,8 +60,7 @@ class ScaleSeek(Method):
             rec["trajectory"].append({"type": name, "args": args, "error": str(exc)})
             return f"Error: {exc}"
         rec["n_retrievals"] += 1
-        rec["trajectory"].append({"type": name, "args": args, "hits": [h["id"] for h in hits]}
-                                 | ({"relaxed": True} if name == "find" and res["relaxed_count"] else {}))
+        rec["trajectory"].append({"type": name, "args": args, "hits": [h["id"] for h in hits]})
         return text
 
     def commit(self, rec: dict, prompt: str) -> dict | None:
@@ -80,7 +78,7 @@ class ScaleSeek(Method):
     def run_example(self, ex: dict, rec: dict) -> None:
         messages = [{"role": "system", "content": agent.SYSTEM_PROMPT},
                     {"role": "user", "content": agent.user_message(ex["question"])}]
-        prompt = self.ctx.tokenizer.apply_chat_template(messages, tools=agent.tools(self.variants),
+        prompt = self.ctx.tokenizer.apply_chat_template(messages, tools=agent.TOOLS,
                                                         add_generation_prompt=True, tokenize=False)
         calls, answer = [], None
         turns = self.profile["max_assistant_turns"]
@@ -109,10 +107,9 @@ class ScaleSeek(Method):
             if turn == turns - 1:
                 rec["finish_reason"] = "max_turns"
                 break
-            k = agent.top_k(self.variants, len(batch))
-            texts = [self.call(rec, n, a, k) for n, a in batch]
+            texts = [self.call(rec, n, a) for n, a in batch]
             if "budget" in self.variants:
-                texts[-1] += agent.budget_note(turns - 2 - turn, "guess" in self.variants)
+                texts[-1] += agent.budget_note(turns - 2 - turn)
             prompt += self.tool_turn(texts)
         rec["trajectory"].append({"type": "final_sequence", "text": prompt})
         rec["answered"] = answer is not None

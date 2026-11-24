@@ -39,6 +39,6 @@ def trial(variants, script):
 
 
 trial(["budget"], [call(BIG)] * 5 + ["<answer>\nx\n</answer>"])
-trial(["budget", "countdown", "dedup"], [call(BIG)] * 5 + ["<answer>\nx\n</answer>"])
+trial(["budget", "dedup"], [call(BIG)] * 5 + ["<answer>\nx\n</answer>"])
 trial(["budget", "dedup", "fold", "relax", "title"], [call('rg -F "Jonas Salk" corpus.jsonl | rg -i -F "religion" | head -n 3'), "no action here",
                                                       call('rg -F "Valentín" corpus.jsonl | head -n 2'), call("rm -rf /"), call(BIG), call(BIG)])

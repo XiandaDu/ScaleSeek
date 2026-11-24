@@ -1,15 +1,17 @@
-"""Teacher trajectories for the SFT warm start (GrepSeek also distils Qwen3.5-27B).
+"""Our agent, run exactly as the eval harness runs it (scaleseek/methods/scaleseek.py: same
+prompt, tools, budgets, decoding, e5 behind `search`), outside the test runs:
 
-Qwen3.5-27B runs OUR agent exactly as the eval harness does (scaleseek/methods/scaleseek.py:
-same prompt, tools, budgets, decoding, e5 behind `search`) on NQ + HotpotQA TRAIN questions
--- HotpotQA medium/hard only, the RL dev hold-out excluded -- several samples per question.
-Same tokenizer and chat template as Qwen3.5-9B, so a trajectory's text is the student's
-format as is.  train/build_sft.py keeps the correct, well-formed ones.
+  train questions (default)   NQ + HotpotQA TRAIN questions -- HotpotQA medium/hard only, the
+                              RL dev hold-out excluded -- several samples per question.
+                              train/build_sft.py keeps the correct trajectories: the SFT data.
+  validation questions (--dev)   500 NQ dev + 500 HotpotQA dev questions outside the test
+                              subset (scaleseek/grepseek_pilot.py), to compare checkpoints.
 
-    python train/teacher_rollouts.py <out_dir> --exclude <rl dev.parquet> --nq 2000 --hotpotqa 4000 --samples 2
+    python train/rollouts.py <out_dir> --exclude <rl dev.parquet> [--nq 2000 --hotpotqa 4000 --samples 2]
+    python train/rollouts.py <out_dir> --exclude <rl dev.parquet> --dev --samples 1 --model local/<ckpt> --revision <rev>
 
-Also the protocol pilots: another generator (--model/--revision/--tp) on the first --take
-questions of each source, with --variants (agent.VARIANTS) switched on.
+The generator defaults to the untrained backbone of configs/methods/scaleseek_v3_prompt.yaml and
+the protocol to v3 (--variants budget,commit).
 """
 
 from __future__ import annotations
@@ -37,7 +39,6 @@ from scaleseek.retrieval.service import RetrievalClient
 from scaleseek.runner import RetrievalProcess, job_gpus
 from scaleseek.utils import git_state, now_iso, repo_root, write_json
 
-TEACHER = {"model": "Qwen/Qwen3.5-27B", "revision": "fc05daec18b0a78c049392ed2e771dde82bdf654"}
 SEED = 20261105
 
 
@@ -66,18 +67,18 @@ def main() -> None:
     p.add_argument("--hotpotqa", type=int, default=4000)
     p.add_argument("--samples", type=int, default=2)
     p.add_argument("--take", type=int, help="only the first N of each source's questions (a comparison subset)")
-    p.add_argument("--model", default=TEACHER["model"], help="another generator on the same questions")
-    p.add_argument("--revision", default=TEACHER["revision"])
-    p.add_argument("--tp", type=int, default=4)
-    p.add_argument("--variants", default="", help="protocol variants under test, comma-separated (agent.VARIANTS)")
+    p.add_argument("--model", help="another generator, e.g. a checkpoint exported by train/export_hf.sh (with --revision)")
+    p.add_argument("--revision")
+    p.add_argument("--tp", type=int, default=1)
+    p.add_argument("--variants", default="budget,commit", help="protocol parts switched on, comma-separated (agent.VARIANTS)")
     p.add_argument("--dev", action="store_true",
                    help="the validation questions (500 NQ dev + 500 HotpotQA dev outside the test subset) instead of train questions")
     a = p.parse_args()
     variants = sorted(filter(None, a.variants.split(",")))
     assert set(variants) <= agent.VARIANTS, variants
     base = load_base()
-    spec = resolve_run(base, "scaleseek_prompt", "hotpotqa", "e5", "formal")
-    generator = {"model": a.model, "revision": a.revision}
+    spec = resolve_run(base, "scaleseek_v3_prompt", "hotpotqa", "e5", "formal")
+    generator = {"model": a.model, "revision": a.revision} if a.model else spec.method["generator"]
     server_cfg = spec.method["server"] | {"served_model_name": "generator", "tensor_parallel_size": a.tp,
                                           "max_num_seqs": 128}
     client_cfg = spec.method["client"] | {"concurrency": 128}
@@ -87,12 +88,12 @@ def main() -> None:
     qs = dev_questions(base, 500) if a.dev else questions(base, {"nq": a.nq, "hotpotqa": a.hotpotqa}, a.exclude, a.take)
     examples = [{**q, "id": f"{q['id']}#{j}"} for q in qs for j in range(a.samples)]
     write_json(a.out_dir / "config.json", {
-        "created": now_iso(), "harness_commit": git_state(repo_root())["commit"], "teacher": generator, "take": a.take,
+        "created": now_iso(), "harness_commit": git_state(repo_root())["commit"], "generator": generator, "take": a.take,
         "server": server_cfg, "profile": spec.profile, "retriever": "e5", "seed": SEED,
         "questions": {"nq": a.nq, "hotpotqa": a.hotpotqa}, "samples": a.samples, "exclude": str(a.exclude),
         "variants": variants, "dev": a.dev})
 
-    path = local_snapshot(base, a.model, a.revision)
+    path = local_snapshot(base, generator["model"], generator["revision"])
     gpus = job_gpus()
     server = VLLMServer(path, server_cfg, spec.profile["max_model_len"], a.out_dir / "vllm.log", gpus)
     retr = RetrievalProcess(spec, False, gpus[0])

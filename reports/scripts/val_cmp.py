@@ -1,7 +1,7 @@
 """Validation runs (500 NQ dev + 500 HotpotQA dev, v3 protocol) against the untrained v3
 (val_v3_base): strict EM by source and overall, F1, paired exact McNemar, turns, and how
 often the last (forced) turn was reached.
-Usage: val_cmp.py <run name>...   (dirs under train_data/teacher/)"""
+Usage: val_cmp.py <run name>...   (dirs under train_data/rollouts/)"""
 import json
 import sys
 from collections import Counter
@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, "/home/a32du/ScaleSeek")
 from scaleseek.metrics import exact_match, f1_score, final_answer, mcnemar_exact
 
-T = Path("/scratch/a32du/scaleseek_v2/train_data/teacher")
+T = Path("/scratch/a32du/scaleseek_v2/train_data/rollouts")
 
 
 def load(name):

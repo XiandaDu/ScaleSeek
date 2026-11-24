@@ -1,5 +1,5 @@
-# SFT warm start of the ScaleSeek agent on Qwen3.5-27B teacher trajectories (train/build_sft.py),
-# verl's FSDP SFT trainer.  GrepSeek's recipe (repos/grepseek/sft/run_sft.sh): lr 5e-6, weight
+# SFT warm start of the ScaleSeek agent on its own correct trajectories (train/rollouts.py ->
+# train/build_sft.py), verl's FSDP SFT trainer.  GrepSeek's recipe (repos/grepseek/sft/run_sft.sh): lr 5e-6, weight
 # decay 0.01, 5% warmup, 1 epoch, global batch 32, 16K tokens, full offload; fused log-prob
 # kernels and no sequence parallel (40 GB cards), as in grpo.yaml.  What differs: the rows
 # are our agent's trajectories, tokenized segment by segment as verl's agent loop builds a

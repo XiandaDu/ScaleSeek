@@ -36,15 +36,12 @@ for cmd in CMDS:
 print(f"no variants == official payload: {same}/{len(CMDS)}")
 
 for cmd, variants in [
-    ('rg -F "Jonas Salk" corpus.jsonl | rg -i -F "religion" | head -n 3', ["soft"]),
-    ('rg -F "Jonas Salk" corpus.jsonl | rg -i -F "religion" | head -n 3', ["soft", "title"]),
-    ('rg -F "Mount Pinatubo" corpus.jsonl | rg -i -F "eruption" | rg -i -F "death toll of 847" | head -n 4', ["soft", "title"]),
-    ('rg -F "Charles Darwin" corpus.jsonl | rg -i -F "last book" | rg -i -F "earthworms" | head -n 5', ["soft", "title"]),
-    ('rg -F "Crash" corpus.jsonl | rg -i -F "film" | rg -i -F "Haggis" | rg -i -F "zzqq" | head -n 6', ["soft", "title"]),
-    ('rg -F "the Naked angel" corpus.jsonl | rg -i -F "directed" | head -n 3', ["fold", "soft", "title"]),
-    ('rg -F "Paris" corpus.jsonl | rg -i -F "capital" | head -n 5', ["fold", "soft", "title"]),
-    ('rg -F "zzqqxx" corpus.jsonl | rg -F "abc" | head -n 3', ["fold", "soft", "title"]),
-    ('rg -F "Paris" corpus.jsonl | rg -i "capit[a-z]+" | head -n 3', ["fold", "soft", "title"]),
+    ('rg -F "Jonas Salk" corpus.jsonl | rg -i -F "religion" | head -n 3', ["title"]),
+    ('rg -F "Mount Pinatubo" corpus.jsonl | rg -i -F "eruption" | rg -i -F "death toll of 847" | head -n 4', ["relax", "title"]),
+    ('rg -F "Crash" corpus.jsonl | rg -i -F "film" | rg -i -F "Haggis" | rg -i -F "zzqq" | head -n 6', ["relax", "title"]),
+    ('rg -F "the Naked angel" corpus.jsonl | rg -i -F "directed" | head -n 3', ["fold", "relax", "title"]),
+    ('rg -F "Paris" corpus.jsonl | rg -i -F "capital" | head -n 5', ["fold", "relax", "title"]),
+    ('rg -F "zzqqxx" corpus.jsonl | rg -F "abc" | head -n 3', ["fold", "relax", "title"]),
 ]:
     print(cmd)
     t0 = time.time(); off = json.loads(tools.run_tool(cmd, **KW).to_payload()); show("official", off, time.time() - t0)

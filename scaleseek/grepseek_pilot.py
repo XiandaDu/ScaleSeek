@@ -1,22 +1,18 @@
-"""Zero-training pilots of GrepSeek+ (grepseek_plus.py): the official GrepSeek checkpoint and
-harness with some variants switched on, on VALIDATION questions -- NQ dev and HotpotQA dev
-questions outside the test subset.  These are GrepSeek's two training datasets; none of
-the questions is in its training data (the train splits) or in any reported subset, so
-variants are chosen without touching a test question.
+"""The validation questions, and GrepSeek / GrepSeek+ on them.
 
-    python run.py grepseek-pilot --name <run> [--variants budget,dedup] [--cap 2048] [--n 500]
+Validation questions: 500 NQ dev + 500 HotpotQA dev questions, the HotpotQA ones outside
+the test subset (which is drawn from the same dev file).  NQ and HotpotQA are the two
+datasets every trained method here trains on (their train splits); no validation question
+is a training question or a test question (reports/scripts/leak_check.py), so variants
+and checkpoints are chosen without touching a test question.  train/rollouts.py --dev
+runs our own agent on the same questions.
 
-Output: <root>/pilots/grepseek/<run>/trajectories.jsonl, in the unified record format.
-`--cap` is the harness's own per-turn generation cap (0 = none, as the baseline runs).
+    python run.py grepseek-pilot --name <run> [--variants budget,dedup,fold,relax,title] [--n 500]
 
-`--presence-penalty 0`: the paper's decoding (no presence penalty), to measure what our shared 2.0 costs GrepSeek.
-
-`--model M --revision R`: another generator (e.g. the untrained Qwen3.5-9B) in the same harness.
-
-`--replay a,b --turns N`: a second stage.  Every question starts from the tool calls and
-outputs of the earlier pilot runs a, b (interleaved, repeated lines dropped, the model's
-reasoning left out) and has N turns from there; with N = 1 it can only answer, i.e. it
-re-reads the pooled evidence in a clean context.
+The official GrepSeek checkpoint and harness, with the GrepSeek+ variants (grepseek_plus.py)
+that are named.  Output: <root>/pilots/grepseek/<run>/trajectories.jsonl, in the unified
+record format.  `--presence-penalty 0`: the paper's decoding (no presence penalty), to
+measure what our shared 2.0 costs GrepSeek.
 """
 
 from __future__ import annotations
@@ -24,10 +20,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import random
-from itertools import zip_longest
 from pathlib import Path
-
-from transformers import AutoTokenizer
 
 from .config import resolve_run
 from .data import load_subset
@@ -54,66 +47,18 @@ def questions(base: dict, n: int) -> list[dict]:
     return out
 
 
-REPLAY_TOKENS = 11000      # of a 16K window: leaves room for the prompt and the answering turn
-REREAD = ("These are all the search results. Give your final answer now in an <answer> block: "
-          "the best answer supported by what you have read.")
-
-
-def replay(root: Path, runs: list[str], tokenizer) -> dict[str, list[dict]]:
-    """{question id: messages} -- the (tool call, tool output) pairs of earlier pilot runs."""
-    calls: dict[str, list[list]] = {}
-    for run in runs:
-        for r in map(json.loads, open(root / run / "trajectories.jsonl")):
-            turns = r["trajectory"]["turns"] or []
-            pairs = [(a["parse"]["tool_call_json"], json.loads(t["content"])) for a, t in zip(turns, turns[1:])
-                     if a["role"] == "assistant" and t["role"] == "tool" and not t.get("synthetic")]
-            calls.setdefault(r["id"], []).append(pairs)
-    out = {}
-    for qid, per_run in calls.items():
-        messages, seen, used = [], set(), 0
-        for call, payload in (p for group in zip_longest(*per_run) for p in group if p):
-            lines = [ln for ln in payload["stdout"].split("\n") if ln.strip() and not ln.startswith("[... output truncated")]
-            new = [ln for ln in lines if ln not in seen]
-            if lines and not new:
-                continue                        # nothing the earlier calls did not show
-            seen.update(new)
-            fields = {k: payload[k] for k in ("command", "stdout", "stderr", "exit_code", "timed_out", "truncated")}
-            fields["stdout"] = "".join(ln + "\n" for ln in new)
-            pair = [{"role": "assistant", "content": f"<tool_call>\n{call}\n</tool_call>"},
-                    {"role": "tool", "content": json.dumps(fields, ensure_ascii=False)}]
-            used += sum(len(tokenizer(m["content"], add_special_tokens=False)["input_ids"]) for m in pair)
-            if used > REPLAY_TOKENS:
-                break
-            messages += pair
-        if messages:
-            last = json.loads(messages[-1]["content"])
-            messages[-1]["content"] = json.dumps(last | {"notice": REREAD}, ensure_ascii=False)
-        out[qid] = messages
-    return out
-
-
-def pilot(base: dict, name: str, variants: list[str], cap: int, n: int, sources: list[str], turns: int | None,
-          generator: dict | None, presence_penalty: float | None) -> None:
+def pilot(base: dict, name: str, variants: list[str], n: int, presence_penalty: float | None) -> None:
     spec = resolve_run(base, "grepseek", "hotpotqa", None, "formal")
-    root = Path(base["paths"]["root"]) / "pilots" / "grepseek"
-    out = root / name
+    out = Path(base["paths"]["root"]) / "pilots" / "grepseek" / name
     out.mkdir(parents=True, exist_ok=True)
-    g = generator or spec.method["generator"]          # e.g. the untrained backbone in the same harness
-    path = local_snapshot(base, g["model"], g["revision"])
-    harness = spec.method["harness"] | {"variants": variants, "max_tokens_per_turn": cap}
-    if sources:
-        write_json(out / "inject.json", replay(root, sources, AutoTokenizer.from_pretrained(str(path))))
-        harness["inject"] = str(out / "inject.json")
-    profile = spec.profile | ({"max_assistant_turns": turns} if turns else {})
-    if presence_penalty is not None:                   # 0 = the GrepSeek paper's decoding (ours adds 2.0 for every method)
-        profile["presence_penalty"] = presence_penalty
+    profile = spec.profile | ({} if presence_penalty is None else {"presence_penalty": presence_penalty})
     spec = dataclasses.replace(spec, run_dir=out, profile=profile,
-                               method=spec.method | {"harness": harness, "generator": g})
+                               method=spec.method | {"harness": spec.method["harness"] | {"variants": variants}})
     examples = questions(base, n)
     write_json(out / "config.json", {
         "created": now_iso(), "harness_commit": git_state(repo_root())["commit"], "variants": variants,
-        "max_tokens_per_turn": cap, "n_per_source": n, "seed": SEED, "generator": spec.method["generator"],
-        "profile": spec.profile, "replay": sources})
+        "n_per_source": n, "seed": SEED, "generator": spec.method["generator"], "profile": spec.profile})
+    path = local_snapshot(base, spec.method["generator"]["model"], spec.method["generator"]["revision"])
     server = VLLMServer(path, spec.method["server"], spec.profile["max_model_len"], out / "vllm.log", job_gpus())
     try:
         server.start(base["runtime"]["server_start_timeout_s"])

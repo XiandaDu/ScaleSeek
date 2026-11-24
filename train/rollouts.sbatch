@@ -1,11 +1,11 @@
 #!/bin/bash
 # =====================================================================================
-# Teacher trajectories (train/teacher_rollouts.py): Qwen3.5-27B, TP4, on one 4xA100 node.
-#     bash submit.sh teacher --name <run> [--nq N --hotpotqa N --samples K --take N --model M --revision R --tp T]
-# Output: $SCALESEEK_ROOT/train_data/teacher/<run>; a resubmitted job resumes (records are
+# Our agent on train questions (the SFT data) or validation questions (train/rollouts.py).
+#     bash submit.sh rollouts --name <run> [--dev] [--model M --revision R --tp T] [--nq N --hotpotqa N --samples K]
+# Output: $SCALESEEK_ROOT/train_data/rollouts/<run>; a resubmitted job resumes (records are
 # appended one by one).
 # =====================================================================================
-#SBATCH --job-name=ss_teacher
+#SBATCH --job-name=ss_rollouts
 #SBATCH --account=def-CHANGEME
 #SBATCH --gpus-per-node=a100:4
 #SBATCH --cpus-per-task=48
@@ -21,4 +21,4 @@ echo "job $SLURM_JOB_ID on $(hostname)  harness $(git rev-parse HEAD)  $(date -I
 cat "$R/data/corpora/wiki18/corpus.jsonl" "$R/indexes/wiki18/exact/lucene/"* > /dev/null
 echo "page cache warmed $(date -Is)"
 export JAVA_TOOL_OPTIONS=-Xmx32g
-python train/teacher_rollouts.py "$R/train_data/teacher/$NAME" --exclude "$R/train_data/rl_v1/dev.parquet" "$@"
+python train/rollouts.py "$R/train_data/rollouts/$NAME" --exclude "$R/train_data/rl_v1/dev.parquet" "$@"

@@ -33,7 +33,7 @@ class ScaleSeekAgentLoop(ToolAgentLoop):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.variants = set(self.config.scaleseek.variants)
-        assert self.variants <= {"budget", "commit"}, f"not implemented in training: {self.variants}"
+        assert self.variants <= agent.VARIANTS, self.variants
         self.commit_ids = self.tokenizer.encode(agent.COMMIT, add_special_tokens=False)     # starts with </think>
 
     async def process_vision_info(self, messages: list[dict]) -> dict:

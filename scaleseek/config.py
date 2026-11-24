@@ -230,7 +230,7 @@ METHOD_SCHEMAS = {
     "grepseek": _method_schema({"official_repo": OFFICIAL_REPO, "harness": GREPSEEK_HARNESS}),
     # GrepSeek+ (grepseek_plus.py): the same harness and checkpoint, harness-side variants on.
     "grepseek_plus": _method_schema({"official_repo": OFFICIAL_REPO, "harness": GREPSEEK_HARNESS | {
-        "variants": ListOf(OneOf("budget", "countdown", "dedup", "fold", "relax", "soft", "title"), min_len=1)}}),
+        "variants": ListOf(OneOf("budget", "dedup", "fold", "relax", "title"), min_len=1)}}),
     "agentir": _method_schema({"official_repo": OFFICIAL_REPO,
                                "agent": {"scaffold": OneOf("oss_client"),
                                          "task_prefix": str, "reasoning_aware": bool,
@@ -430,7 +430,7 @@ def resolve_run(base: dict, method_name: str, dataset: str, retriever: str | Non
 
 
 def enumerate_runs(base: dict, dataset: str) -> list[tuple[str, str | None]]:
-    """The full matrix of (method_name, retriever) for one dataset (15 runs, §1)."""
+    """Every (method_name, retriever) run of one dataset: the 15 baseline runs (§1) and ours."""
     runs = []
     for name in method_names():
         m = load_method(name, base)

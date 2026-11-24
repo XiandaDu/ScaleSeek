@@ -1,5 +1,5 @@
 """The validation table (500 NQ dev + 500 HotpotQA dev, used by no training or test run):
-GrepSeek and GrepSeek+ (pilots/grepseek/) next to our agent's runs (train_data/teacher/),
+GrepSeek and GrepSeek+ (pilots/grepseek/) next to our agent's runs (train_data/rollouts/),
 on the same questions.  Strict EM overall and by source, F1, and a paired exact McNemar
 test against GrepSeek and against the untrained v3.
 Usage: val_table.py <our run>...   (val_v3_base is always the first of ours)"""
@@ -21,7 +21,7 @@ def load(path):
 runs = {label: load(f"pilots/grepseek/{run}") for label, run in (      # each configuration was run more than once
     ("GrepSeek", "base"), ("GrepSeek, run 2", "base_r2"),
     ("GrepSeek+", "all"), ("GrepSeek+, run 2", "all_r2"), ("GrepSeek+, run 3", "all_r3"))}
-runs |= {name: load(f"train_data/teacher/{name}") for name in ["val_v3_base"] + sys.argv[1:]}
+runs |= {name: load(f"train_data/rollouts/{name}") for name in ["val_v3_base"] + sys.argv[1:]}
 ids = sorted(runs["GrepSeek"])
 em = {name: {i: exact_match(final_answer(recs[i]), recs[i]["golden_answers"]) for i in ids}
       for name, recs in runs.items() if set(recs) == set(ids) or sys.exit(f"{name}: not the same questions")}

@@ -1,4 +1,5 @@
-"""SFT rows from teacher trajectories (train/teacher_rollouts.py): rejection sampling.
+"""SFT rows from the agent's own trajectories on train questions (train/rollouts.py):
+rejection sampling.
 
 Kept: trajectories that end in an `answer` call that is correct under the shared rule
 (strict EM) with no tool or format error -- at most `--per-question` of them per question,
@@ -6,7 +7,7 @@ the ones with the fewest turns first.
 Each is cut into the segments train/scaleseek_rl/sft_dataset.py trains on: the prompt and
 the tool turns (no loss), each assistant turn plus its EOS (loss).
 
-    python train/build_sft.py <teacher run dir> <out_dir> [--per-question 1]
+    python train/build_sft.py <rollout run dir> <out_dir> [--per-question 1]
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import pyarrow.parquet as pq
 from transformers import AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scaleseek.config import load_base
+from scaleseek.config import load_base, load_method
 from scaleseek.hub import snapshot_dir
 from scaleseek.metrics import exact_match, final_answer
 
@@ -51,14 +52,15 @@ def segments(rec: dict, eos: str) -> list[dict]:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("teacher_dir", type=Path)
+    p.add_argument("run_dir", type=Path)
     p.add_argument("out_dir", type=Path)
     p.add_argument("--per-question", type=int, default=1)
     p.add_argument("--max-tokens", type=int, default=12000, help="longer trajectories are left out")
     a = p.parse_args()
-    teacher = json.loads((a.teacher_dir / "config.json").read_text())["teacher"]
-    tok = AutoTokenizer.from_pretrained(str(snapshot_dir(load_base(), teacher["model"], teacher["revision"])))
-    recs = [json.loads(l) for l in open(a.teacher_dir / "trajectories.jsonl")]
+    base = load_base()
+    g = load_method("scaleseek_v3_prompt", base)["generator"]      # every checkpoint keeps the backbone's tokenizer
+    tok = AutoTokenizer.from_pretrained(str(snapshot_dir(base, g["model"], g["revision"])))
+    recs = [json.loads(l) for l in open(a.run_dir / "trajectories.jsonl")]
     by_q = defaultdict(list)
     stats = Counter()
     for r in recs:
@@ -80,7 +82,7 @@ def main() -> None:
     rng.shuffle(rows)
     a.out_dir.mkdir(parents=True, exist_ok=True)
     pq.write_table(pa.Table.from_pylist(rows), a.out_dir / "train.parquet")
-    summary = {"teacher_dir": str(a.teacher_dir), "per_question": a.per_question, "trajectories": len(recs),
+    summary = {"run_dir": str(a.run_dir), "per_question": a.per_question, "trajectories": len(recs),
                "questions_solved": len(by_q), "rows": len(rows), "by_source": Counter(r["source"] for r in rows),
                "turns": dict(sorted(Counter(r["turns"] for r in rows).items())),
                "filter": dict(stats)}

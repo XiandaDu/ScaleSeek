@@ -13,12 +13,12 @@
 #   bash submit.sh check-retrievers --corpus wiki18
 #   bash submit.sh eval  --method rag --dataset popqa --retriever bm25
 #   bash submit.sh eval-all --dataset popqa          # the 15 runs of one dataset
-#   bash submit.sh grepseek-pilot --name <run> [--variants budget,dedup] [--cap 2048] [--replay a,b --turns 1]   # GrepSeek+ on validation questions
+#   bash submit.sh grepseek-pilot --name <run> [--variants budget,dedup,fold,relax,title]   # GrepSeek / GrepSeek+ on the validation questions
 #   bash submit.sh passages --corpus bcp                 # BrowseComp-Plus as 700-word passages (GrepSeek paper)
 #   bash submit.sh judge --dataset browsecomp_plus
 #   bash submit.sh score --dataset popqa
 #   bash submit.sh rl --name <run> [--model <hf dir>] [hydra overrides]   # GRPO of our agent
-#   bash submit.sh teacher --name <run> [--nq N --hotpotqa N --samples K --take N --model M --revision R --tp 1]  # 27B trajectories for SFT
+#   bash submit.sh rollouts --name <run> [--dev] [--model M --revision R] [--nq N --hotpotqa N --samples K]   # our agent on train questions (SFT data) or validation questions
 #   bash submit.sh sft --name <run> --data <dir> [--model <hf dir>] [hydra overrides]   # SFT warm start
 #   ... --time 48:00:00 --dry-run --after <jobid> --after-any <jobid>   (extra sbatch controls, any stage)
 # =====================================================================================
@@ -119,7 +119,7 @@ case "$STAGE" in
   passages)
     submit "passages_$(arg corpus)" slurm/job.sh --cpus-per-task=4 --mem=32G --time=03:00:00 -- passages "${ARGS[@]}" ;;
   grepseek-pilot)
-    # GrepSeek+ variants on validation questions (scaleseek/grepseek_pilot.py); resources = a GrepSeek eval.
+    # GrepSeek / GrepSeek+ on the validation questions (scaleseek/grepseek_pilot.py); resources = a GrepSeek eval.
     submit "gpilot_$(arg name)" slurm/job.sh --gpus-per-node="$GPU_TYPE:1" --cpus-per-task=12 --mem=128G \
       --time=08:00:00 -- grepseek-pilot "${ARGS[@]}" ;;
   judge)
@@ -145,14 +145,14 @@ case "$STAGE" in
       case "${ARGS[$i]}" in --name|--model|--data) i=$((i+1)); continue ;; esac; PASS+=("${ARGS[$i]}"); done
     submit "sft_$N" train/sft.sbatch --gpus-per-node="$GPU_TYPE:4" --cpus-per-task=48 --mem=498G \
       -- "$N" "$M" "$D" "${PASS[@]}" ;;
-  teacher)
-    # Qwen3.5-27B trajectories of our agent on train questions (train/teacher.sbatch), for SFT.
+  rollouts)
+    # Our agent on train questions (the SFT data) or on the validation questions (train/rollouts.sbatch).
     N="$(arg name)"; [ -n "$N" ] || { echo "--name required"; exit 2; }
     PASS=(); for ((i=0; i<${#ARGS[@]}; i++)); do
       case "${ARGS[$i]}" in --name) i=$((i+1)); continue ;; esac; PASS+=("${ARGS[$i]}"); done
-    TP="$(arg tp)"; TP="${TP:-4}"            # --tp 1 for a 9B generator (--model/--revision)
+    TP="$(arg tp)"; TP="${TP:-1}"
     # the e5 HNSW index (69 GB) + corpus + exact index must stay in RAM: 128 GB thrashed the page cache
-    submit "teacher_$N" train/teacher.sbatch --gpus-per-node="$GPU_TYPE:$TP" --cpus-per-task=$((12*TP)) \
+    submit "rollouts_$N" train/rollouts.sbatch --gpus-per-node="$GPU_TYPE:$TP" --cpus-per-task=$((12*TP)) \
       --mem=$((64*TP + 136))G -- "$N" "${PASS[@]}" ;;
   *) echo "unknown stage $STAGE"; sed -n '2,22p' "$0"; exit 2 ;;
 esac

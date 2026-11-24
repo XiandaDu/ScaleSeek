@@ -14,7 +14,6 @@ Variants, each off in the baseline:
              full, the tool response says so and asks for the answer; a tool output is cut
              to what still leaves room for that answer.  (17.7% of GrepSeek's Wiki questions
              end without an answer: turns used up 11.1%, context full 6.6%.)
-  countdown  with budget: every tool response also says how many tool calls are left.
   dedup      the tool response drops `information_lines`, a line-by-line copy of stdout
              (38% of the window when the context fills up).
   fold       non-ASCII characters of a fixed-string pattern are written as the corpus
@@ -23,31 +22,12 @@ Variants, each off in the baseline:
   relax      an empty result whose first pattern does match is retried without the last
              filter, then without any filter (1,000 of 1,914 empty calls were emptied by
              the AND filters).
-  soft       ranked instead of Boolean filters: when fewer than K lines match every filter,
-             the rest of the K lines are the passages of the first pattern that satisfy
-             the most filters (coordination-level ranking; a generalisation of relax).
   title      matches come title first instead of in file order: the article named by the
              first pattern ("X", "X (...)"), then titles containing it, then the rest
              (36% of the calls are cut by `head`).
 
 Whatever a fallback did is said in the response's `notice` field; `command` stays as the
 model wrote it.
-
-Under test for the next method (not part of GrepSeek+; they also wrap inference.agent.
-_chat_completion):
-  verify     an answer whose string is in no tool output so far is not accepted at once:
-             the model is told so and asked to check it with one more search, once per
-             question and only while two turns are left (answers found in a tool output are
-             right 57% of the time, the others 24%).
-  form       every tool response ends with a one-line reminder of the answer format (one
-             short answer, no alternatives): 12% of GrepSeek+'s validation answers are wrong
-             only in form (they contain the gold answer or are contained in it).
-  commit     the generation that follows an "answer now" notice must be an <answer> block
-             (constrained decoding of the text after the reasoning): no question ends
-             without an answer because the model kept searching.
-  settings["inject"]  a json file {question id: [messages]}: the example starts from these
-             messages (the tool calls and outputs of earlier rollouts, replayed without the
-             reasoning; grepseek_pilot.py builds them), e.g. to re-read pooled evidence.
 """
 
 from __future__ import annotations
@@ -59,21 +39,13 @@ import threading
 
 from inference import tools
 
-VARIANTS = {"budget", "commit", "countdown", "dedup", "fold", "form", "relax", "soft", "title", "verify"}
+VARIANTS = {"budget", "dedup", "fold", "relax", "title"}
 RESERVE = 1536         # tokens kept free for the answering turn
 LOW_ROOM = 4096        # less room than this after a tool response: ask for the answer
 MAX_BYTES = 20_000_000   # of one command's output read into memory (2,048 tokens are ~8 KB)
 COPY = {False: 2.3, True: 1.15}   # payload tokens per stdout token, with information_lines / with dedup
 
-VERIFY = ('Your answer "%s" does not appear in any search result so far. Check it with one more search '
-          "(for example the answer together with a key term of the question), then give your final answer: "
-          "keep it if the search supports it, otherwise give the answer the evidence supports.")
-
-ANSWER = r"<answer>\n[^<\n]{1,200}\n</answer>"      # the harness's answer block (commit)
-FORM = ("Answer format: one short answer only, a single name, entity, number or date (the full date when the "
-        "question asks when); no alternatives, no explanation.")
-
-CFG: dict = {}                 # {"variants": set, "context": int, "inject": dict}, set by install()
+CFG: dict = {}                 # {"variants": set, "context": int}, set by install()
 S = threading.local()          # per example (one worker thread runs one example at a time)
 
 
@@ -82,14 +54,12 @@ def install(official_run, client_factory, settings: dict):
     """Patch the official modules; returns the client factory to use."""
     import inference.agent as agent
 
-    CFG.update(variants=set(settings["variants"]), context=settings["context"],
-               inject=json.load(open(settings["inject"])) if settings.get("inject") else {})
+    CFG.update(variants=set(settings["variants"]), context=settings["context"])
     assert CFG["variants"] <= VARIANTS, CFG["variants"] - VARIANTS
     run_example = official_run.run_agent_on_example
 
     def run_agent_on_example(example, **kw):
-        S.turn, S.used, S.turns, S.verified, S.commit = 0, 0, kw["max_assistant_turns"], False, False
-        S.inject = CFG["inject"].get(str(example["id"]))
+        S.turn, S.used, S.turns = 0, 0, kw["max_assistant_turns"]
         return run_example(example, **kw)
 
     def make_client(*args, **kw):
@@ -97,8 +67,6 @@ def install(official_run, client_factory, settings: dict):
         create = client.chat.completions.create
 
         def tracked(**request):
-            if S.commit and "commit" in CFG["variants"]:
-                request["extra_body"] = {"structured_outputs": {"regex": ANSWER}}
             resp = create(**request)
             S.turn += 1
             S.used = resp.usage.prompt_tokens + resp.usage.completion_tokens
@@ -107,53 +75,9 @@ def install(official_run, client_factory, settings: dict):
         client.chat.completions.create = tracked
         return client
 
-    chat = agent._chat_completion
-
-    def _chat_completion(client, *, messages, **kw):
-        if S.turn == 0 and S.inject:
-            messages.extend(S.inject)
-        if S.turn >= S.turns:                   # a verification already took the last generation
-            return "", "stop", None
-        out = chat(client, messages=messages, **kw)
-        if "verify" in CFG["variants"] and out[0] and not S.verified and S.turn <= S.turns - 2:
-            answer = agent.parse_assistant(out[0]).answer
-            if answer is not None and not grounded(answer, messages):
-                S.verified = True
-                ask = {"command": "", "stdout": "", "stderr": "", "exit_code": 0, "timed_out": False,
-                       "truncated": False, "notice": VERIFY % answer}
-                messages += [{"role": "assistant", "content": out[0]},
-                             {"role": "tool", "content": json.dumps(ask, ensure_ascii=False)}]
-                out = chat(client, messages=messages, **kw)
-        return out
-
     official_run.run_agent_on_example = run_agent_on_example
     agent.run_tool = run_tool
-    if "verify" in CFG["variants"] or CFG["inject"]:
-        agent._chat_completion = _chat_completion
     return make_client
-
-
-def normalize(text: str) -> str:
-    """The usual answer normalisation (lower case, no punctuation, no articles)."""
-    text = re.sub(r"[^\w\s]", " ", text.lower())
-    return " ".join(w for w in text.split() if w not in ("a", "an", "the"))
-
-
-def grounded(answer: str, messages: list) -> bool:
-    """Is the answer string in some tool output of the transcript?  (yes/no and very short
-    answers cannot be checked this way and count as grounded.)"""
-    a = normalize(answer)
-    if len(a) < 3 or a in ("yes", "no"):
-        return True
-    text = []
-    for m in messages:
-        if m["role"] == "tool":
-            for line in json.loads(m["content"])["stdout"].split("\n"):
-                try:
-                    text.append(json.loads(line)["contents"])
-                except (ValueError, TypeError, KeyError):
-                    text.append(line)
-    return f" {a} " in f" {normalize(' '.join(text))} "
 
 
 class Response:
@@ -193,20 +117,15 @@ def run_tool(cmd: str, *, corpus_dir, timeout, max_tokens, tokenizer, engine=Non
     fields = {k: getattr(res, k) for k in ("command", "stdout", "stderr", "exit_code", "timed_out", "truncated")}
     if "dedup" not in v:
         fields["information_lines"] = res.information_lines
-    if "form" in v:
-        notes.append(FORM)
     if "budget" in v:
         left = S.turns - S.turn                 # assistant turns after this tool response
         used = S.used + len(tokenizer(json.dumps(fields, ensure_ascii=False), add_special_tokens=False)["input_ids"])
-        S.commit = left <= 1 or CFG["context"] - used < LOW_ROOM
         if left <= 1:
             notes.append("This was your last tool call. Give your final answer now in an <answer> block: "
                          "the best answer supported by what you have read.")
-        elif S.commit:
+        elif CFG["context"] - used < LOW_ROOM:
             notes.append("The context window is almost full. Give your final answer now in an <answer> block: "
                          "the best answer supported by what you have read.")
-        elif "countdown" in v:
-            notes.append(f"{left - 1} tool call{'s' if left > 2 else ''} left before you must answer.")
     if notes:
         fields["notice"] = " ".join(notes)
     return Response(res, json.dumps(fields, ensure_ascii=False))
@@ -254,16 +173,11 @@ def search(run, cmd: str, v: set[str], notes: list[str]) -> tools.ToolResult:
     first = flags(st[0])
     if first is None or res.timed_out or res.exit_code not in (0, 1):
         return res
-    if "soft" in v:
-        res = soften(run, st, res, v, notes)
     if empty(res) and "fold" in v and not first[1] & {"i", "--ignore-case"}:
         st[0] = st[0].replace(first[0], first[0] + " -i", 1)
-        more: list[str] = []
         alt = go(" | ".join(st))
-        if "soft" in v:
-            alt = soften(run, st, alt, v, more)
         if not empty(alt):
-            notes += ["No match with this exact case; these are case-insensitive matches."] + more
+            notes.append("No match with this exact case; these are case-insensitive matches.")
             return alt
     if empty(res) and "relax" in v:
         filters = [i for i in range(1, len(st)) if flags(st[i])]
@@ -275,47 +189,6 @@ def search(run, cmd: str, v: set[str], notes: list[str]) -> tools.ToolResult:
                                  + " | ".join(st[i] for i in drop))
                     return alt
     return res
-
-
-# ----------------------------------------------------------------------------- soft filters
-CANDIDATES = 2000      # lines of the first pattern (file order) that are scored
-
-
-def soften(run, st: list[str], res: tools.ToolResult, v: set[str], notes: list[str]) -> tools.ToolResult:
-    """Ranked instead of Boolean filters, for `rg -F "X" corpus.jsonl | rg -F "f1" | ... | head -n K`.
-    The lines matching every filter come first, as before.  When there are fewer than K of
-    them, the rest of the K lines are the passages matching X that satisfy the most filters
-    (with `title`: the article X first among equals; then file order)."""
-    k = head_k(st[-1])
-    tests = [line_test(s) for s in st[1:-1]]
-    if k is None or not tests or None in tests or flags(st[0])[2][-1:] != [tools.CORPUS_FILENAME_LOGICAL]:
-        return res
-    full = [ln for ln in res.stdout.split("\n") if ln]
-    if len(full) >= k:
-        return res
-    cand = run(f"{st[0]} | head -n {CANDIDATES}")
-    if cand.timed_out or cand.exit_code not in (0, 1):
-        return res
-    plan = title_plan(" | ".join(st)) if "title" in v else None
-    tiers = plan[2] if plan else []
-    seen = set(full)
-    rest = [ln for ln in dict.fromkeys(cand.stdout.split("\n")) if ln and ln not in seen]
-    rest.sort(key=lambda ln: [-sum(t(ln) for t in tests)] + [not p.match(ln) for p in tiers])
-    lines = (full + rest)[:k]
-    if len(lines) > len(full):
-        which = {0: "No line matches", 1: "Only the first line matches"}.get(len(full), f"Only the first {len(full)} lines match")
-        notes.append(f"{which} all the patterns; the {'others' if full else 'lines shown'} match fewer of them, best first.")
-        res.stdout = "\n".join(lines) + "\n"
-    return res
-
-
-def line_test(stage: str):
-    """The filter `rg|grep -F [-i] [-w] "pattern"` as a predicate on a line; None for any other stage."""
-    f = flags(stage)
-    if f is None or f[1] - {"F", "i", "w"} or "F" not in f[1] or len(f[2]) != 1:
-        return None
-    rx = re.compile((r"\b%s\b" if "w" in f[1] else "%s") % re.escape(f[2][0]), re.IGNORECASE if "i" in f[1] else 0)
-    return lambda line: bool(rx.search(line))
 
 
 # ----------------------------------------------------------------------------- title first
