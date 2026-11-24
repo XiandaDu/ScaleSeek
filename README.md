@@ -1,6 +1,6 @@
-# ScaleSeek baselines
+# ScaleSeek
 
-Re-runs, from scratch, the baseline matrix of [BASELINES.md](BASELINES.md): Direct, RAG,
+Our search agent (next section) and, from scratch, the baseline matrix of [BASELINES.md](BASELINES.md): Direct, RAG,
 Search-R1 (7B, 14B), Search-o1, GrepSeek and AgentIR on seven FlashRAG QA sets and
 BrowseComp-Plus, with three retrievers (bm25, e5, qwen3_emb_4b), 15 runs per dataset.
 
@@ -8,6 +8,39 @@ BrowseComp-Plus, with three retrievers (bm25, e5, qwen3_emb_4b), 15 runs per dat
 same subset + same corpus + same decoding profile
         ==>  the only things that vary are the method and (where stated) the retriever
 ```
+
+## Our method: ScaleSeek v3
+
+An agent on Qwen3.5-9B with two retrieval tools (`find`: exact phrase search, `search`: e5
+dense search) and an `answer` tool, under GrepSeek's budget (6 turns, 16K context).
+Record: [reports/scaleseek_v3.md](reports/scaleseek_v3.md); every experiment, including the
+ones that failed, is in [research_log.md](research_log.md).
+
+| What | Where |
+|---|---|
+| prompt, tools, protocol (`budget`: turns left after every tool turn; `commit`: the last turn must answer) | `scaleseek/agent.py` |
+| the agent loop at evaluation | `scaleseek/methods/scaleseek.py` |
+| exact phrase index | `scaleseek/retrieval/exact.py` |
+| untrained model (v3 Prompt), its ablations, and the trained ones | `configs/methods/scaleseek_*.yaml` |
+| SFT on the model's own correct trajectories, then GRPO under the same protocol | `train/` |
+| GrepSeek+ (GrepSeek's checkpoint, harness-side fixes) | `scaleseek/grepseek_plus.py`, [reports/grepseek_plus.md](reports/grepseek_plus.md) |
+
+```bash
+bash submit.sh index-exact --corpus wiki18                                  # the index behind `find`
+bash submit.sh eval --method scaleseek_v3_prompt --dataset hotpotqa --retriever e5   # no training
+# training: own rollouts -> SFT -> RL -> export -> validation -> test
+bash submit.sh rollouts --name self_v3
+python train/build_sft.py $ROOT/train_data/rollouts/self_v3 $ROOT/train_data/sft_v3_self          # in a job
+bash submit.sh sft --name sft_v3_self --data $ROOT/train_data/sft_v3_self
+bash submit.sh rl  --name grpo_v3_sft --model $ROOT/train_runs/sft_v3_self/global_step_118/huggingface
+bash train/export_hf.sh grpo_v3_sft 90                                      # in a job; prints the yaml's generator
+bash submit.sh rollouts --name val_s90 --dev --samples 1 --model local/scaleseek-grpo_v3_sft-step90 --revision <REV>
+bash submit.sh eval --method scaleseek_v3_rl --dataset hotpotqa --retriever e5
+```
+
+Training questions come from the NQ and HotpotQA train splits only; checkpoints are chosen on
+dev questions outside the test subsets; `reports/scripts/leak_check.py` counts the overlap
+between training and evaluation questions (none with what the model trained on).
 
 ## Layout
 
@@ -21,6 +54,8 @@ prompts/                    project-defined prompts; prompts/official/ = verbati
 scaleseek/                  the package (config, data, corpus, retrieval/, methods/, ...)
 slurm/                      job.sh (one command), array.sh (one shard per task)
 env/                        locks: main.in + main.lock.txt, agentir.lock.txt, *_extra.txt
+train/                      rollouts, SFT and GRPO of our agent (verl), their Slurm jobs
+reports/                    method records, failure analyses, the scripts behind their numbers
 docs/deviations.md          everything that differs from an official implementation
 tests/                      CPU tests: configs, byte diffs, sampling, metrics, method loops
 ```

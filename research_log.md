@@ -461,3 +461,21 @@ grpo_v3_sft 到 24 小时时限停在第 92 步，训练曲线最后一段（第
 - 测试集：配置 `configs/methods/scaleseek_v3_rl.yaml`（第 90 步），作业 10448482–10448508。
 
 待填：第 90 步的完整验证集结果；SFT → RL 的测试集结果。
+
+---
+
+## 代码清理和泄漏检查（2026-11-24）
+
+**代码清理**（准备 push；只留成功的这条线：v3 协议 → 自蒸馏 SFT → 协议一致的 RL，以及基线和 GrepSeek+）
+- 删掉的都是被实验否定的东西，数字仍在本日志 §1 和各轮里；最后一个包含它们的提交是 `ddc0c2b`。
+  - 自己的 agent：`wide`、`relax`、`guess` 三个变体（`scaleseek/agent.py`、`methods/scaleseek.py`、精确检索的放宽分支）。
+  - GrepSeek+：`countdown`、`soft`、`verify`、`form`、shell 格式的 `commit`、第二阶段重读（`inject` / `replay`）；验证集试点的 `--cap`、`--turns`、`--model`。
+  - 配置 `scaleseek.yaml`（v1 协议下从基座 RL 的模型，结果已作废）；报告 `reports/next_method_pilots.md` 和它的脚本。
+- 改名：`train/teacher_rollouts.py` → `train/rollouts.py`，`submit.sh teacher` → `submit.sh rollouts`，默认模型从 27B 改成未训练的 9B、默认协议是 v3；输出目录 `train_data/rollouts/`（旧的 `train_data/teacher/` 是同一个目录）。`gplus_commit_test.py` → `commit_test.py`。
+- `train/config/grpo.yaml` 的默认值改成成功的那套：`variants: [budget, commit]`、学习率 5e-6。
+- 清理前后行为一致的核对：三种协议（v1、v2、v3）下 agent 循环生成的完整序列逐字符相同（`reports/scripts/commit_test.py`）；GrepSeek+ 工具层对真实命令的返回逐字节相同（结果见下）；`run.py check` 17 个配置全部通过，提示词哈希没变。
+
+**泄漏检查**（`reports/scripts/leak_check.py`；完整表格在 `reports/scaleseek_v3.md` §7）
+- 模型训练时见过的题（SFT 的 3,779 题、RL 的 5,887 题）与 8 个测试子集按题目文本重合 0 题。
+- NQ 的 train 文件自带 7 道与 NQ 测试子集文字相同的题、1 道与 TriviaQA 测试子集相同；其中 1 道在 SFT 跑过的 6,000 题里，但没进 SFT 训练数据，RL 也没抽到。
+- 验证集与测试子集重合 0 题；验证集有 1 题与 RL 见过的训练题文字相同。

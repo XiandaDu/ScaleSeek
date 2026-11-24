@@ -1,4 +1,4 @@
-# ScaleSeek v3 (Prompt)：不训练的搜索 agent
+# ScaleSeek v3：不训练的搜索 agent，以及加上 SFT 和 RL
 
 2026-11-20。**未训练**的 Qwen3.5-9B（没有 SFT，没有 RL），靠协议设计在 7 个 QA 数据集上超过 GrepSeek 的论文数值。过程记录见 `research_log.md` 第 2、3 轮。
 
@@ -112,15 +112,93 @@
 ```bash
 bash submit.sh eval --method scaleseek_v3_prompt --dataset hotpotqa --retriever e5      # 7 个数据集各一次
 bash submit.sh eval --method scaleseek_v3_prompt_r2 --dataset hotpotqa --retriever e5   # 第二遍
-# 训练题上的验证
-bash submit.sh teacher --name pilot_commit --nq 2000 --hotpotqa 4000 --samples 2 --take 500 --tp 1 \
-     --model Qwen/Qwen3.5-9B --revision c202236235762e1c871ad0ccb60c8ee5ba337b9a --variants budget,commit
+# 训练题上的验证（协议的每个部件）
+bash submit.sh rollouts --name pilot_commit --take 500 --variants budget,commit
 ```
 
 | 内容 | 位置 |
 |---|---|
-| 协议和工具 | `scaleseek/agent.py`、`scaleseek/methods/scaleseek.py`（commit `8e5f41e`） |
-| 配置 | `configs/methods/scaleseek_v3_prompt.yaml`、`scaleseek_v3_prompt_r2.yaml` |
+| 协议和工具 | `scaleseek/agent.py`、`scaleseek/methods/scaleseek.py` |
+| 配置 | `configs/methods/scaleseek_v3_prompt.yaml`、`scaleseek_v3_prompt_r2.yaml`；消融 `scaleseek_prompt.yaml`（v1）、`scaleseek_v2_prompt.yaml` |
 | 测试结果 | `$ROOT/runs/<dataset>/scaleseek_v3_prompt__e5/`、`scaleseek_v3_prompt_r2__e5/` |
-| 训练题验证 | `$ROOT/train_data/teacher/pilot_budget/`、`pilot_commit/`、`pilot_guess/` |
-| 对比脚本 | `reports/scripts/v3_stability.py`、`gplus_test_cmp.py` |
+| 训练题验证 | `$ROOT/train_data/rollouts/pilot_budget/`、`pilot_commit/` |
+| 对比脚本 | `reports/scripts/v3_stability.py`、`gplus_test_cmp.py`；不用 GPU 的循环测试 `commit_test.py` |
+
+---
+
+## 6. 加上 SFT 和 RL（2026-11-24）
+
+问题：v3 不训练已经是 48.4，加上训练还能不能涨。目前的结论：**SFT 之后做与评测协议一致的 RL，在验证集上显著好于未训练的 v3**；SFT 单独没有用，从基座直接 RL 也没有用。测试集结果待填。过程见 `research_log.md` 第 5 轮 §5.3。
+
+**做法**（都在 A100-40GB 上）
+
+| 步骤 | 内容 | 用时 | 代码 |
+|---|---|---|---|
+| 1. 自己的轨迹 | 未训练的 9B 按 v3 协议在 6,000 道训练题上各跑 2 条轨迹（12,000 条，EM 58.2） | 约 4 小时，1 张卡 | `train/rollouts.py` |
+| 2. SFT | 只留答对的，每题留轮数最少的一条，共 3,779 条；1 个 epoch，学习率 5e-6 | 45 分钟，4 张卡 | `train/build_sft.py`、`train/config/sft.yaml` |
+| 3. RL | 从 SFT 的 checkpoint 做 GRPO：每步 64 题 × 8 条轨迹，奖励是 EM，学习率 5e-6；rollout 用完整的 v3 协议（含最后一轮强制作答）；取第 90 步 | 24 小时，4 张卡 | `train/scaleseek_rl/agent_loop.py`、`train/config/grpo.yaml` |
+
+```bash
+bash submit.sh rollouts --name self_v3                                   # 步骤 1
+python train/build_sft.py $ROOT/train_data/rollouts/self_v3 $ROOT/train_data/sft_v3_self
+bash submit.sh sft --name sft_v3_self --data $ROOT/train_data/sft_v3_self   # 步骤 2
+bash submit.sh rl --name grpo_v3_sft --model $ROOT/train_runs/sft_v3_self/global_step_118/huggingface   # 步骤 3
+bash train/export_hf.sh grpo_v3_sft 90                                   # 在作业里跑；输出写进 configs/methods/scaleseek_v3_rl.yaml
+bash submit.sh rollouts --name val_grpo_v3_sft_s90 --dev --samples 1 --model local/scaleseek-grpo_v3_sft-step90 --revision <REV>   # 验证集
+```
+
+**验证集**（500 道 NQ dev + 500 道 HotpotQA dev，所有行都是同样的 1,000 题；脚本 `reports/scripts/val_table.py`）
+
+| 模型 | EM | NQ | HotpotQA | F1 | 平均轮数 | 对未训练 v3：赢 / 输，p |
+|---|---:|---:|---:|---:|---:|---|
+| GrepSeek（官方 checkpoint；第二遍 46.1） | 46.5 | 40.8 | 52.2 | 58.6 | — | 79 / 93，p = 0.32 |
+| GrepSeek+（另两遍 49.4、49.2） | 50.1 | 44.4 | 55.8 | 63.2 | — | 86 / 64，p = 0.086 |
+| v3 未训练 | 47.9 | 43.0 | 52.8 | 61.3 | 4.09 | — |
+| v3 + SFT | 49.3 | 44.2 | 54.4 | 62.8 | 4.06 | 48 / 34，p = 0.15 |
+| v3 + SFT → RL，第 40 步 | 49.1 | 44.6 | 53.6 | 61.6 | 4.81 | 59 / 47，p = 0.29 |
+| v3 + SFT → RL，第 60 步 | 51.1 | 47.2 | 55.0 | 63.3 | 4.67 | 71 / 39，p = 0.003 |
+| v3 + SFT → RL，第 80 步 | 50.3 | 46.4 | 54.2 | 63.2 | 4.76 | 63 / 39，p = 0.022 |
+| v3 + SFT → RL，第 90 步 | 待填 | | | | | 前 553 题：44 / 25 |
+
+- 对 GrepSeek 逐题比：SFT → RL 第 60 步赢 110 输 64（p = 0.0006），第 80 步赢 102 输 64（p = 0.004）。
+- 模型学到的是多搜：平均轮数 4.09 → 4.7，`find` 从每题 1.2 次涨到 1.7–1.9 次。
+- 上测试集的 checkpoint 按事先定的规则选：用最后一个（第 90 步）；只有它在验证集上比最好的低 1 分以上才换，并且两个都报。
+
+**两点是必须的**
+- **RL 的 rollout 要和评测用同一个协议。** 训练时不强制作答，用完轮数的轨迹奖励是 0，模型学成“早点答”：验证集 47.9 → 42.6。
+- **要先做 SFT。** 从基座直接做协议一致的 RL，前 50 步训练 EM 不动，之后崩掉（作答率掉到 63%–71%）。SFT 单独在测试集上是 48.4，与未训练相同（逐题赢 166 输 164）。
+
+**测试集**：待填（配置 `configs/methods/scaleseek_v3_rl.yaml`）。
+
+---
+
+## 7. 训练数据和泄漏检查
+
+| 用途 | 题目来源（FlashRAG 数据集，版本固定在 `configs/base.yaml`） | 数量 |
+|---|---|---|
+| SFT | NQ `train` 随机 2,000 题 + HotpotQA `train` 随机 4,000 题（只取 medium / hard），种子 20261105；每题 2 条轨迹，留答对的 | 6,000 题 → 3,779 条 |
+| RL | NQ `train` + HotpotQA `train` 的全部题（各留出 100 题不用），固定种子打乱，每步 64 题；跑了 92 步 | 5,887 题 |
+| 选协议 | 上面 SFT 那 6,000 题里每个来源的前 500 题（§2） | 1,000 题 |
+| 选 checkpoint（验证集） | NQ `dev` 随机 500 题 + HotpotQA `dev` 随机 500 题，HotpotQA 先去掉测试子集里的题（`scaleseek/grepseek_pilot.py` 的 `questions`） | 1,000 题 |
+| 测试 | 每个数据集固定种子抽 500 题：NQ / TriviaQA / PopQA / Bamboogle（125 题）的 `test`，HotpotQA / 2Wiki / MuSiQue 的 `dev`；BrowseComp-Plus | 3,125 + 500 题 |
+
+这和 GrepSeek、Search-R1 的做法相同：都在 NQ 和 HotpotQA 的 train 上训练。训练只用了这两个数据集，另外 5 个 QA 数据集和 BCP 没有任何题进入训练或选型。
+
+**保证不相交的办法**
+1. 训练题只读 `train.jsonl`，测试题只读各数据集的 `test.jsonl` / `dev.jsonl`，是不同的文件。
+2. HotpotQA 的测试子集和验证集都来自 `dev.jsonl`，验证集抽样前按题目 id 去掉了测试子集。
+3. 协议在训练题上选，checkpoint 在验证集上按事先定的规则选，测试集每个配置只跑一次。
+4. 按题目文本实际核对（小写、去标点和冠词后完全相同才算重合；脚本 `reports/scripts/leak_check.py`）：
+
+| 评测集 | 题数 | 与 NQ + HotpotQA 全部训练题重合 | 与 SFT 跑过的 6,000 题重合 | 与 SFT 训练用的 3,779 题重合 | 与 RL 见过的 5,887 题重合 |
+|---|---:|---:|---:|---:|---:|
+| NQ 测试子集 | 500 | 7 | 1 | 0 | 0 |
+| TriviaQA 测试子集 | 500 | 1 | 0 | 0 | 0 |
+| PopQA、HotpotQA、2Wiki、MuSiQue、Bamboogle、BCP 测试子集 | 各自全部 | 0 | 0 | 0 | 0 |
+| 验证集 | 1,000 | 7 | 0 | 0 | 1 |
+
+- **模型训练时见过的题（SFT 的 3,779 题和 RL 的 5,887 题）与 8 个测试子集的重合是 0。**
+- NQ 的 train 文件里本来就有 7 道题和 NQ 测试子集的题文字相同，这是数据集自带的，在整个 NQ train 上训练的方法（GrepSeek、Search-R1）都会遇到。其中 1 道被抽进了 SFT 的 6,000 题，但它的轨迹没有进入 SFT 训练数据，RL 也没抽到它。
+- 验证集有 1 道题和 RL 见过的一道训练题文字相同（1,000 题里的 1 题），只影响选 checkpoint。
+- 验证集和测试子集的重合是 0。
+- 这个检查查不出来的：换了说法的同一个问题（NQ 已知有这种情况，对所有在 NQ 上训练的方法相同）；底座模型预训练时是否见过这些公开数据集（与 GrepSeek 用的是同一个底座）。
